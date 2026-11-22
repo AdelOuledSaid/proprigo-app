@@ -484,6 +484,29 @@
     el.classList.toggle('full', pct >= 100);
   }
 
+  // Jauge « ça brille » : avance avec la checklist du ménage
+  const SHINE_WORDS = (pct) => (pct >= 100 ? 'Ça brille !' : pct >= 60 ? 'Presque fini' : pct > 0 ? "C'est parti" : 'Prêt à commencer');
+  function shine(b) {
+    const n = b.checklist.length;
+    const d = b.checklist.filter((t) => t.done).length;
+    const pct = n ? Math.round((d / n) * 100) : 0;
+    return `<div class="shine ${pct >= 100 ? 'full' : ''}" data-shine="${b.id}" role="progressbar" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${d}" aria-label="Tâches faites">
+      <div class="shine-top"><b>${SHINE_WORDS(pct)}</b><span>${d} sur ${n}</span></div>
+      <div class="shine-bar"><i style="width:${pct}%"></i></div></div>`;
+  }
+  function updateShine(id) {
+    const boxes = [...$app.querySelectorAll(`[data-check="${id}"]`)];
+    const el = $app.querySelector(`[data-shine="${id}"]`);
+    if (!el) return;
+    const d = boxes.filter((c) => c.checked).length;
+    const pct = boxes.length ? Math.round((d / boxes.length) * 100) : 0;
+    el.querySelector('b').textContent = SHINE_WORDS(pct);
+    el.querySelector('span').textContent = `${d} sur ${boxes.length}`;
+    el.querySelector('i').style.width = `${pct}%`;
+    el.setAttribute('aria-valuenow', d);
+    el.classList.toggle('full', pct >= 100);
+  }
+
   // ---------- réservation en 4 étapes ----------
   const STEP_NAMES = ['Votre ménage', 'Date et heure', 'Récapitulatif', 'Paiement'];
   const stepper = (n) => `<ol class="stepper" aria-label="Étape ${n} sur 4">${STEP_NAMES.map((t, i) => `<li class="${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}" ${i + 1 === n ? 'aria-current="step"' : ''}><span>${i + 1}</span>${t}</li>`).join('')}</ol>`;
