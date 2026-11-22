@@ -21,3 +21,8 @@ Interface seulement : la logique Stripe, l'attribution manuelle et le serveur ne
 - Téléphone de démonstration avec le suivi en direct et la jauge « ça brille ».
 - Section hôtes Airbnb et conciergeries, FAQ courte, dernier appel à réserver avec le code postal.
 - Aucun avis ni chiffre inventé : à ajouter seulement quand vous aurez de vrais avis clients.
+
+# v0.9.2 — salon haussmannien
+
+- Nouvelle illustration originale en haut de la page d'accueil : salon haussmannien (cheminée en marbre, miroir doré, porte-fenêtre sur les toits de Paris, parquet en point de Hongrie) avec une intervenante en tablier bleu Proprigo.
+- Le curseur « avant / après » passe du salon en désordre (vitre ternie, linge sur le fauteuil, tasses, poussière) au salon qui brille.

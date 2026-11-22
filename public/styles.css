@@ -527,3 +527,13 @@ body.has-tabbar .quick a[href='#/mes-reservations'], body.has-tabbar .quick a[hr
 }
 @media (prefers-reduced-motion: reduce) { .ba-clean { transition: none; } }
 @media (max-width: 560px) { .hero2 { margin-top: -8px; } .hero2 .ba { max-width: 320px; } }
+
+/* v0.9.2 : salon haussmannien dans le curseur avant / après */
+.ba { aspect-ratio: 600 / 440; max-width: 620px; border-radius: 28px; overflow: hidden; box-shadow: 0 30px 50px -30px rgb(15 26 74 / .55); }
+.ba-handle { top: 0; bottom: 0; }
+.ba input[type=range] { height: 100%; }
+.ba figcaption { left: 12px; right: 12px; bottom: 12px; }
+.ba figcaption span { background: rgb(15 26 74 / .72); color: #fff; padding: 4px 10px; border-radius: 99px; font-weight: 600; }
+@media (max-width: 900px) { .hero2 .ba { max-width: 560px; } }
+@media (max-width: 560px) { .hero2 .ba { max-width: none; border-radius: 22px; } .ba figcaption b { font-size: 12.5px; padding: 5px 10px; } }
+@media (max-width: 560px) { .ba figcaption { left: 8px; right: 8px; bottom: 8px; gap: 4px; } .ba figcaption span { font-size: 12px; padding: 3px 8px; } }

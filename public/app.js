@@ -186,8 +186,8 @@
           </form>
         </div>
         <figure class="ba" id="ba">
-          <div class="ba-layer">${ART.facade(false, 'Avant le ménage : façade ternie')}</div>
-          <div class="ba-layer ba-clean" id="baClean">${ART.facade(true, 'Après le ménage : tout brille')}</div>
+          <div class="ba-layer">${ART.room(false, 'Avant le ménage : salon en désordre, vitre ternie')}</div>
+          <div class="ba-layer ba-clean" id="baClean">${ART.room(true, 'Après le ménage : salon rangé, vitre qui brille, intervenante Proprigo au travail')}</div>
           <div class="ba-handle" id="baHandle" aria-hidden="true"><span><svg viewBox="0 0 32 32" width="22" height="22">${ART.star(16, 16, 13, '#ff6a3d')}</svg></span></div>
           <input type="range" min="0" max="100" value="50" id="baRange" aria-label="Avant et après le ménage : faites glisser pour faire briller">
           <figcaption><span>Avant</span><b>Faites glisser pour faire briller</b><span>Après</span></figcaption>
