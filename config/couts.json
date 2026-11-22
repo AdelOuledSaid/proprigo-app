@@ -1,0 +1,11 @@
+{
+  "_note": "Hypothèses de coût utilisées pour la marge estimée. À faire valider par l'expert-comptable. Mêmes valeurs que le tableau « Proprigo – prix et rentabilité ».",
+  "salarieeParHeureFacturee": 21.09,
+  "tvaParticulier": 0.10,
+  "tvaPro": 0.20,
+  "paiementPct": 0.015,
+  "paiementFixe": 0.25,
+  "produits": 2,
+  "kitCout": 4.5,
+  "linge": { "studio": 8, "T2": 12, "T3": 15, "maison": 22 }
+}

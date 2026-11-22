@@ -1,0 +1,12 @@
+{
+  "name": "proprigo",
+  "version": "0.7.0",
+  "private": true,
+  "description": "Proprigo, ménage à la demande : première version (phase 1).",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "test": "node --no-warnings --test test/*.test.js",
+    "backup": "node --no-warnings scripts/backup.js"
+  }
+}
