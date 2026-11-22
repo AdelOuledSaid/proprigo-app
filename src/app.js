@@ -304,7 +304,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const date = query.get('date'); const cp = query.get('cp'); const hours = Number(query.get('hours'));
     if (!pricing.isValidDate(date) || !pricing.zoneOf(cp) || !(hours >= 1 && hours <= 8)) return { slots: [] };
     const later = (t) => date !== pricing.todayParis(now()) || engine.toMin(t) >= engine.toMin(nowParisHM()) + MIN_LEAD_MIN;
-    const slots = engine.freeSlots(db, { date, cp, hours }).filter(later);
+    const slots = engine.requestSlots({ hours }).filter(later); // créneaux demandables, sous réserve d'attribution par l'équipe
     // client connecté avec une intervenante préférée : ses heures libres ce jour-là
     let preferred = null;
     if (user && user.role === 'client') {
@@ -348,9 +348,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const time = str(body.time, 5);
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new HttpError(400, 'Heure invalide.');
     if (body.date === pricing.todayParis(now()) && engine.toMin(time) < engine.toMin(nowParisHM()) + MIN_LEAD_MIN) throw new HttpError(400, 'Pour aujourd\'hui, choisissez une heure au moins 1 h à l\'avance.');
-    if (!engine.candidates(db, { id: -1, date: body.date, cp: body.cp, time, hours: q.hours }).length) {
-      throw new HttpError(409, "Aucune intervenante n'est libre à cette heure-là. Choisissez un autre créneau.");
-    }
+    if (!engine.requestSlots({ hours: q.hours }).includes(time)) throw new HttpError(400, 'Choisissez un créneau proposé.');
     const every = body.repeat === '7' || body.repeat === '14' ? Number(body.repeat) : 0;
     const count = every ? Math.min(12, Math.max(2, Number(body.occurrences) || 8)) : 1;
     if (every && q.urgent) throw new HttpError(400, "L'urgence ne s'applique pas à une réservation récurrente.");
@@ -372,7 +370,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       const id = Number(r.lastInsertRowid);
       ids.push(id);
       db_.log(db, `Réservation n° ${id} créée, paiement ${stripeReady ? 'en attente' : 'simulé'} : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
-      if (!stripeReady) engine.assign(db, id);
+      if (!stripeReady && !production) engine.assign(db, id); // mode démonstration seulement
     }
     if (stripeReady) {
       // Chaque intervention est enregistrée sans affectation jusqu'à confirmation Stripe.
@@ -434,7 +432,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (hoursBefore({ date: next.date, time: next.time }) < 24) throw new HttpError(409, 'Le nouveau créneau doit être au moins 24 h à l\'avance.');
     const probe = { id: b.id, date: next.date, cp: b.cp, time: next.time, hours: q.hours };
     const list = engine.candidates(db, probe);
-    if (!list.length) throw new HttpError(409, "Aucune intervenante n'est libre sur ce nouveau créneau.");
+    if (!engine.requestSlots({ hours: q.hours }).includes(next.time)) throw new HttpError(400, 'Choisissez un créneau proposé.');
     // on garde l'intervenante actuelle, sauf si la préférée du client est libre sur le nouveau créneau
     const pid = engine.preferredIds(db, b)[0];
     const preferredFree = pid && pid !== b.worker_id && list.some((w) => w.user_id === pid);
@@ -442,7 +440,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db.prepare('UPDATE bookings SET date = ?, time = ?, hours = ?, address = ?, total = ? WHERE id = ?').run(next.date, next.time, q.hours, address, q.total, b.id);
     const diff = q.total - b.total;
     db_.log(db, `Réservation n° ${b.id} modifiée par le client : ${next.date} ${next.time}, ${q.total} €${diff ? ` (${diff > 0 ? '+' : ''}${diff} € ${diff > 0 ? 'à encaisser' : 'à rembourser'})` : ''}.`);
-    if (!keep) engine.assign(db, b.id);
+    if (!keep) { db.prepare("UPDATE bookings SET worker_id = NULL, status = 'en_attente' WHERE id = ?").run(b.id); db.prepare("DELETE FROM offers WHERE booking_id = ?").run(b.id); }
     const v = bookingView(db.prepare('SELECT * FROM bookings WHERE id = ?').get(b.id));
     mailer.send(user.email, 'Réservation modifiée', 'Votre réservation est modifiée', [`Nouveau créneau : ${fr(v.date)} à ${v.time}, ${v.address}.`, `Prix : ${v.total} € TTC${diff ? ` (${diff > 0 ? '+' : ''}${diff} €)` : ''}.`, v.worker_name ? `Intervenante : ${v.worker_name.split(' ')[0]}.` : ''].filter(Boolean), { label: 'Voir ma réservation', path: '/#/' });
     if (keep && b.worker_id) mailer.send(emailOf(b.worker_id), 'Mission déplacée', 'Une de vos missions a changé', [`Nouveau créneau : ${fr(v.date)} à ${v.time}.`], { label: 'Voir mes missions', path: '/#/intervenante' });
@@ -649,7 +647,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!w) throw new HttpError(400, 'Choisissez une intervenante qui a déjà fait un ménage chez vous.');
     db.prepare('INSERT OR REPLACE INTO favorites (client_id, worker_id) VALUES (?, ?)').run(user.id, wid);
     // les ménages à venir encore sans intervenante lui sont proposés en priorité
-    for (const b of db.prepare("SELECT id FROM bookings WHERE client_id = ? AND status IN ('en_attente','proposee')").all(user.id)) engine.assign(db, b.id);
+    // Les commandes payées restent en attente jusqu'à l'attribution par l'administrateur.
     return { ok: true, message: `${w.name.split(' ')[0]} est votre intervenante préférée : elle sera choisie en priorité quand elle est libre.` };
   });
 
@@ -678,7 +676,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db_.log(db, `${user.name} : congé du ${a} au ${z}.`);
     // ses missions pendant ce congé sont confiées à une autre intervenante
     const hit = db.prepare("SELECT id FROM bookings WHERE worker_id = ? AND status = 'attribuee' AND date BETWEEN ? AND ?").all(user.id, a, z);
-    for (const h of hit) engine.assign(db, h.id);
+    for (const h of hit) { db.prepare("UPDATE bookings SET worker_id = NULL, status = 'en_attente' WHERE id = ?").run(h.id); db.prepare("DELETE FROM offers WHERE booking_id = ?").run(h.id); }
     return { ok: true, message: hit.length ? `Congé enregistré. ${hit.length} mission(s) confiée(s) à une autre intervenante.` : 'Congé enregistré.' };
   });
 
@@ -856,7 +854,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     if (absent) {
       const toMove = db.prepare("SELECT id FROM bookings WHERE worker_id = ? AND status = 'attribuee'").all(id);
       for (const b of toMove) {
-        engine.assign(db, b.id); // elle est absente : elle ne fait plus partie des intervenantes libres
+        db.prepare("UPDATE bookings SET worker_id = NULL, status = 'en_attente' WHERE id = ?").run(b.id); // nouvelle attribution par l'administrateur
       }
       db.prepare("DELETE FROM offers WHERE worker_id = ? AND state = 'offered'").run(id);
     } else {
@@ -925,6 +923,9 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
 
   route('POST', '/api/admin/bookings/:id/assign', ({ user, id, body }) => {
     need(user, 'admin');
+    const bookingToAssign = db.prepare('SELECT paid, payment_status FROM bookings WHERE id = ?').get(id);
+    if (!bookingToAssign) throw new HttpError(404, 'Réservation introuvable.');
+    if (production && (!bookingToAssign.paid || bookingToAssign.payment_status !== 'paye')) throw new HttpError(409, 'Paiement confirmé requis avant attribution.');
     if (body.worker_id === 'auto') {
       db.prepare("DELETE FROM offers WHERE booking_id = ? AND state = 'offered'").run(id);
       const r = engine.assign(db, id);
@@ -949,7 +950,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
         let event;
         try { event = stripePay.verifyEvent(raw, req.headers['stripe-signature']); }
         catch { throw new HttpError(400, 'Signature Stripe invalide.'); }
-        if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
+        if ((event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') && event.data.object.payment_status === 'paid') {
           const sess = event.data.object;
           const payment = db.prepare('SELECT * FROM stripe_payments WHERE session_id = ?').get(sess.id);
           if (payment && payment.status !== 'paid' && sess.currency === 'eur' && sess.amount_total === payment.amount_cents) {
@@ -969,10 +970,13 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
             for (const id of ids) {
               const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
               if (b && b.payment_status === 'paye' && b.status === 'en_attente') {
-                try { engine.assign(db, id); } catch (e) { console.error('Attribution différée', id, e); }
+                db_.log(db, `Réservation n° ${id} payée : attribution manuelle nécessaire.`);
               }
             }
           }
+        }
+        if (event.type === 'checkout.session.async_payment_failed') {
+          db.prepare("UPDATE stripe_payments SET status = 'failed' WHERE session_id = ? AND status = 'pending'").run(event.data.object.id);
         }
         if (event.type === 'checkout.session.expired') {
           db.prepare("UPDATE stripe_payments SET status = 'expired' WHERE session_id = ? AND status = 'pending'").run(event.data.object.id);

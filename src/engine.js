@@ -238,6 +238,16 @@ function slotsFor(db, workerId, { id = -1, date, cp, hours }) {
   return out;
 }
 
+/** Créneaux proposés à la demande : l'équipe confirme l'intervenante après paiement. */
+function requestSlots({ hours }) {
+  if (!Number.isFinite(hours) || hours < 1 || hours > 8) return [];
+  const out = [];
+  for (let m = 7 * 60; m + hours * 60 <= 20 * 60; m += 30) {
+    out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${m % 60 ? '30' : '00'}`);
+  }
+  return out;
+}
+
 /** Heures de la journée (toutes les 30 min) où au moins une intervenante peut venir. */
 function freeSlots(db, { date, cp, hours }) {
   const out = [];
@@ -280,5 +290,5 @@ function retryPending(db) {
   return ids.length;
 }
 
-module.exports = {
+module.exports = { requestSlots,
   travelMinutes, frDate, tellWorkers, notify, preferredIds, slotsFor, firstName, freeSlots, toMin, assign, assignTo, retryPending, accept, refuse, candidates, proximity, distance, isActive, MAX_PER_DAY };

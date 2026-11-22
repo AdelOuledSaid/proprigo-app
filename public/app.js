@@ -153,7 +153,7 @@
         </form>
       </section>
       <section class="steps3">
-        <div><b>1. Choisissez</b><span>Votre ménage, la date et l'heure parmi les créneaux réellement libres.</span></div>
+        <div><b>1. Choisissez</b><span>Votre ménage, la date et l'heure souhaitées. L'équipe confirme ensuite l'intervenante.</span></div>
         <div><b>2. Une intervenante vérifiée vient</b><span>Vous connaissez son prénom avant le ménage et la retrouvez la fois suivante.</span></div>
         <div><b>3. Vous suivez tout</b><span>Messages, checklist, photos avant / après si vous le souhaitez, reçu.</span></div>
       </section>`;
@@ -216,7 +216,7 @@
             <div><dt>Prestation</dt><dd>${esc(label(next))} · <b>${eur(next.total)}</b></dd></div>
           </dl>
           ${next.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(next.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${next.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${next.id}">Annuler le ménage</button></div></div>` : ''}
-          ${next.preferred_id && next.worker_id !== next.preferred_id ? `<p class="notice"><b>${esc(next.preferred_name)}, votre intervenante préférée, n'est pas disponible à ce créneau.</b> Une autre intervenante vérifiée viendra. Pour la garder, choisissez un autre créneau via « Modifier ».</p>` : ''}
+          ${next.preferred_id && next.worker_id !== next.preferred_id ? `<p class="notice"><b>${esc(next.preferred_name)}, votre intervenante préférée, n'est pas disponible à ce créneau.</b> L'équipe recherchera une intervenante et vous confirmera son attribution. Pour la garder, choisissez un autre créneau via « Modifier ».</p>` : ''}
           <div class="actions">
             ${['en_attente', 'proposee', 'attribuee'].includes(next.status) && (Date.parse(`${next.date}T${next.time}:00`) - Date.now()) / 36e5 >= 24 ? `<button class="btn ghost" data-edit="${next.id}">Modifier</button>` : ''}
             <button class="btn ghost" data-thread="${next.id}">Contacter${next.messages ? ` (${next.messages})` : ''}</button>
@@ -308,7 +308,7 @@
           <label>Date<input type="date" id="date" min="${todayParis()}" value="${esc(draft.date)}" required></label>
         </div>
         <label>Adresse<input type="text" id="address" autocomplete="street-address" value="${esc(draft.address)}" placeholder="Numéro, rue, étage, code d'accès" required></label>
-        <fieldset class="box"><legend>Heure d'arrivée</legend><div id="slots"><p class="muted small">Recherche des créneaux libres…</p></div><div id="prefNote"></div></fieldset>
+        <fieldset class="box"><legend>Heure d'arrivée</legend><div id="slots"><p class="muted small">Chargement des créneaux proposés…</p></div><div id="prefNote"></div></fieldset>
         ${draft.date === todayParis() ? `<label class="check"><input type="checkbox" id="urgent" ${draft.urgent ? 'checked' : ''}> Urgence : arrivée dans les 3 prochaines heures (+25 %)</label>` : ''}
         <fieldset class="box"><legend>Fréquence</legend>
           <div class="chips">${[['0', 'Une seule fois'], ['7', 'Chaque semaine'], ['14', 'Toutes les 2 semaines']].map(([v, l]) => `<button type="button" data-repeat="${v}" aria-pressed="${draft.repeat === v}">${l}</button>`).join('')}</div>
@@ -336,13 +336,13 @@
           const p = r.preferred;
           box.innerHTML = r.slots.length
             ? `<div class="chips times">${r.slots.map((t) => `<button type="button" data-time="${t}" aria-pressed="${draft.time === t}">${t}${p && p.slots.includes(t) ? ' ★' : ''}</button>`).join('')}</div>
-               ${p ? `<p class="small muted" style="margin:6px 0 0">★ ${esc(p.name)}, votre intervenante préférée, est libre à ces heures-là.</p>` : ''}`
-            : '<p class="msg warn">Aucune intervenante n\'est libre ce jour-là. Essayez une autre date.</p>';
-          pref.innerHTML = p && draft.time && !p.slots.includes(draft.time) ? `<p class="notice"><b>${esc(p.name)} n'est pas libre à ${esc(draft.time)}.</b> Une autre intervenante vérifiée viendra.${p.slots.length ? ` Choisissez une heure marquée ★ pour l'avoir.` : ` Elle n'est pas libre ce jour-là.`}</p>` : '';
+               ${p ? `<p class="small muted" style="margin:6px 0 0">★ ${esc(p.name)} est actuellement disponible à ces heures (sous réserve de confirmation).</p>` : ''}`
+            : '<p class="msg warn">Aucun créneau proposé pour cette date. Essayez une autre date.</p>';
+          pref.innerHTML = p && draft.time && !p.slots.includes(draft.time) ? `<p class="notice"><b>${esc(p.name)} n'est pas libre à ${esc(draft.time)}.</b> L'équipe recherchera une intervenante et vous confirmera son attribution.${p.slots.length ? ` Choisissez une heure marquée ★ pour l'avoir.` : ` Elle n'est pas libre ce jour-là.`}</p>` : '';
           box.querySelectorAll('[data-time]').forEach((b) => b.onclick = () => { draft.time = b.dataset.time; paintSlots(); });
         };
         paintSlots();
-      } else box.innerHTML = '<p class="msg">Entrez le code postal pour voir les heures libres.</p>';
+      } else box.innerHTML = '<p class="msg">Entrez le code postal pour voir les créneaux proposés.</p>';
       document.getElementById('next').onclick = async () => {
         save();
         const err = document.getElementById('err2');
@@ -804,8 +804,8 @@
     const bk = await api('GET', '/api/admin/backups').catch(() => ({ enabled: false, list: [] }));
     const in3 = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
     const todo = [
-      ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
-        .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? 'Sans intervenante' : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
+      ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+        .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
       ...r.incidents.map((x) => `<li class="urgent"><span><b>Réclamation</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
@@ -828,7 +828,7 @@
         <thead><tr><th>N°</th><th>Prestation</th><th>Date</th><th>Code postal</th><th>Intervenante</th><th>État</th><th class="n">Prix TTC</th><th>Paiement</th><th></th></tr></thead>
         <tbody>${r.bookings.map((b) => `<tr class="bkrow"><td data-l="N°"><b>n° ${b.id}</b></td><td data-l="Prestation">${esc(label(b))}${b.kit ? ' <span class="pill">matériel</span>' : ''}</td><td data-l="Date">${dateFr(b.date)} ${esc(b.time)}</td><td data-l="Code postal">${esc(b.cp)}</td>
           <td data-l="Intervenante">${b.worker_name ? esc(b.worker_name) : '<span class="muted">–</span>'}</td><td data-l="État">${pill(b.status)}${b.rating ? ' ' + '★'.repeat(b.rating) : ''}</td><td class="n" data-l="Prix TTC">${eur(b.total)}</td><td class="small" data-l="Paiement">${PAY[b.payment_status] || ''}</td>
-          <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${b.payment_status === 'a_rembourser' ? `<button class="btn ghost" data-refund="${b.id}">Marquer remboursé</button>` : ''}<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
+          <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) && b.paid ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${b.payment_status === 'a_rembourser' ? `<button class="btn ghost" data-refund="${b.id}">Marquer remboursé</button>` : ''}<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
       </table></div></section>
       ${r.incidents.length ? `<section class="card" id="sec-incidents" data-tab="todo"><h2>Problèmes signalés par les clients</h2>${r.incidents.map((x) => `
         <div class="row box" style="margin-top:8px"><div><b>Réservation n° ${x.booking_id}</b> · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}<br>${esc(x.text)}</div>
@@ -915,7 +915,7 @@
         <label>Intervenantes libres à cette heure-là, de la plus proche à la plus éloignée
           <select id="pick-${id}">${opts}<option value="auto">Choix automatique</option></select></label>
         ${c.list.length ? '' : '<p class="small muted">Aucune autre intervenante n\'est libre à cette heure-là.</p>'}
-        <p class="small muted">Une salariée reçoit la mission directement. Une indépendante la reçoit en proposition et peut refuser.</p>
+        <p class="small muted">La prestation doit être payée avant attribution. Une salariée reçoit la mission directement. Une indépendante la reçoit en proposition et peut refuser.</p>
         <div class="row" style="justify-content:flex-start"><button class="btn blue" id="ok-${id}">Valider</button><button class="btn ghost" id="no-${id}">Annuler</button></div>
       </div>`;
       document.getElementById(`no-${id}`).onclick = () => { host.innerHTML = ''; host.closest('.pickrow')?.remove(); };
@@ -1078,7 +1078,7 @@
     <h2>1. Objet</h2><p>Les présentes conditions encadrent les prestations de ménage réservées sur Proprigo par des particuliers et des professionnels (hôtes et conciergeries), exploité par [RAISON SOCIALE], [FORME JURIDIQUE] au capital de [MONTANT], immatriculée sous le numéro [SIREN], siège : [ADRESSE].</p>
     <h2>2. Prestations</h2><p>Ménage à domicile à l'heure, grand nettoyage, ménage de logement de location courte durée au forfait (ménage et linge). Les tâches prévues figurent dans la checklist de la réservation. Les prestations sont réalisées par des intervenantes salariées de Proprigo ou des intervenantes indépendantes sélectionnées.</p>
     <h2>3. Prix</h2><p>Les prix sont indiqués en euros toutes taxes comprises avant la réservation. Suppléments : dimanche et jours fériés +20 %, intervention urgente (arrivée dans les 3 heures) +25 %, matériel et produits fournis +15 €. [Le crédit d'impôt de 50 % s'applique aux services à la personne selon les conditions légales, une fois la déclaration de l'entreprise effectuée.]</p>
-    <h2>4. Réservation et paiement</h2><p>La réservation est ferme après paiement en ligne par carte bancaire via [PRESTATAIRE DE PAIEMENT]. Une confirmation est envoyée par e-mail. Le client s'engage à donner une adresse exacte et l'accès au logement à l'heure prévue.</p>
+    <h2>4. Réservation et paiement</h2><p>Le client paie via Stripe avant l'intervention. Le créneau demandé reste soumis à l'attribution d'une intervenante par PROPRIGO. Le client est informé après attribution. Si aucune intervenante ne peut être trouvée, PROPRIGO annule la prestation et rembourse intégralement le paiement. Le client s'engage à donner une adresse exacte et l'accès au logement à l'heure prévue.</p>
     <h2>5. Modification et annulation</h2><p>La date, l'heure, la durée et l'adresse peuvent être modifiées jusqu'à 24 heures avant le début de la prestation, sous réserve de disponibilité ; le prix est recalculé. L'annulation est gratuite jusqu'à 24 heures avant ; ensuite, 50 % du prix reste dû. Si l'intervenante ne peut pas accéder au logement du fait du client, la prestation est due.</p>
     <h2>6. Droit de rétractation</h2><p>Pour une réservation faite à distance par un consommateur, le droit de rétractation de 14 jours s'applique. Si le client demande que la prestation commence avant la fin de ce délai, il le reconnaît expressément et reste redevable du montant correspondant au service fourni. [Rédaction à valider.]</p>
     <h2>7. Remplacement de l'intervenante</h2><p>En cas d'indisponibilité de l'intervenante prévue, Proprigo peut la remplacer par une autre intervenante vérifiée et en informe le client, qui peut choisir un autre créneau.</p>

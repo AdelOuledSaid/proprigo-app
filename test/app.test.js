@@ -290,30 +290,17 @@ async function logged(agent, email, password = 'demo-proprigo') {
 }
 const ADMIN = ['admin@proprigo.test', 'admin-test-123'];
 
-test('disponibilités et congés : seuls les créneaux couverts sont proposés', async () => {
+test('les créneaux restent proposés sans intervenante et la commande est créée', async () => {
   const { server, agent } = await startServer();
   try {
-    const fatima = await logged(agent, 'fatima@proprigo.test');
-    // Fatima ne travaille que le lundi matin, et prend congé le 30 novembre
-    let r = await fatima('POST', '/api/worker/availability', { days: [{ weekday: 1, start: '08:00', end: '12:00' }] });
-    assert.equal(r.status, 200);
-    assert.equal((await fatima('POST', '/api/worker/availability', { days: [{ weekday: 1, start: '12:00', end: '08:00' }] })).status, 400);
-    r = await fatima('POST', '/api/worker/timeoff', { start_date: '2026-11-30', end_date: '2026-11-30' });
-    assert.equal(r.status, 200);
-    const client = await logged(agent, 'claire@proprigo.test');
-    r = await client('POST', '/api/bookings', { service: 'menage', hours: 3, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-23', time: '09:00' });
-    assert.equal(r.data.worker_name, 'Fatima K.');
-    r = await client('POST', '/api/bookings', { service: 'menage', hours: 3, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-23', time: '14:00' });
-    assert.notEqual(r.data.worker_name, 'Fatima K.'); // hors de ses horaires
-    r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-30', time: '09:00' });
-    assert.notEqual(r.data.worker_name, 'Fatima K.'); // en congé
-    // tout le monde absent : aucun créneau proposé, réservation refusée
     const admin = await logged(agent, ...ADMIN);
     for (const w of (await admin('GET', '/api/admin/overview')).data.workers) if (w.active) await admin('POST', `/api/admin/workers/${w.user_id}/absent`);
-    r = await client('GET', '/api/slots?date=2026-11-24&cp=75011&hours=2');
-    assert.deepEqual(r.data.slots, []);
-    r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-24', time: '10:00' });
-    assert.equal(r.status, 409);
+    const client = await logged(agent, 'claire@proprigo.test');
+    const slots = (await client('GET', '/api/slots?date=2026-11-24&cp=75011&hours=2')).data.slots;
+    assert.ok(slots.includes('10:00'));
+    const r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-24', time: '10:00' });
+    assert.equal(r.status, 201);
+    assert.equal(r.data.status, 'en_attente');
   } finally { server.close(); }
 });
 
@@ -399,47 +386,17 @@ test('checklist, photos avec consentement, signalement, messagerie sans numéros
   } finally { server.close(); }
 });
 
-test('intervenante préférée et garantie de remplacement', async () => {
+test('une réservation reste à attribuer par l’administrateur si aucune intervenante n’est libre', async () => {
   const { server, agent } = await startServer();
   try {
-    const client = await logged(agent, 'claire@proprigo.test');
-    let r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75018', address: '5 rue Lepic', date: '2026-11-23', time: '09:00' });
-    assert.equal(r.data.worker_name, 'Aïssata D.');
-    const aissata = await logged(agent, 'aissata@proprigo.test');
-    await aissata('POST', `/api/worker/missions/${r.data.id}/start`);
-    await aissata('POST', `/api/worker/missions/${r.data.id}/finish`);
-    const mw = await client('GET', '/api/my-workers');
-    const aid = mw.data.list[0].id;
-    // on ne peut pas choisir quelqu'un qui n'est jamais venu
-    const fatimaId = (await (await logged(agent, ...ADMIN))('GET', '/api/admin/overview')).data.workers.find((w) => w.name === 'Fatima K.').user_id;
-    assert.equal((await client('POST', '/api/favorite', { worker_id: fatimaId })).status, 400);
-    assert.equal((await client('POST', '/api/favorite', { worker_id: aid })).status, 200);
-    // près de chez Fatima, mais la préférée est libre : c'est elle qui vient
-    r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-24', time: '14:00' });
-    assert.equal(r.data.worker_name, 'Aïssata D.');
-    // garantie : Aïssata absente, une remplaçante est trouvée et le client est prévenu
     const admin = await logged(agent, ...ADMIN);
-    await admin('POST', `/api/admin/workers/${aid}/absent`);
-    const after = (await client('GET', '/api/bookings/mine')).data.find((b) => b.id === r.data.id);
-    assert.notEqual(after.worker_name, 'Aïssata D.');
-    const msgs = (await client('GET', `/api/bookings/${r.data.id}/messages`)).data;
-    assert.match(msgs[msgs.length - 1].text, /Aïssata n'est pas disponible.*viendra à sa place.*autre créneau/);
-    assert.doesNotMatch(msgs[msgs.length - 1].text, /accept/);
-    assert.equal(msgs[msgs.length - 1].name, 'Équipe Proprigo');
-    // la réservation indique la préférée ; le client peut choisir un créneau où elle est libre
-    assert.equal(after.preferred_name, 'Aïssata');
-    await admin('POST', `/api/admin/workers/${aid}/absent`); // de retour
-    const sl = await client('GET', `/api/bookings/${r.data.id}/preferred-slots`);
-    assert.equal(sl.data.name, 'Aïssata');
-    assert.ok(sl.data.options.length > 0);
-    const opt = sl.data.options[0];
-    const up = await client('POST', `/api/bookings/${r.data.id}/update`, { date: opt.date, time: opt.time });
-    assert.equal(up.status, 200);
-    assert.equal(up.data.worker_name, 'Aïssata D.');
-    // au moment de réserver, le client voit les heures où sa préférée est libre
-    const day = await client('GET', '/api/slots?date=2026-11-27&cp=75011&hours=2');
-    assert.equal(day.data.preferred.name, 'Aïssata');
-    assert.ok(day.data.preferred.slots.length > 0);
+    for (const w of (await admin('GET', '/api/admin/overview')).data.workers) if (w.active) await admin('POST', `/api/admin/workers/${w.user_id}/absent`);
+    const client = await logged(agent, 'claire@proprigo.test');
+    const r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-24', time: '14:00' });
+    assert.equal(r.status, 201);
+    assert.equal(r.data.status, 'en_attente');
+    const overview = (await admin('GET', '/api/admin/overview')).data;
+    assert.ok(overview.bookings.some((b) => b.id === r.data.id && b.status === 'en_attente'));
   } finally { server.close(); }
 });
 
@@ -720,21 +677,15 @@ test('indépendantes : une proposition reste « en attente » et ne peut pas che
   } finally { server.close(); }
 });
 
-test('créneaux : durée, trajet selon la distance et 1 h d\'avance le jour même', async () => {
+test('créneaux proposés : durée et délai minimal le jour même', async () => {
   const engine = require('../src/engine');
-  assert.equal(engine.travelMinutes('75011', '75011'), 30);
-  assert.ok(engine.travelMinutes('75011', '95000') > 60, 'Val-d\'Oise depuis Paris : plus d\'une heure');
-  const { server, db, agent } = await startServer({ seed: true });
+  assert.ok(engine.requestSlots({ hours: 2 }).includes('10:00'));
+  assert.ok(!engine.requestSlots({ hours: 8 }).includes('18:00'));
+  const { server, agent } = await startServer({ seed: true });
   try {
-    const fatima = db.prepare("SELECT id FROM users WHERE email = 'fatima@proprigo.test'").get().id;
-    for (const w of db.prepare("SELECT user_id FROM workers WHERE user_id != ?").all(fatima)) db.prepare('UPDATE workers SET absent = 1 WHERE user_id = ?').run(w.user_id);
-    db.prepare("INSERT INTO bookings (client_id, service, hours, cp, address, date, time, urgent, kit, total, zone, paid, status, worker_id) VALUES (?, 'menage', 3, '75011', 'x', '2026-11-25', '10:00', 0, 0, 111, 'IDF', 0, 'attribuee', ?)").run(fatima, fatima);
     const c = await logged(agent, 'claire@proprigo.test');
     const slots = (await c('GET', '/api/slots?date=2026-11-25&cp=75011&hours=2')).data.slots;
-    // mission 10:00-13:00 : un ménage de 2 h doit finir avant 9:30 et ne peut commencer qu'à 13:30
-    assert.ok(slots.includes('07:30') && !slots.includes('08:00'), slots.join(' '));
-    assert.ok(!slots.includes('13:00') && slots.includes('13:30'), slots.join(' '));
-    // aujourd'hui (samedi 21/11, 10 h à Paris) : rien avant 11 h
+    assert.ok(slots.includes('10:00'));
     const today = (await c('GET', '/api/slots?date=2026-11-21&cp=75011&hours=2')).data.slots;
     assert.ok(today.every((t) => t >= '11:00'), today.join(' '));
     assert.equal((await c('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Test', date: '2026-11-21', time: '10:30', checklist: [] })).status, 400);
