@@ -19,6 +19,24 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   if (bookings.some((b) => !b || b.paid || b.status === 'annulee' || b.payment_status === 'paye')) throw new Error('Invalid bookings');
   const amount = bookings.reduce((sum, b) => sum + Math.round(b.total * 100), 0);
   if (!Number.isSafeInteger(amount) || amount < 50 || amount > 99999999) throw new Error('Invalid amount');
+  // Une reservation en attente peut deja avoir une session Checkout ouverte.
+  // La reutiliser plutot que creer un second paiement pour le meme menage.
+  const previous = db.prepare("SELECT session_id FROM stripe_payments WHERE client_id = ? AND booking_ids = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1")
+    .get(clientId, JSON.stringify(ids));
+  if (previous) {
+    try {
+      const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(previous.session_id)}`, {
+        headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000),
+      });
+      const old = await r.json();
+      if (r.ok && old.status === 'open' && old.url) return { url: old.url };
+      if (r.ok && old.payment_status === 'paid') throw new Error('Payment already completed; awaiting webhook');
+      if (!r.ok) throw new Error(`Stripe session lookup failed (${r.status})`);
+    } catch (err) {
+      console.error('Stripe Checkout existing session:', { message: err.message });
+      throw err; // Ne jamais creer un deuxieme paiement si l'etat du premier est inconnu.
+    }
+  }
   const params = new URLSearchParams();
   params.set('mode', 'payment');
   params.set('customer_email', email);

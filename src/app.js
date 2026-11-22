@@ -356,6 +356,28 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (body.home_id && !home) throw new HttpError(404, 'Logement introuvable.');
     const payMode = every && body.payment_mode === 'per_visit' ? 'per_visit' : 'all';
     if (stripeReady && !stripePay.validBaseUrl(appUrl)) throw new HttpError(503, 'Adresse publique du site non configurée.');
+    // Eviter les doublons exacts d'une prestation simple lors des clics repetes.
+    // Ne pas bloquer une nouvelle reservation differente ni les recurrents.
+    if (stripeReady && !every) {
+      const existing = db.prepare(`SELECT * FROM bookings
+        WHERE client_id = ? AND service = ? AND hours = ? AND cp = ?
+          AND address = ? AND date = ? AND time = ? AND total = ?
+          AND urgent = ? AND kit = ? AND COALESCE(home_id, 0) = ?
+          AND status <> 'annulee' AND created_at >= datetime('now', '-30 minutes')
+        ORDER BY id DESC LIMIT 1`).get(user.id, q.service, q.hours, body.cp, address,
+          body.date, time, q.total, body.urgent ? 1 : 0, body.kit ? 1 : 0, home ? home.id : 0);
+      if (existing) {
+        if (existing.paid || existing.payment_status === 'paye')
+          throw new HttpError(409, 'Cette prestation a deja ete payee. Consultez Mes reservations.');
+        try {
+          const session = await stripePay.checkout({ db, ids: [existing.id], clientId: user.id, email: user.email, appUrl });
+          return { status: 200, data: { checkout_url: session.url, created: 0, reused: true } };
+        } catch (e) {
+          console.error('Stripe Checkout retry failed:', { message: e.message });
+          throw new HttpError(502, 'Impossible de reprendre le paiement Stripe. Reessayez.');
+        }
+      }
+    }
     const tasks = JSON.stringify(checklist.clean(body.checklist, q.service));
     const consent = body.photoConsent ? 1 : 0;
     let seriesId = null;
@@ -462,7 +484,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
 
   route('GET', '/api/bookings/mine', ({ user }) => {
     need(user, 'client');
-    return db.prepare('SELECT * FROM bookings WHERE client_id = ? ORDER BY date DESC, time DESC').all(user.id).map((b) => {
+    return db.prepare("SELECT * FROM bookings WHERE client_id = ? AND NOT (status = 'annulee' AND payment_status = 'paiement_echoue' AND paid = 0) ORDER BY date DESC, time DESC").all(user.id).map((b) => {
       const v = bookingView(b);
       const pid = engine.preferredIds(db, b)[0];
       return pid ? { ...v, preferred_id: pid, preferred_name: engine.firstName(db, pid) } : v;
