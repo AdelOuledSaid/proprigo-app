@@ -691,3 +691,27 @@ test('créneaux proposés : durée et délai minimal le jour même', async () =>
     assert.equal((await c('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Test', date: '2026-11-21', time: '10:30', checklist: [] })).status, 400);
   } finally { server.close(); }
 });
+
+
+test('administration : création contrôlée et protection des profils fictifs', async () => {
+  const { server, agent, db } = await startServer({ seed: false, production: false });
+  try {
+    const adminId = require('../src/db').createUser(db, { role: 'admin', email: 'admin@exemple.fr', password: 'secret-admin-123', name: 'Admin' });
+    const admin = agent();
+    assert.equal((await admin('POST', '/api/login', { email: 'admin@exemple.fr', password: 'secret-admin-123' })).status, 200);
+    const worker = { name: 'Marie Dupont', email: 'marie@example.fr', password: 'temporaire123', cp: '75011', statut: 'S' };
+    let r = await admin('POST', '/api/admin/workers', worker);
+    assert.equal(r.status, 201);
+    assert.equal(db.prepare('SELECT step FROM workers WHERE user_id=?').get(r.data.id).step, 0);
+    assert.equal((await admin('POST', '/api/admin/workers', worker)).status, 409);
+    r = await admin('POST', '/api/admin/workers/demo', {});
+    assert.equal(r.data.created, 5);
+    assert.equal((await admin('POST', '/api/admin/workers/demo', {})).data.created, 0);
+    const demo = db.prepare("SELECT u.id, w.step, w.absent FROM users u JOIN workers w ON w.user_id=u.id WHERE u.email='fatima@proprigo.test'").get();
+    assert.equal(demo.step, 0);
+    assert.equal(demo.absent, 1);
+    assert.equal((await admin('POST', `/api/admin/workers/${demo.id}/advance`, {})).status, 403);
+    assert.equal((await admin('GET', '/api/admin/overview')).data.workers.length, 6);
+    assert.ok(adminId > 0);
+  } finally { server.close(); }
+});

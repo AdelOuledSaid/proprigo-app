@@ -836,6 +836,24 @@
         <div id="thread-inc-${x.booking_id}"></div>`).join('')}</section>` : ''}
       <section class="card" id="sec-team" data-tab="equipe"><h2>Équipe et recrutement</h2>
         <p class="small muted">Aucune mission avant le statut « Active ».</p>
+        <form id="admin-add-worker" class="card" style="margin:12px 0;padding:16px">
+          <h3>Ajouter une intervenante réelle</h3>
+          <div class="grid2">
+            <label>Nom<input name="name" required maxlength="80" placeholder="Prénom et nom"></label>
+            <label>E-mail<input name="email" type="email" required maxlength="120"></label>
+            <label>Code postal<input name="cp" required maxlength="5" pattern="[0-9]{5}" placeholder="75011"></label>
+            <label>Statut<select name="statut" id="admin-worker-statut"><option value="S">Salariée</option><option value="I">Indépendante</option></select></label>
+            <label>Téléphone<input name="phone" maxlength="20"></label>
+            <label>Tarif horaire (indépendante)<input name="rate" type="number" min="15" max="40" step="0.5" placeholder="24"></label>
+            <label>Mot de passe provisoire (10 caractères min.)<input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
+          </div>
+          <p class="small muted">Le compte commence à l'étape « Inscription ». Vérifiez réellement les documents avant d'activer une intervenante.</p>
+          <button class="btn blue" type="submit">Créer le compte intervenante</button>
+        </form>
+        <div class="card" style="margin:12px 0;padding:16px"><h3>Profils de démonstration</h3>
+          <p class="small muted">Cinq profils fictifs marqués TEST, inactifs et absents. Ils ne doivent jamais être attribués à une mission réelle. Sur Render, autorisation temporaire ALLOW_DEMO_WORKERS=true nécessaire.</p>
+          <button type="button" class="btn ghost" id="admin-demo-workers">Créer les 5 profils fictifs</button>
+        </div>
         <div class="grid2" style="gap:12px">${r.workers.map((w) => `
           <div class="card" style="margin:0">
             <div class="row"><b>${esc(w.name)}</b><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span></div>
@@ -868,6 +886,23 @@
       btn.disabled = true;
       try { const r = await api('POST', path(btn.getAttribute(attr)), {}); if (r && r.message) toast(r.message); route(); } catch (e) { toast(e.message); btn.disabled = false; }
     });
+    const addWorker = document.getElementById('admin-add-worker');
+    if (addWorker) addWorker.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = addWorker.querySelector('[type="submit"]'); btn.disabled = true;
+      try {
+        const data = Object.fromEntries(new FormData(addWorker).entries());
+        await api('POST', '/api/admin/workers', data);
+        toast('Intervenante créée : validation nécessaire.'); route();
+      } catch (err) { toast(err.message); btn.disabled = false; }
+    };
+    const demoBtn = document.getElementById('admin-demo-workers');
+    if (demoBtn) demoBtn.onclick = async () => {
+      if (!confirm('Créer 5 profils fictifs inactifs ? Ne pas les attribuer à de vrais clients.')) return;
+      demoBtn.disabled = true;
+      try { const result = await api('POST', '/api/admin/workers/demo', {}); toast(result.message); route(); }
+      catch (err) { toast(err.message); demoBtn.disabled = false; }
+    };
     bind('data-advance', (id) => `/api/admin/workers/${id}/advance`);
     bind('data-absent', (id) => `/api/admin/workers/${id}/absent`);
     bind('data-refund', (id) => `/api/admin/bookings/${id}/refunded`);

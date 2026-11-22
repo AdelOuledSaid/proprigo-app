@@ -845,7 +845,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     const clients = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client'").get().n;
     return {
       kpis: {
-        reservations: totals.n, terminees: done.length, caHT: Math.round(ca), marge: Math.round(marge),
+        reservations: db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE NOT (paid = 0 AND payment_status = 'paiement_echoue' AND status = 'annulee')").get().n, terminees: done.length, caHT: Math.round(ca), marge: Math.round(marge),
         noteMoyenne: totals.avis ? Math.round(totals.note * 10) / 10 : null, clients,
         aRembourser: { n: refund.n, montant: refund.montant },
       },
@@ -854,10 +854,63 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     };
   });
 
+  // Création contrôlée d'intervenantes par l'administrateur. Aucun profil n'est actif sans validation.
+  route('POST', '/api/admin/workers', ({ user, body }) => {
+    need(user, 'admin');
+    const email = str(body.email, 120).toLowerCase();
+    const name = str(body.name, 80);
+    const cp = str(body.cp, 5);
+    const statut = body.statut === 'I' ? 'I' : 'S';
+    const password = typeof body.password === 'string' ? body.password : '';
+    const rate = statut === 'I' ? Number(body.rate) : null;
+    if (!name || !EMAIL_RE.test(email)) throw new HttpError(400, 'Nom ou e-mail invalide.');
+    if (!pricing.zoneOf(cp)) throw new HttpError(400, 'Code postal invalide.');
+    if (password.length < 10) throw new HttpError(400, 'Mot de passe : 10 caractères minimum.');
+    if (statut === 'I' && !(rate >= 15 && rate <= 40)) throw new HttpError(400, 'Tarif horaire entre 15 et 40 €.');
+    if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new HttpError(409, 'Adresse déjà utilisée.');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const id = db_.createUser(db, { role: 'intervenante', email, name, password, phone: str(body.phone, 20) });
+      db.prepare('INSERT INTO workers (user_id, statut, cp, rate, step) VALUES (?, ?, ?, ?, 0)').run(id, statut, cp, rate);
+      db_.setAvailability(db, id, db_.NEW_WORKER_WEEK);
+      db.exec('COMMIT');
+      db_.log(db, `Intervenante créée par administration : ${name} (validation nécessaire).`);
+      return { status: 201, data: { ok: true, id } };
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+  });
+
+  // Comptes fictifs, exclusivement pour tester l'interface. Jamais actifs automatiquement.
+  route('POST', '/api/admin/workers/demo', ({ user }) => {
+    need(user, 'admin');
+    if (production && process.env.ALLOW_DEMO_WORKERS !== 'true') throw new HttpError(403, 'Profils fictifs désactivés en production. Activez ALLOW_DEMO_WORKERS=true temporairement pour les essais.');
+    const examples = [
+      ['fatima@proprigo.test', 'Fatima K. (TEST)', 'S', '75011', null],
+      ['aissata@proprigo.test', 'Aïssata D. (TEST)', 'S', '75018', null],
+      ['ines@proprigo.test', 'Inès M. (TEST)', 'I', '75020', 24],
+      ['lucia@proprigo.test', 'Lucia P. (TEST)', 'I', '92100', 24],
+      ['mariam@proprigo.test', 'Mariam S. (TEST)', 'S', '93200', null],
+    ];
+    let created = 0;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const [email, name, statut, cp, rate] of examples) {
+        if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) continue;
+        const id = db_.createUser(db, { role: 'intervenante', email, name, password: crypto.randomBytes(32).toString('hex') });
+        db.prepare('INSERT INTO workers (user_id, statut, cp, rate, step, absent) VALUES (?, ?, ?, ?, 0, 1)').run(id, statut, cp, rate);
+        db_.setAvailability(db, id, db_.NEW_WORKER_WEEK);
+        created++;
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    db_.log(db, `${created} profils fictifs ajoutés (inactifs et absents).`);
+    return { created, message: `${created} profil(s) fictif(s) ajouté(s). Ils ne sont pas disponibles pour les réservations.` };
+  });
+
   route('POST', '/api/admin/workers/:id/advance', ({ user, id }) => {
     need(user, 'admin');
     const w = workerProfile(id);
     if (!w) throw new HttpError(404, 'Intervenante introuvable.');
+    if (w.email.endsWith('@proprigo.test') && w.name.includes('(TEST)')) throw new HttpError(403, 'Profil fictif : activation interdite.');
     const steps = db_.STEPS[w.statut];
     if (w.step >= steps.length - 1) throw new HttpError(409, 'Déjà active.');
     db.prepare('UPDATE workers SET step = step + 1 WHERE user_id = ?').run(id);
