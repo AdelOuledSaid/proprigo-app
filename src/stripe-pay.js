@@ -22,7 +22,7 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   const params = new URLSearchParams();
   params.set('mode', 'payment');
   params.set('customer_email', email);
-  params.set('payment_method_types[0]', 'card');
+  
   params.set('line_items[0][price_data][currency]', 'eur');
   params.set('line_items[0][price_data][unit_amount]', String(amount));
   params.set('line_items[0][price_data][product_data][name]', `PROPRIGO - ${bookings.length} prestation(s) de nettoyage`);
