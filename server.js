@@ -23,7 +23,7 @@ fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 
 const { server } = createApp({
   dbFile: DB_FILE, adminPassword: ADMIN_PASSWORD, seed: !PROD || process.env.SEED === '1', secureCookies: PROD,
-  production: PROD, paymentsEnabled: false, // passera à true quand Stripe sera branché
+  production: PROD, paymentsEnabled: process.env.PAYMENTS_ENABLED === 'true', // activer uniquement après configuration Stripe et tests
   autoSync: true, // calendriers Airbnb relus toutes les 6 heures, rappels envoyés la veille
   appUrl: process.env.APP_URL || `http://localhost:${PORT}`,
   mail: { provider: process.env.MAIL_PROVIDER, apiKey: process.env.MAIL_API_KEY, from: process.env.MAIL_FROM },

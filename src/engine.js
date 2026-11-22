@@ -91,6 +91,7 @@ function candidates(db, booking, { withRefused = false } = {}) {
 function assign(db, bookingId) {
   const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
   if (!b) throw new Error('Réservation introuvable');
+  if (b.payment_status === 'en_attente_paiement' || b.payment_status === 'paiement_echoue') return { status: 'en_attente', payment_pending: true };
   db.prepare("DELETE FROM offers WHERE booking_id = ? AND state = 'offered'").run(b.id);
   const r = pickAndAssign(db, b);
   // même intervenante qu'avant : rien n'a changé, on ne prévient personne une seconde fois
@@ -255,6 +256,7 @@ function proximity(d) {
 function assignTo(db, bookingId, workerId) {
   const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
   if (!b || !['en_attente', 'proposee', 'attribuee'].includes(b.status)) return { error: 'Réservation non modifiable.' };
+  if (b.payment_status === 'en_attente_paiement' || b.payment_status === 'paiement_echoue') return { error: 'Paiement requis avant attribution.' };
   const w = candidates(db, b, { withRefused: true }).find((x) => x.user_id === workerId);
   if (!w) return { error: "Cette intervenante n'est pas disponible à cette heure-là." };
   db.prepare("DELETE FROM offers WHERE booking_id = ? AND state = 'offered'").run(b.id);

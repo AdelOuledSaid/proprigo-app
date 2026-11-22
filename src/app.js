@@ -12,6 +12,7 @@ const mailer = require('./mailer');
 const backups = require('./backup');
 const VERSION = require('../package.json').version;
 const os = require('node:os');
+const stripePay = require('./stripe-pay');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const SESSION_DAYS = 14;
@@ -27,6 +28,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   const PHOTOS = photosDir || (dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-photos-')) : path.join(path.dirname(dbFile), 'photos'));
   fs.mkdirSync(PHOTOS, { recursive: true });
   const db = db_.open(dbFile);
+  const stripeReady = paymentsEnabled && stripePay.configured();
   if (seed) db_.seedDemo(db, adminPassword);
   const loginAttempts = new Map();
   const syncAsks = new Map();
@@ -313,10 +315,31 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return { slots, preferred };
   });
 
-  route('POST', '/api/bookings', ({ user, body }) => {
+  // Paiement d'une intervention future d'une série (paiement individuel).
+  route('POST', '/api/bookings/:id/pay', async ({ user, id }) => {
+    need(user, 'client');
+    if (!stripeReady) throw new HttpError(503, 'Paiement indisponible.');
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND client_id = ?').get(id, user.id);
+    if (!b) throw new HttpError(404, 'Réservation introuvable.');
+    if (b.status === 'annulee' || b.paid || b.payment_status === 'paye') throw new HttpError(409, 'Paiement impossible pour cette réservation.');
+    if (hoursBefore(b) < 1) throw new HttpError(409, 'Délai dépassé : contactez PROPRIGO.');
+    try {
+      const session = await stripePay.checkout({ db, ids: [id], clientId: user.id, email: user.email, appUrl });
+      return { checkout_url: session.url };
+    } catch (e) { throw new HttpError(502, 'Paiement indisponible. Réessayez.'); }
+  });
+  route('GET', '/api/payments/status', ({ user, query }) => {
+    need(user, 'client');
+    const id = Number(query.get('booking'));
+    const b = db.prepare('SELECT id, paid, payment_status FROM bookings WHERE id = ? AND client_id = ?').get(id, user.id);
+    if (!b) throw new HttpError(404, 'Réservation introuvable.');
+    return b;
+  });
+
+  route('POST', '/api/bookings', async ({ user, body }) => {
     need(user, 'client');
     // Sécurité : en production, aucune réservation sans vrai paiement en ligne.
-    if (production && !paymentsEnabled) throw new HttpError(503, "Le paiement en ligne n'est pas encore activé : les réservations ouvriront bientôt.");
+    if (production && !stripeReady) throw new HttpError(503, "Le paiement en ligne n'est pas encore activé : les réservations ouvriront bientôt.");
     const q = pricing.quote(body, now());
     if (!q.ok) throw new HttpError(400, q.errors.join(' '));
     if (!q.open) throw new HttpError(409, "Proprigo n'est pas encore ouvert à ce code postal. Inscrivez-vous sur la liste d'attente.");
@@ -333,6 +356,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (every && q.urgent) throw new HttpError(400, "L'urgence ne s'applique pas à une réservation récurrente.");
     const home = body.home_id ? db.prepare('SELECT * FROM homes WHERE id = ? AND client_id = ?').get(Number(body.home_id), user.id) : null;
     if (body.home_id && !home) throw new HttpError(404, 'Logement introuvable.');
+    const payMode = every && body.payment_mode === 'per_visit' ? 'per_visit' : 'all';
+    if (stripeReady && !stripePay.validBaseUrl(appUrl)) throw new HttpError(503, 'Adresse publique du site non configurée.');
     const tasks = JSON.stringify(checklist.clean(body.checklist, q.service));
     const consent = body.photoConsent ? 1 : 0;
     let seriesId = null;
@@ -342,12 +367,24 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       const date = addDays(body.date, k * every);
       const qk = k === 0 ? q : pricing.quote({ ...body, date, urgent: false }, now());
       const r = db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, series_id, checklist, photo_consent, home_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'simule', ?, ?, ?, ?)`).run(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
         user.id, q.service, q.size, q.hours, body.cp, address, date, time, k === 0 && body.urgent ? 1 : 0, body.kit ? 1 : 0, qk.total, q.zone, seriesId, tasks, consent, home ? home.id : null);
       const id = Number(r.lastInsertRowid);
       ids.push(id);
-      db_.log(db, `Réservation n° ${id} enregistrée${every ? ` (récurrence ${k + 1}/${count})` : ''}, paiement SIMULÉ (aucun argent encaissé) : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
-      engine.assign(db, id);
+      db_.log(db, `Réservation n° ${id} créée, paiement ${stripeReady ? 'en attente' : 'simulé'} : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
+      if (!stripeReady) engine.assign(db, id);
+    }
+    if (stripeReady) {
+      // Chaque intervention est enregistrée sans affectation jusqu'à confirmation Stripe.
+      // En mode per_visit, seule la première intervention est encaissée maintenant.
+      const chargeIds = payMode === 'all' ? ids : [ids[0]];
+      try {
+        const session = await stripePay.checkout({ db, ids: chargeIds, clientId: user.id, email: user.email, appUrl });
+        return { status: 201, data: { checkout_url: session.url, created: ids.length, payment_mode: payMode } };
+      } catch (e) {
+        db.prepare(`UPDATE bookings SET status = 'annulee', payment_status = 'paiement_echoue' WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+        throw new HttpError(502, 'Impossible de démarrer le paiement Stripe. Réessayez.');
+      }
     }
     const first = bookingView(db.prepare('SELECT * FROM bookings WHERE id = ?').get(ids[0]));
     mailer.send(user.email, `Réservation confirmée : ${fr(first.date)} à ${first.time}`, 'Votre ménage est réservé',
@@ -481,6 +518,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!engine.isActive(w)) throw new HttpError(403, 'Votre compte n\'est pas encore activé.');
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
     if (!b) throw new HttpError(404, 'Mission introuvable.');
+    if (production && !b.paid) throw new HttpError(409, 'Paiement requis avant toute intervention.');
     if (action === 'accept') {
       const ok = engine.accept(db, id, user.id);
       if (ok === 'occupee') throw new HttpError(409, 'Vous avez déjà une mission à cette heure-là (trajet compris). Refusez cette proposition pour qu\'une autre intervenante la reçoive.');
@@ -579,7 +617,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     need(user, 'client');
     const h = db.prepare('SELECT * FROM homes WHERE id = ? AND client_id = ?').get(id, user.id);
     if (!h) throw new HttpError(404, 'Logement introuvable.');
-    if (production && !paymentsEnabled) throw new HttpError(503, "Le paiement en ligne n'est pas encore activé : les ménages automatiques ouvriront bientôt.");
+    if (production) throw new HttpError(503, 'Réservations Airbnb automatiques suspendues jusqu’à la mise en place du prépaiement.');
     const lastAsk = syncAsks.get(id) || 0;
     if (now().getTime() - lastAsk < 120e3) throw new HttpError(429, 'Calendrier déjà synchronisé il y a moins de 2 minutes.');
     syncAsks.set(id, now().getTime());
@@ -729,7 +767,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   route('GET', '/api/bookings/:id/receipt', ({ user, id, res }) => {
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
     if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
-    if (b.status !== 'terminee') throw new HttpError(409, 'Le reçu est disponible une fois le ménage terminé.');
+    if (b.status !== 'terminee' || (production && !b.paid)) throw new HttpError(409, 'Le reçu est disponible après paiement et réalisation du ménage.');
     const c = db.prepare('SELECT name, email FROM users WHERE id = ?').get(b.client_id);
     const tva = b.service === 'airbnb' ? pricing.COSTS.tvaPro : pricing.COSTS.tvaParticulier;
     const ht = Math.round((b.total / (1 + tva)) * 100) / 100;
@@ -740,7 +778,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
     res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reçu ${num}</title>
 <style>body{font:15px/1.5 Arial,sans-serif;color:#0f1430;max-width:720px;margin:24px auto;padding:0 16px}h1{font-size:24px;margin:0}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{padding:8px;border-bottom:1px solid #dce3f7;text-align:left}td.n,th.n{text-align:right;white-space:nowrap}.test{border:2px solid #b23d0c;color:#b23d0c;padding:10px;border-radius:10px;font-weight:700;margin:16px 0}.muted{color:#596181;font-size:13px}@media print{.noprint{display:none}}</style></head><body>
-${paymentsEnabled ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme encaissée. Ce reçu n\'a aucune valeur comptable.</p>'}
+${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme encaissée. Ce reçu n\'a aucune valeur comptable.</p>'}
 <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap"><div><h1>Reçu ${num}</h1><p class="muted">Date de la prestation : ${e(fr(b.date))}</p></div>
 <div><b>Proprigo</b><br>[RAISON SOCIALE ET FORME JURIDIQUE]<br>[ADRESSE DU SIÈGE]<br>SIRET : [À COMPLÉTER]<br>TVA intracommunautaire : [À COMPLÉTER]</div></div>
 <p><b>Client :</b> ${e(c.name)}<br>${e(b.address)}, ${e(b.cp)}</p>
@@ -903,6 +941,44 @@ ${paymentsEnabled ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, a
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     try {
+      if (url.pathname === '/api/stripe/webhook' && req.method === 'POST') {
+        if (!stripeReady) throw new HttpError(503, 'Stripe indisponible.');
+        const chunks = []; let length = 0;
+        for await (const chunk of req) { length += chunk.length; if (length > 200_000) throw new HttpError(413, 'Payload trop grand.'); chunks.push(chunk); }
+        const raw = Buffer.concat(chunks);
+        let event;
+        try { event = stripePay.verifyEvent(raw, req.headers['stripe-signature']); }
+        catch { throw new HttpError(400, 'Signature Stripe invalide.'); }
+        if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
+          const sess = event.data.object;
+          const payment = db.prepare('SELECT * FROM stripe_payments WHERE session_id = ?').get(sess.id);
+          if (payment && payment.status !== 'paid' && sess.currency === 'eur' && sess.amount_total === payment.amount_cents) {
+            const ids = JSON.parse(payment.booking_ids);
+            db.exec('BEGIN IMMEDIATE');
+            try {
+              db.prepare("UPDATE stripe_payments SET status = 'paid' WHERE session_id = ?").run(sess.id);
+              for (const id of ids) {
+                const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+                if (b && b.client_id === payment.client_id && !b.paid) {
+                  if (b.status === 'annulee') db.prepare("UPDATE bookings SET paid = 1, payment_status = 'a_rembourser', refund_amount = total WHERE id = ?").run(id);
+                  else db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye' WHERE id = ?").run(id);
+                }
+              }
+              db.exec('COMMIT');
+            } catch (e) { db.exec('ROLLBACK'); throw e; }
+            for (const id of ids) {
+              const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+              if (b && b.payment_status === 'paye' && b.status === 'en_attente') {
+                try { engine.assign(db, id); } catch (e) { console.error('Attribution différée', id, e); }
+              }
+            }
+          }
+        }
+        if (event.type === 'checkout.session.expired') {
+          db.prepare("UPDATE stripe_payments SET status = 'expired' WHERE session_id = ? AND status = 'pending'").run(event.data.object.id);
+        }
+        return send(res, 200, { received: true });
+      }
       if (url.pathname.startsWith('/api/')) {
         if (req.method === 'POST' && !(req.headers['content-type'] || '').startsWith('application/json')) {
           throw new HttpError(415, 'Contenu JSON attendu.');
@@ -934,7 +1010,7 @@ ${paymentsEnabled ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, a
 
   if (autoSync) {
     const run = async () => {
-      if (production && !paymentsEnabled) return;
+      if (production) return; // Synchronisation auto suspendue : ne pas créer de mission Airbnb impayée.
       for (const h of db.prepare('SELECT * FROM homes WHERE ical_url IS NOT NULL').all()) {
         try { await ical.syncHome(db, h, { now: now(), allowAny: icalAllowAny, fetchText: icalFetch }); } catch (e) {
           db.prepare("UPDATE homes SET last_sync = datetime('now'), last_sync_result = ? WHERE id = ?").run('Erreur : ' + e.message, h.id);

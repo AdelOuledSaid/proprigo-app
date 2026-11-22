@@ -167,6 +167,7 @@ function checkPassword(pw, stored) {
 function open(file) {
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  db.exec(`CREATE TABLE IF NOT EXISTS stripe_payments (session_id TEXT PRIMARY KEY, client_id INTEGER NOT NULL, booking_ids TEXT NOT NULL, amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')));`);
   // mise à jour des bases créées par une version précédente
   const cols = db.prepare('PRAGMA table_info(bookings)').all().map((c) => c.name);
   if (!cols.includes('payment_status')) {

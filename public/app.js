@@ -16,7 +16,7 @@
     en_attente: ['Recherche en cours', 'warn'], proposee: ['Recherche en cours', 'warn'], attribuee: ['Confirmée', ''],
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
   };
-  const PAY = { simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé' };
+  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé' };
   const pill = (s) => `<span class="pill ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
   const label = (b) => b.service === 'airbnb' ? `Airbnb ${SIZE[b.size]}` : `${SERVICE[b.service]} ${String(b.hours).replace('.', ',')} h`;
 
@@ -121,7 +121,7 @@
   }
 
   const tomorrowParis = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date(Date.now() + 864e5));
-  const DRAFT0 = () => ({ step: 1, service: 'menage', size: 'T2', hours: 3, kit: false, cp: '', address: '', date: tomorrowParis(), time: null, urgent: false, repeat: '0', occurrences: 8, photoConsent: false, tasks: null, tasksService: null, home_id: null, cgv: false });
+  const DRAFT0 = () => ({ step: 1, service: 'menage', size: 'T2', hours: 3, kit: false, cp: '', address: '', date: tomorrowParis(), time: null, urgent: false, repeat: '0', occurrences: 8, photoConsent: false, tasks: null, tasksService: null, home_id: null, cgv: false, payment_mode: 'all' });
   let draft = DRAFT0();
   const FREE_CANCEL = "Annulation gratuite jusqu'à 24 h avant le ménage. Ensuite, 50 % du prix est retenu.";
   const ICON = {
@@ -394,11 +394,14 @@
         <h1>Paiement</h1>
         <div class="box stack">
           <p style="margin:0"><b>${eur(q.total)}</b> pour le ménage du ${esc(dateLong(draft.date))} à ${esc(draft.time)}.</p>
-          <p class="notice" style="margin:0"><b>Version de test :</b> le paiement est simulé. Aucune carte n'est demandée ni débitée.</p>
+          ${draft.repeat !== '0' ? `<label>Mode de paiement<select id="payment_mode"><option value="all" ${draft.payment_mode === 'all' ? 'selected' : ''}>Toutes les interventions maintenant</option><option value="per_visit" ${draft.payment_mode === 'per_visit' ? 'selected' : ''}>Chaque intervention avant sa réalisation</option></select></label>` : ''}
+          <p class="notice" style="margin:0">Paiement sécurisé via Stripe. Aucune intervention ne démarre sans paiement confirmé.</p>
         </div>
         <label class="check"><input type="checkbox" id="cgv" ${draft.cgv ? 'checked' : ''}> J'accepte les <a href="#/cgv" target="_blank" rel="noopener">conditions générales de vente</a> et la <a href="#/confidentialite" target="_blank" rel="noopener">politique de confidentialité</a>.</label>
         <p class="err" id="err4"></p>
         <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="pay">Payer ${eur(q.total)}</button></div>`, 4);
+      const modeInput = document.getElementById('payment_mode');
+      if (modeInput) modeInput.onchange = (e) => { draft.payment_mode = e.target.value; };
       document.getElementById('cgv').onchange = (e) => { draft.cgv = e.target.checked; };
       document.getElementById('back').onclick = () => { draft.step = 3; render(); };
       document.getElementById('pay').onclick = async (e) => {
@@ -406,6 +409,7 @@
         e.target.disabled = true;
         try {
           const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined });
+          if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
           $app.innerHTML = `<section class="card wizard done-card">
             <p class="big-check" aria-hidden="true">✓</p>
             <h1>C'est réservé !</h1>
@@ -520,6 +524,7 @@
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
           ${b.status === 'terminee' && !b.rating ? `<p style="margin:10px 0 0"><b>Comment s'est passé le ménage ?</b></p><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div>` : ''}
           ${b.rating ? `<p class="small muted" style="margin:8px 0 0">Votre note : ${'★'.repeat(b.rating)}</p>` : ''}
+          ${b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
         </article>`;
       }).join('')}`;
     const act = (sel, fn) => $app.querySelectorAll(sel).forEach((btn) => btn.onclick = () => fn(btn));
@@ -539,6 +544,7 @@
     });
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
+    act('[data-pay-booking]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.payBooking}/pay`, {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); } });
     act('[data-cancel]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
     act('[data-stop]', async (btn) => { try { const r = await api('POST', `/api/series/${btn.dataset.stop}/stop`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     act('[data-rate]', async (btn) => { try { await api('POST', `/api/bookings/${btn.dataset.rate}/rate`, { stars: Number(btn.dataset.stars) }); toast('Merci pour votre avis.'); route(); } catch (e) { toast(e.message); } });
@@ -1050,7 +1056,7 @@
       ['Et si elle est absente ?', 'Nous cherchons automatiquement une remplaçante vérifiée et vous prévenons par e-mail et dans la messagerie. Si vous préférez garder votre intervenante, vous pouvez choisir un autre créneau où elle est libre.'],
       ['Faut-il fournir le matériel ?', "Pour un ménage à domicile, vous pouvez fournir aspirateur et produits, ou choisir l'option « matériel fourni » (+15 €). Pour un logement Airbnb, le matériel reste dans le logement."],
       ['Les photos sont-elles obligatoires ?', "Non. Les photos avant / après ne sont prises que si vous l'acceptez. Seuls vous et l'équipe Proprigo pouvez les voir, et elles sont supprimées après 90 jours."],
-      ['Comment payer ?', "Par carte, au moment de la réservation. Version de test : le paiement est simulé, rien n'est débité. Le reçu est disponible dans « Mes réservations » une fois le ménage terminé."],
+      ['Comment payer ?', "Par carte, au moment de la réservation. Paiement sécurisé via Stripe avant chaque intervention. Le reçu est disponible dans « Mes réservations » une fois le ménage terminé."],
       ['Le ménage ne me convient pas, que faire ?', 'Dans « Mes réservations », cliquez sur « Signaler un problème » sous le ménage concerné. Notre équipe qualité vous répond rapidement et vous propose une solution (repassage, geste commercial selon le cas).'],
     ];
     page('Aide et réclamations', `
