@@ -43,7 +43,33 @@
   const formData = (form) => Object.fromEntries(new FormData(form).entries());
 
   // ---------- navigation ----------
+  const TAB_ICON = {
+    home: '<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/>',
+    book: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/>',
+    list: '<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+    homes: '<path d="M3 20V9l6-4 6 4v11M15 20h6v-8l-6-3"/><path d="M7 13h4M7 16h4"/>',
+    user: '<circle cx="12" cy="8.5" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+    todo: '<path d="M12 3.5 21 19H3z"/><path d="M12 10v4M12 16.5v.5"/>',
+    team: '<circle cx="9" cy="9" r="3.5"/><circle cx="17" cy="10" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M15 20a4.5 4.5 0 0 1 6-4.2"/>',
+    help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17v.5"/>',
+  };
+  const tabsFor = (role) => ({
+    client: [['#/', 'Accueil', 'home'], ['#/reserver', 'Réserver', 'book'], ['#/mes-reservations', 'Ménages', 'list'], ['#/logements', 'Logements', 'homes'], ['#/compte', 'Compte', 'user']],
+    intervenante: [['#/intervenante', 'Missions', 'list'], ['#/aide', 'Aide', 'help'], ['#/compte', 'Compte', 'user']],
+    admin: [['#/admin', 'Tableau', 'todo'], ['#/aide', 'Aide', 'help'], ['#/compte', 'Compte', 'user']],
+  }[role] || []);
+  function paintTabbar() {
+    const bar = document.getElementById('tabbar');
+    const tabs = me ? tabsFor(me.role) : [];
+    document.body.classList.toggle('has-tabbar', tabs.length > 0);
+    bar.hidden = !tabs.length;
+    const here = location.hash.split('?')[0] || '#/';
+    bar.innerHTML = tabs.map(([h, t, i]) => `<a href="${h}" ${here === h || (h === '#/' && here === '#') ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TAB_ICON[i]}</svg><span>${t}</span></a>`).join('');
+  }
+  window.addEventListener('hashchange', () => paintTabbar());
+
   function renderNav() {
+    paintTabbar();
     const links = [];
     if (!me) links.push('<a href="#/inscription-intervenante">Devenir intervenante</a>', '<a href="#/connexion">Se connecter</a>', '<a class="cta" href="#/reserver">Réserver</a>');
     else {
@@ -139,14 +165,15 @@
     if (me && me.role === 'client') return clientHome();
     $app.innerHTML = `
       <section class="hero">
-        <div class="stack">
+        <div class="stack hero-text">
+          <div class="hero-art">${ART.hero}</div>
           <h1>Un intérieur propre, sans complication.</h1>
           <p class="lead">Réservez votre ménage en quelques minutes, avec des intervenantes vérifiées. Le prix est affiché avant de payer.</p>
           <ul class="trust"><li>✓ Intervenantes sélectionnées et vérifiées</li><li>✓ Annulation gratuite jusqu'à 24 h avant</li><li>✓ Remplaçante garantie en cas d'absence</li></ul>
         </div>
         <form class="card stack choose" id="start">
           <h2>De quel ménage avez-vous besoin ?</h2>
-          <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}">${ICON[k]}<b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
+          <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
           <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="75011" required></label>
           <p class="msg" id="zone"></p>
           <button class="btn primary full">Voir les disponibilités</button>
@@ -204,12 +231,18 @@
     const toRate = list.find((b) => b.status === 'terminee' && !b.rating);
     const last = list.find((b) => b.status === 'terminee');
     $app.innerHTML = `
-      <div class="row"><h1>Bonjour ${esc(me.name.split(' ')[0])}</h1><a class="btn primary" href="#/reserver" id="newB">Réserver un ménage</a></div>
+      <section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Bonjour ${esc(me.name.split(' ')[0])}</p>
+          <h1>${next ? (next.status === 'en_cours' ? 'Votre ménage est en cours' : 'Votre prochain ménage') : 'Aucun ménage prévu'}</h1>
+          ${next ? `<p class="hello-when">${esc(dateLong(next.date))} à ${esc(next.time)}</p>${tracker(next)}` : `<p class="hello-sub">Choisissez une date : l'équipe vous confirme l'intervenante.</p>
+            ${last ? `<button class="btn primary" data-again="${last.id}">Refaire le même ménage</button>` : '<a class="btn primary" href="#/reserver" id="newB0">Réserver un ménage</a>'}`}
+        </div>
+        <div class="hello-art" aria-hidden="true">${next ? ART.services[next.service] || ART.services.menage : ART.empty}</div>
+      </section>
       ${next ? `
         <article class="card next">
-          <p class="small muted" style="margin:0">${next.status === 'en_cours' ? 'En ce moment' : 'Prochain ménage'}</p>
-          <h2 style="margin-top:4px">${esc(dateLong(next.date))} à ${esc(next.time)}</h2>
-          ${tracker(next)}
+          ${next.status === 'en_cours' && next.checklist.length ? shine(next) : ''}
           <dl class="facts">
             <div><dt>Intervenante</dt><dd>${next.worker_name ? `<b>${esc(next.worker_name.split(' ')[0])}</b>, intervenante vérifiée` : 'Nous confirmons votre intervenante très vite'}</dd></div>
             <div><dt>Adresse</dt><dd>${esc(next.address)}, ${esc(next.cp)}</dd></div>
@@ -223,13 +256,14 @@
             <button class="btn ghost" data-again="${next.id}">Réserver à nouveau</button>
           </div>
           <div id="thread-${next.id}"></div>
-        </article>` : `
-        <article class="card empty"><h2>Aucun ménage prévu</h2><p class="muted">Réservez en quelques minutes : vous ne voyez que les créneaux réellement libres.</p>
-          ${last ? `<button class="btn primary" data-again="${last.id}">Refaire le même ménage</button>` : '<a class="btn primary" href="#/reserver">Réserver un ménage</a>'}</article>`}
+        </article>` : ''}
+      <a class="book-cta" href="#/reserver" id="newB"><span class="book-ico"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">${ART.star(16, 16, 13, '#fff')}</svg></span><span><b>Réserver un ménage</b><span>À domicile, Airbnb ou grand nettoyage</span></span></a>
       ${upcoming.length > 1 ? `<section class="card"><h3>À venir</h3><ul class="plain">${upcoming.slice(1, 6).map((b) => `<li><span><b>${dateFr(b.date)}</b> ${esc(b.time)} · ${esc(label(b))}</span><span>${b.worker_name ? esc(b.worker_name.split(' ')[0]) : '<span class="muted">à confirmer</span>'}</span></li>`).join('')}</ul></section>` : ''}
       ${toRate ? `<section class="card"><h3>Comment s'est passé le ménage du ${dateFr(toRate.date)} ?</h3><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${toRate.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div></section>` : ''}
       <nav class="quick" aria-label="Raccourcis"><a href="#/mes-reservations">Toutes mes réservations et reçus</a><a href="#/logements">Mes logements</a><a href="#/aide">Aide et réclamations</a></nav>`;
     document.getElementById('newB').onclick = () => { draft = DRAFT0(); };
+    const nb0 = document.getElementById('newB0');
+    if (nb0) nb0.onclick = () => { draft = DRAFT0(); };
     $app.querySelectorAll('[data-again]').forEach((b) => b.onclick = () => rebook(list.find((x) => String(x.id) === b.dataset.again)));
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-cancel]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Ménage annulé.'); route(); } catch (e) { toast(e.message); } });
@@ -238,6 +272,29 @@
       try { await api('POST', `/api/bookings/${btn.dataset.rate}/rate`, { stars: Number(btn.dataset.stars) }); toast('Merci pour votre avis.'); route(); } catch (e) { toast(e.message); }
     });
     bindThreads([]);
+  }
+
+  // Jauge « ça brille » : avance avec la checklist du ménage
+  const SHINE_WORDS = (pct) => (pct >= 100 ? 'Ça brille !' : pct >= 60 ? 'Presque fini' : pct > 0 ? "C'est parti" : 'Prêt à commencer');
+  function shine(b) {
+    const n = b.checklist.length;
+    const d = b.checklist.filter((t) => t.done).length;
+    const pct = n ? Math.round((d / n) * 100) : 0;
+    return `<div class="shine ${pct >= 100 ? 'full' : ''}" data-shine="${b.id}" role="progressbar" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${d}" aria-label="Tâches faites">
+      <div class="shine-top"><b>${SHINE_WORDS(pct)}</b><span>${d} sur ${n}</span></div>
+      <div class="shine-bar"><i style="width:${pct}%"></i></div></div>`;
+  }
+  function updateShine(id) {
+    const boxes = [...$app.querySelectorAll(`[data-check="${id}"]`)];
+    const el = $app.querySelector(`[data-shine="${id}"]`);
+    if (!el) return;
+    const d = boxes.filter((c) => c.checked).length;
+    const pct = boxes.length ? Math.round((d / boxes.length) * 100) : 0;
+    el.querySelector('b').textContent = SHINE_WORDS(pct);
+    el.querySelector('span').textContent = `${d} sur ${boxes.length}`;
+    el.querySelector('i').style.width = `${pct}%`;
+    el.setAttribute('aria-valuenow', d);
+    el.classList.toggle('full', pct >= 100);
   }
 
   // ---------- réservation en 4 étapes ----------
@@ -273,7 +330,7 @@
       shell(`
         <h1>Votre ménage</h1>
         ${homes.length ? `<label>Logement<select id="homeSel"><option value="">Autre adresse</option>${homes.map((h) => `<option value="${h.id}" ${draft.home_id === h.id ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select></label>` : ''}
-        <div class="svc">${['menage', 'grand', 'airbnb'].map((k) => `<button type="button" data-svc="${k}" aria-pressed="${draft.service === k}">${ICON[k]}<b>${SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
+        <div class="svc">${['menage', 'grand', 'airbnb'].map((k) => `<button type="button" data-svc="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
         ${draft.service === 'airbnb'
           ? `<fieldset class="box"><legend>Taille du logement</legend><div class="chips">${Object.keys(SIZE).map((k) => `<button type="button" data-size="${k}" aria-pressed="${draft.size === k}">${SIZE[k]}</button>`).join('')}</div></fieldset>`
           : `<label>Durée<select id="hours">${[2, 2.5, 3, 3.5, 4, 5, 6, 7, 8].map((h) => `<option value="${h}" ${Number(draft.hours) === h ? 'selected' : ''}>${String(h).replace('.', ',')} h</option>`).join('')}</select></label>
@@ -411,7 +468,7 @@
           const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined });
           if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
           $app.innerHTML = `<section class="card wizard done-card">
-            <p class="big-check" aria-hidden="true">✓</p>
+            <div class="done-art">${ART.done}</div>
             <h1>C'est réservé !</h1>
             <p>${esc(dateLong(r.date))} à ${esc(r.time)}, ${esc(r.address)}.</p>
             <p>${r.worker_name ? `<b>${esc(r.worker_name.split(' ')[0])}</b>, intervenante vérifiée, viendra.` : 'Nous confirmons votre intervenante très vite.'}${r.created > 1 ? ` ${r.created} ménages sont réservés.` : ''}</p>
@@ -508,7 +565,7 @@
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
           <p class="small muted" style="margin:6px 0 0">${PAY[b.payment_status] || ''}</p>
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
-          ${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
+          ${b.checklist.length && ['en_cours', 'terminee'].includes(b.status) ? shine(b) : ''}${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
           <div class="row" style="justify-content:flex-start;margin-top:10px">
             ${active && hoursLeft(b) >= 24 ? `<button class="btn ghost" data-edit="${b.id}">Modifier</button>` : ''}
@@ -671,7 +728,15 @@
     const r = await api('GET', '/api/worker/missions');
     const p = r.profile;
     const isI = p.statut === 'I';
-    const head = `<div class="row"><h1>Bonjour ${esc(p.name.split(' ')[0])}</h1><span class="pill">${isI ? 'Indépendante' : 'Salariée'} · ${esc(p.cp)}</span></div>`;
+    const nToday = r.missions.filter((b) => b.date <= todayParis()).length;
+    const head = `<section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Bonjour ${esc(p.name.split(' ')[0])}</p>
+          <h1>${!r.active ? 'Votre candidature' : nToday ? `${nToday} mission${nToday > 1 ? 's' : ''} aujourd'hui` : 'Pas de mission aujourd\'hui'}</h1>
+          <p class="hello-sub">${isI ? 'Indépendante' : 'Salariée'} · secteur ${esc(p.cp)}</p>
+        </div>
+        <div class="hello-art" aria-hidden="true">${nToday ? ART.services.grand : ART.empty}</div>
+      </section>`;
     const cal = {};
     for (const a of r.availability) cal[a.weekday] = a;
     const calendar = `
@@ -713,7 +778,7 @@
           <p class="muted" style="margin:4px 0 0">Client : ${esc(b.client_name.split(' ')[0])}${b.home_name ? ` · ${esc(b.home_name)}` : ''}</p>
           ${b.instructions ? `<div class="box"><b>Consignes du logement</b><p style="margin:4px 0 0;white-space:pre-line">${esc(b.instructions)}</p></div>` : ''}
           ${b.kit ? '<p><span class="pill warn">Apporter le kit matériel et produits</span></p>' : ''}
-          ${b.checklist.length ? `<fieldset class="box"><legend>À faire</legend>${b.checklist.map((t, i) => `<label class="check"><input type="checkbox" data-check="${b.id}" data-index="${i}" ${t.done ? 'checked' : ''}> ${esc(t.task)}</label>`).join('')}</fieldset>` : ''}
+          ${b.checklist.length ? `${shine(b)}<fieldset class="box"><legend>À faire</legend>${b.checklist.map((t, i) => `<label class="check"><input type="checkbox" data-check="${b.id}" data-index="${i}" ${t.done ? 'checked' : ''}> ${esc(t.task)}</label>`).join('')}</fieldset>` : ''}
           ${b.photo_consent ? `<div class="box stack"><b>Photos avant / après</b>
             ${b.photos.length ? `<div class="photos">${b.photos.map((ph) => `<figure><img src="/api/photos/${ph.id}" alt="Photo ${ph.kind}" loading="lazy"><figcaption>${ph.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
             ${b.status === 'en_cours' ? `<div class="row" style="justify-content:flex-start"><label class="btn ghost">Photo avant<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="avant" hidden></label>
@@ -746,7 +811,8 @@
       try { await api('POST', `/api/worker/missions/${btn.dataset.id}/${btn.dataset.act}`, {}); toast('C\'est enregistré.'); route(); } catch (e) { toast(e.message); }
     });
     $app.querySelectorAll('[data-check]').forEach((c) => c.onchange = async () => {
-      try { await api('POST', `/api/worker/missions/${c.dataset.check}/checklist`, { index: Number(c.dataset.index), done: c.checked }); } catch (e) { toast(e.message); c.checked = !c.checked; }
+      updateShine(c.dataset.check);
+      try { await api('POST', `/api/worker/missions/${c.dataset.check}/checklist`, { index: Number(c.dataset.index), done: c.checked }); } catch (e) { toast(e.message); c.checked = !c.checked; updateShine(c.dataset.check); }
     });
     $app.querySelectorAll('[data-photo]').forEach((inp) => inp.onchange = async () => {
       const f = inp.files[0];
@@ -813,7 +879,14 @@
       ...(r.workers.some((w) => !w.active) ? [`<li><span><b>Candidatures</b> · ${r.workers.filter((w) => !w.active).length} intervenante(s) en cours de recrutement</span><button class="btn ghost" data-goto="team">Voir</button></li>`] : []),
     ];
     $app.innerHTML = `
-      <h1>Tableau de bord</h1>
+      <section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Tableau de bord</p>
+          <h1>${todo.length ? `${todo.length} chose${todo.length > 1 ? 's' : ''} à traiter` : 'Tout est en ordre'}</h1>
+          <p class="hello-sub">${k.reservations} réservation${k.reservations > 1 ? 's' : ''} · note moyenne ${k.noteMoyenne ? String(k.noteMoyenne).replace('.', ',') + ' / 5' : '–'}</p>
+        </div>
+        <div class="hello-art" aria-hidden="true">${todo.length ? ART.empty : ART.done}</div>
+      </section>
       ${r.paymentsEnabled ? '' : '<p class="card"><span class="pill warn">Paiement simulé</span> Aucun argent n\'est encaissé dans cette version. Le chiffre d\'affaires affiché est théorique.</p>'}
       <nav class="tabs" role="tablist" aria-label="Administration">${[['todo', `À traiter${todo.length ? ` (${todo.length})` : ''}`], ['resa', 'Réservations'], ['equipe', 'Équipe'], ['chiffres', 'Chiffres'], ['suivi', 'Suivi']].map(([k, t]) => `<button type="button" role="tab" data-tab-btn="${k}">${t}</button>`).join('')}</nav>
       <section class="card todo" data-tab="todo"><h2>À traiter maintenant</h2>${todo.length ? `<ul class="plain">${todo.join('')}</ul>` : '<p class="msg ok">Rien d\'urgent : toutes les missions des 3 prochains jours ont une intervenante.</p>'}</section>
@@ -1051,6 +1124,7 @@
           </form>
         </section>
       </div>
+      <button type="button" class="btn ghost full" id="logout2">Se déconnecter</button>
       <section class="card stack">
         <h2>Mes données</h2>
         <p class="small">Vos données servent seulement à organiser vos ménages. Détails dans la <a href="#/confidentialite">politique de confidentialité</a>.</p>
@@ -1063,6 +1137,7 @@
           </form>
         </details>` : `<p class="small muted">${me.role === 'admin' ? 'Compte administrateur : choisissez un mot de passe long et unique avant de partager le site.' : "Pour fermer votre compte intervenante, écrivez à l'équipe Proprigo : certains documents liés à votre activité doivent être conservés."}</p>`}
       </section>`;
+    document.getElementById('logout2').onclick = async () => { await api('POST', '/api/logout', {}); me = null; renderNav(); go('#/'); route(); };
     document.getElementById('info').onsubmit = async (e) => {
       e.preventDefault();
       try { const r = await api('POST', '/api/account', formData(e.target)); await loadMe(); renderNav(); toast(r.message); } catch (err) { toast(err.message); }

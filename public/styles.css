@@ -255,3 +255,167 @@ input:disabled { opacity: 0.7; }
 .switch input:focus-visible + span { outline: 3px solid var(--coral); outline-offset: 2px; }
 .avail .hours select { width: 100%; }
 @media (max-width: 760px) { .tabs button { padding: 8px 12px; font-size: 15px; } }
+
+/* =====================================================================
+   v0.9 : identité « ça brille »
+   Fond craie bleutée, cartes nettes, un seul grand panneau bleu par écran,
+   illustrations maison (façade parisienne, seau, étoiles corail).
+   ===================================================================== */
+:root {
+  --app: light-dark(#f6f8ff, #0d1226);
+  --line: light-dark(#e2e8f8, #262f55);
+  --night: light-dark(#0f1a4a, #eef1ff);
+  --mint: #18b98a;
+  --sun: #ffc94d;
+  --lift: 0 1px 2px rgb(15 26 74 / 0.05), 0 10px 28px -14px rgb(31 79 255 / 0.28);
+}
+body { -webkit-font-smoothing: antialiased; }
+h1 { letter-spacing: -0.035em; }
+.card { border-radius: 22px; box-shadow: var(--lift); border-color: transparent; }
+.box, fieldset.box { border-radius: 18px; }
+.btn { border-radius: 16px; transition: transform .12s ease, box-shadow .12s ease; }
+.btn:active:not(:disabled) { transform: scale(.98); }
+.btn.primary { box-shadow: 0 8px 18px -10px rgb(255 106 61 / .9); }
+.btn.blue { box-shadow: 0 8px 18px -10px rgb(31 79 255 / .9); }
+.btn.ghost { border-color: var(--line); background: var(--raised); }
+input[type=text], input[type=url], input[type=email], input[type=password], input[type=date], input[type=number], input[type=tel], select, textarea {
+  border-radius: 14px; border-color: var(--line); min-height: 50px; background: light-dark(#fbfcff, #141a33);
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent); }
+
+/* statuts : point de couleur devant le texte */
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; font-size: 13px; }
+.pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .8; }
+.pill.ok { background: color-mix(in srgb, var(--mint) 16%, transparent); color: light-dark(#087a57, #5fe0b5); }
+
+/* bandeau */
+.top { background: var(--raised); color: var(--night); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 30; }
+.brand { color: var(--night); }
+.brand img { background: none; }
+#nav a, #nav button { color: var(--night); font-weight: 600; }
+#nav .cta { color: var(--on-coral); }
+@media (max-width: 760px) {
+  .menu-btn { background: var(--soft); color: var(--night); }
+  #nav { background: var(--raised); }
+  #nav a, #nav button { border-top-color: var(--line); }
+  body.has-tabbar .menu-btn, body.has-tabbar .quick-cta { display: none !important; }
+}
+
+/* ---- le panneau bleu : l'essentiel de l'écran ---- */
+.hello {
+  position: relative; overflow: hidden; isolation: isolate;
+  background: #1f4fff; color: #fff; border-radius: 28px; padding: 26px 24px 24px;
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: end;
+  box-shadow: 0 22px 40px -24px rgb(31 79 255 / .9);
+}
+.hello::before, .hello::after { content: ''; position: absolute; border-radius: 50%; z-index: -1; }
+.hello::before { width: 260px; height: 260px; right: -70px; top: -110px; background: rgb(255 255 255 / .09); }
+.hello::after { width: 120px; height: 120px; left: -40px; bottom: -60px; background: rgb(255 255 255 / .07); }
+.hello h1 { font-size: clamp(28px, 6vw, 40px); color: #fff; }
+.hello-hi { margin: 0 0 4px; font-weight: 600; color: #cdd9ff; }
+.hello-when { margin: 10px 0 0; font-family: Outfit, sans-serif; font-size: 21px; font-weight: 700; }
+.hello-when::first-letter { text-transform: uppercase; }
+.hello-sub { margin: 8px 0 14px; color: #dfe6ff; }
+.hello-art { width: 112px; align-self: center; }
+.hello-art svg { width: 100%; height: auto; display: block; filter: drop-shadow(0 10px 14px rgb(8 20 90 / .35)); }
+.hello .track { color: #b9c9ff; margin: 16px 0 0; }
+.hello .track li { border-top-color: rgb(255 255 255 / .28); }
+.hello .track li.done { border-color: #fff; color: #e5ecff; }
+.hello .track li.now { border-color: var(--coral); color: #fff; }
+.hello .btn.primary { box-shadow: none; }
+@media (max-width: 560px) {
+  .hello { grid-template-columns: 1fr; padding: 22px 20px; }
+  .hello-art { position: absolute; right: 14px; top: 14px; width: 74px; opacity: .95; }
+  .hello-text { padding-right: 70px; }
+  .hello .track, .hello-when, .hello .btn { margin-right: -70px; }
+}
+
+/* raccourci de réservation */
+.book-cta { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding: 16px 18px; border-radius: 22px; background: var(--raised); box-shadow: var(--lift); color: var(--night); text-decoration: none; }
+.book-cta > span:last-child { display: grid; }
+.book-cta b { font-size: 17px; }
+.book-cta span span { color: var(--muted); font-size: 14px; }
+.book-ico { width: 48px; height: 48px; border-radius: 16px; background: var(--coral); display: grid; place-items: center; flex: 0 0 auto; }
+.book-cta:hover .book-ico svg path { transform-origin: center; }
+.next { margin-top: 14px; }
+
+/* ---- jauge « ça brille » ---- */
+.shine { margin: 4px 0 12px; }
+.shine-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.shine-top b { font-family: Outfit, sans-serif; font-size: 18px; color: var(--blue-text); }
+.shine-top span { font-size: 14px; color: var(--muted); }
+.shine-bar { height: 12px; border-radius: 99px; background: var(--soft); margin-top: 6px; overflow: hidden; }
+.shine-bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #1f4fff, #18b98a); transition: width .35s ease; }
+.shine.full .shine-top b { color: light-dark(#087a57, #5fe0b5); }
+.shine.full .shine-top b::after { content: ' ✦'; color: var(--coral); }
+
+/* ---- accueil visiteur ---- */
+.hero { gap: 32px; margin-top: 12px; }
+@media (min-width: 761px) { .hero { grid-template-columns: 1.05fr 1fr; } }
+@media (max-width: 760px) { .hero { grid-template-columns: 1fr; } }
+.hero-text { display: grid; gap: 14px; }
+.hero-text > * + * { margin-top: 0; }
+.hero-art { max-width: 400px; }
+.hero-art svg { width: 100%; height: auto; display: block; }
+.hero h1 { font-size: clamp(34px, 6vw, 54px); line-height: 1.02; color: var(--night); }
+.trust li { display: flex; gap: 8px; }
+.choose { padding: 24px; }
+.svc button { border-radius: 18px; border-width: 1.5px; padding: 12px 12px 14px; gap: 2px; transition: border-color .15s, background .15s; }
+.svc button b { font-size: 15px; line-height: 1.2; margin-top: 6px; }
+.svc button > span:not(.svc-art) { font-size: 13px; color: var(--muted); }
+.svc-art { display: block; width: 52px; height: 52px; border-radius: 16px; background: var(--soft); padding: 6px; }
+.svc-art svg { width: 100%; height: 100%; display: block; }
+.svc button[aria-pressed=true] .svc-art { background: #fff; }
+.steps3 div { border-top: 0; background: var(--raised); border-radius: 20px; box-shadow: var(--lift); padding: 18px; }
+.steps3 b { font-family: Outfit, sans-serif; font-size: 19px; }
+@media (max-width: 760px) {
+  .hero { gap: 18px; }
+  .hero-art { max-width: 260px; margin: 0 auto -6px; }
+  .hero h1 { text-align: left; }
+  .svc button { grid-template-columns: 52px 1fr; grid-template-rows: auto auto; column-gap: 14px; align-items: center; }
+  .svc button .svc-art { grid-row: span 2; }
+  .svc button b { margin-top: 0; }
+}
+
+/* étoiles qui scintillent (une seule animation, désactivée si l'utilisateur le demande) */
+.twinkle { transform-box: fill-box; transform-origin: center; animation: twinkle 2.8s ease-in-out infinite; }
+.twinkle.t2 { animation-delay: .7s; }
+.twinkle.t3 { animation-delay: 1.4s; }
+@keyframes twinkle { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.55); opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .twinkle, .shine-bar i, .btn { animation: none; transition: none; } }
+
+/* réservation en 4 étapes */
+.wizard { border-radius: 26px; padding: 24px; }
+.stepper li { border-top-width: 5px; border-radius: 3px; }
+.chips button { border-radius: 14px; border-width: 1.5px; }
+.times button { font-variant-numeric: tabular-nums; }
+.price { border-radius: 22px; padding: 20px; }
+.done-card { padding-top: 28px; }
+.done-art { width: 120px; margin: 0 auto; }
+.done-art svg { width: 100%; display: block; }
+
+/* administration */
+.kpi { border: 0; box-shadow: var(--lift); border-radius: 20px; padding: 16px; }
+.kpi b { color: var(--night); }
+.todo { border: 0; box-shadow: var(--lift), inset 4px 0 0 var(--coral); }
+.tabs { background: var(--app); }
+.tabs button { border-width: 0; box-shadow: var(--lift); }
+
+/* ---- barre d'onglets en bas (téléphone) ---- */
+.tabbar { display: none; }
+@media (max-width: 760px) {
+  body.has-tabbar .tabbar:not([hidden]) {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: color-mix(in srgb, var(--raised) 92%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid var(--line); padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+  }
+  .tabbar a { flex: 1; display: grid; justify-items: center; gap: 2px; padding: 6px 2px; color: var(--muted); text-decoration: none; font-size: 11.5px; font-weight: 600; border-radius: 14px; }
+  .tabbar a svg { width: 24px; height: 24px; padding: 2px 10px; box-sizing: content-box; border-radius: 99px; }
+  .tabbar a[aria-current=page] { color: var(--blue-text); }
+  .tabbar a[aria-current=page] svg { background: var(--soft); }
+  body.has-tabbar .wrap { padding-bottom: 110px; }
+  body.has-tabbar .foot { display: none; }
+  body.has-tabbar #toast { bottom: calc(86px + env(safe-area-inset-bottom)); }
+}
+
+body.has-tabbar .quick a[href='#/mes-reservations'], body.has-tabbar .quick a[href='#/logements'] { display: none; }
