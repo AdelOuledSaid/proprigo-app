@@ -10,35 +10,35 @@
   };
   const plant = (x, y) => `<path d="M${x - 12} ${y}h24l-4 18h-16z" fill="#ff6a3d"/><ellipse cx="${x - 7}" cy="${y - 9}" rx="6" ry="11" transform="rotate(-25 ${x - 7} ${y - 9})" fill="#18b98a"/><ellipse cx="${x + 7}" cy="${y - 10}" rx="6" ry="12" transform="rotate(22 ${x + 7} ${y - 10})" fill="#13a079"/><ellipse cx="${x}" cy="${y - 15}" rx="5" ry="12" fill="#22c896"/>`;
 
-  // Façade parisienne : la fenêtre de gauche est encore ternie, celle de droite vient d'être faite.
-  const hero = `<svg class="art-hero" viewBox="0 0 440 390" role="img" aria-label="Façade d'immeuble parisien : une fenêtre ternie, l'autre qui brille après le ménage">
-    <path d="M58 118C76 46 170 14 252 26c92 13 160 74 168 160 9 98-58 178-160 192-112 15-224-34-244-122-9-40 30-90 42-138z" fill="#e3ebff"/>
-    <circle cx="384" cy="70" r="10" fill="none" stroke="#b9cbff" stroke-width="3"/><circle cx="404" cy="98" r="5" fill="#b9cbff"/><circle cx="40" cy="250" r="7" fill="none" stroke="#b9cbff" stroke-width="3"/>
-    <rect x="92" y="52" width="256" height="318" fill="#ffffff"/>
-    <rect x="84" y="40" width="272" height="16" rx="4" fill="#c7d4ff"/>
-    ${[96, 136, 176, 216, 256, 296, 336].map((y) => `<line x1="92" y1="${y}" x2="348" y2="${y}" stroke="#e6ebf8" stroke-width="2"/>`).join('')}
-    <g>
-      <rect x="114" y="82" width="86" height="148" rx="6" fill="#dde2ee"/>
-      <path d="M114 88q43-14 86 0" fill="none" stroke="#c8cede" stroke-width="3"/>
-      <circle cx="136" cy="120" r="7" fill="#cdd3e2"/><circle cx="176" cy="168" r="9" fill="#cdd3e2"/><circle cx="146" cy="196" r="5" fill="#cdd3e2"/><circle cx="184" cy="110" r="4" fill="#cdd3e2"/>
-      <rect x="114" y="82" width="86" height="148" rx="6" fill="none" stroke="#7d8bb8" stroke-width="6"/>
-      <line x1="157" y1="82" x2="157" y2="230" stroke="#7d8bb8" stroke-width="5"/><line x1="114" y1="152" x2="200" y2="152" stroke="#7d8bb8" stroke-width="5"/>
-    </g>
-    <g>
-      <rect x="240" y="82" width="86" height="148" rx="6" fill="#bcd2ff"/>
-      <path d="M240 82h86v148h-86z" fill="url(#shine)"/>
-      <path d="M252 210l34-112h14l-34 112z" fill="#ffffff" opacity=".75"/><path d="M276 214l26-86h8l-26 86z" fill="#ffffff" opacity=".55"/>
-      <rect x="240" y="82" width="86" height="148" rx="6" fill="none" stroke="#1f4fff" stroke-width="6"/>
-      <line x1="283" y1="82" x2="283" y2="230" stroke="#1f4fff" stroke-width="5"/><line x1="240" y1="152" x2="326" y2="152" stroke="#1f4fff" stroke-width="5"/>
-    </g>
-    ${railing(104, 232, 106)}${railing(230, 232, 106)}
-    ${plant(130, 226)}${plant(184, 226)}
-    <g><rect x="302" y="204" width="20" height="26" rx="5" fill="#1f4fff"/><rect x="306" y="194" width="12" height="11" rx="2" fill="#0f1a4a"/><path d="M318 196h12v5h-12z" fill="#0f1a4a"/><rect x="306" y="212" width="12" height="8" rx="2" fill="#ffffff" opacity=".85"/></g>
-    <path d="M188 370v-58a32 32 0 0 1 64 0v58z" fill="#1f4fff"/><line x1="220" y1="286" x2="220" y2="370" stroke="#163bc4" stroke-width="3"/><circle cx="212" cy="334" r="3" fill="#ffc94d"/><circle cx="228" cy="334" r="3" fill="#ffc94d"/>
-    <rect x="40" y="366" width="360" height="8" rx="4" fill="#c7d4ff"/>
-    ${star(352, 96, 22, '#ff6a3d', 'twinkle t1')}${star(334, 150, 11, '#ffc94d', 'twinkle t2')}${star(226, 72, 9, '#ff6a3d', 'twinkle t3')}${star(372, 196, 8, '#1f4fff', 'twinkle t2')}
+  // Façade parisienne. clean=false : façade ternie (avant) ; clean=true : tout brille (après).
+  const win = (x, clean) => clean
+    ? `<rect x="${x}" y="82" width="86" height="148" rx="6" fill="#bcd2ff"/><path d="M${x} 82h86v148h-86z" fill="url(#shine)"/>
+       <path d="M${x + 12} 210l34-112h14l-34 112z" fill="#fff" opacity=".75"/><path d="M${x + 36} 214l26-86h8l-26 86z" fill="#fff" opacity=".55"/>
+       <rect x="${x}" y="82" width="86" height="148" rx="6" fill="none" stroke="#1f4fff" stroke-width="6"/>
+       <line x1="${x + 43}" y1="82" x2="${x + 43}" y2="230" stroke="#1f4fff" stroke-width="5"/><line x1="${x}" y1="152" x2="${x + 86}" y2="152" stroke="#1f4fff" stroke-width="5"/>`
+    : `<rect x="${x}" y="82" width="86" height="148" rx="6" fill="#d6d6cf"/><path d="M${x} 88q43-14 86 0" fill="none" stroke="#c2c1b8" stroke-width="3"/>
+       <circle cx="${x + 22}" cy="120" r="7" fill="#c4c3ba"/><circle cx="${x + 62}" cy="168" r="9" fill="#c4c3ba"/><circle cx="${x + 32}" cy="196" r="5" fill="#c4c3ba"/><circle cx="${x + 70}" cy="110" r="4" fill="#c4c3ba"/>
+       <path d="M${x + 8} 140q10 8 4 20M${x + 60} 96q6 10-2 18" stroke="#b9b8ae" stroke-width="3" fill="none"/>
+       <rect x="${x}" y="82" width="86" height="148" rx="6" fill="none" stroke="#8a8f9e" stroke-width="6"/>
+       <line x1="${x + 43}" y1="82" x2="${x + 43}" y2="230" stroke="#8a8f9e" stroke-width="5"/><line x1="${x}" y1="152" x2="${x + 86}" y2="152" stroke="#8a8f9e" stroke-width="5"/>`;
+  const droop = (x, y) => `<path d="M${x - 12} ${y}h24l-4 18h-16z" fill="#b98a74"/><path d="M${x - 2} ${y}q-8-10-14-4M${x + 2} ${y}q8-12 14-6M${x} ${y}q0-12 -4-16" stroke="#9c9a6a" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  const facade = (clean, label) => `<svg class="art-hero" viewBox="0 0 440 390" role="img" aria-label="${label}">
     <defs><linearGradient id="shine" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e7f0ff"/><stop offset="1" stop-color="#9fbcff"/></linearGradient></defs>
+    <path d="M58 118C76 46 170 14 252 26c92 13 160 74 168 160 9 98-58 178-160 192-112 15-224-34-244-122-9-40 30-90 42-138z" fill="${clean ? '#e3ebff' : '#e9e7e1'}"/>
+    <rect x="92" y="52" width="256" height="318" fill="${clean ? '#ffffff' : '#ece9e1'}"/>
+    <rect x="84" y="40" width="272" height="16" rx="4" fill="${clean ? '#c7d4ff' : '#cfccc2'}"/>
+    ${[96, 136, 176, 216, 256, 296, 336].map((y) => `<line x1="92" y1="${y}" x2="348" y2="${y}" stroke="${clean ? '#e6ebf8' : '#dcd8cd'}" stroke-width="2"/>`).join('')}
+    ${clean ? '' : '<path d="M120 270q8 30 2 60M320 60q-6 40 4 70M200 300q30 10 40 40" stroke="#d8d3c4" stroke-width="10" fill="none" opacity=".7" stroke-linecap="round"/>'}
+    ${win(114, clean)}${win(240, clean)}
+    ${railing(104, 232, 106)}${railing(230, 232, 106)}
+    ${clean ? plant(130, 226) + plant(184, 226) : droop(130, 226) + droop(184, 226)}
+    ${clean ? '<g><rect x="302" y="204" width="20" height="26" rx="5" fill="#1f4fff"/><rect x="306" y="194" width="12" height="11" rx="2" fill="#0f1a4a"/><path d="M318 196h12v5h-12z" fill="#0f1a4a"/><rect x="306" y="212" width="12" height="8" rx="2" fill="#fff" opacity=".85"/></g>' : ''}
+    <path d="M188 370v-58a32 32 0 0 1 64 0v58z" fill="${clean ? '#1f4fff' : '#6b7391'}"/><line x1="220" y1="286" x2="220" y2="370" stroke="${clean ? '#163bc4' : '#59607b'}" stroke-width="3"/><circle cx="212" cy="334" r="3" fill="#ffc94d"/><circle cx="228" cy="334" r="3" fill="#ffc94d"/>
+    <rect x="40" y="366" width="360" height="8" rx="4" fill="${clean ? '#c7d4ff' : '#d4d0c5'}"/>
+    ${clean ? `${star(352, 96, 22, '#ff6a3d', 'twinkle t1')}${star(334, 150, 11, '#ffc94d', 'twinkle t2')}${star(226, 72, 9, '#ff6a3d', 'twinkle t3')}${star(372, 196, 8, '#1f4fff', 'twinkle t2')}${star(96, 190, 10, '#ffc94d', 'twinkle t1')}${star(150, 64, 8, '#1f4fff', 'twinkle t3')}
+      <circle cx="384" cy="70" r="10" fill="none" stroke="#b9cbff" stroke-width="3"/><circle cx="404" cy="98" r="5" fill="#b9cbff"/><circle cx="40" cy="250" r="7" fill="none" stroke="#b9cbff" stroke-width="3"/>` : ''}
   </svg>`;
+  const hero = facade(true, 'Façade d\'immeuble parisien qui brille après le ménage');
 
   // petites illustrations des prestations
   const services = {
@@ -53,5 +53,5 @@
   // ménage terminé
   const done = `<svg class="art-done" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="40" fill="#18b98a"/><path d="M42 61l12 12 24-26" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>${star(102, 22, 12, '#ff6a3d', 'twinkle t1')}${star(18, 34, 8, '#ffc94d', 'twinkle t2')}${star(100, 98, 7, '#1f4fff', 'twinkle t3')}</svg>`;
 
-  window.ART = { hero, services, empty, done, star };
+  window.ART = { hero, facade, services, empty, done, star };
 })();

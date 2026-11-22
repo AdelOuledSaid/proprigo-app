@@ -163,27 +163,170 @@
     if (me && me.role === 'intervenante') return go('#/intervenante');
     if (me && me.role === 'admin') return go('#/admin');
     if (me && me.role === 'client') return clientHome();
+    const ICO = {
+      lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+      clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+      badge: '<path d="M12 3l7 3v5.5c0 4.3-3 7.6-7 9-4-1.4-7-4.7-7-9V6z"/><path d="m8.8 12 2.2 2.2 4.4-4.6"/>',
+      swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+    };
+    const ico = (k) => `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICO[k]}</svg>`;
+    const AIR = [['studio', 'Studio', 95], ['T2', '2 pièces', 119], ['T3', '3 pièces', 145], ['maison', 'Maison', 195]];
     $app.innerHTML = `
-      <section class="hero">
-        <div class="stack hero-text">
-          <div class="hero-art">${ART.hero}</div>
-          <h1>Un intérieur propre, sans complication.</h1>
-          <p class="lead">Réservez votre ménage en quelques minutes, avec des intervenantes vérifiées. Le prix est affiché avant de payer.</p>
-          <ul class="trust"><li>✓ Intervenantes sélectionnées et vérifiées</li><li>✓ Annulation gratuite jusqu'à 24 h avant</li><li>✓ Remplaçante garantie en cas d'absence</li></ul>
+      <section class="hero2">
+        <div class="hero2-text">
+          <h1>Chez vous, tout brille.</h1>
+          <p class="lead">Ménage à domicile, logements Airbnb et grand nettoyage à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
+          <form class="card stack choose" id="start">
+            <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: '37 € / h', airbnb: 'dès 95 €', grand: '42 € / h' }[k]}</span></button>`).join('')}</div>
+            <div class="cp-row">
+              <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="Ex. 75011" required></label>
+              <button class="btn primary">Voir les créneaux</button>
+            </div>
+            <p class="msg" id="zone"></p>
+          </form>
         </div>
-        <form class="card stack choose" id="start">
-          <h2>De quel ménage avez-vous besoin ?</h2>
-          <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
-          <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="75011" required></label>
-          <p class="msg" id="zone"></p>
-          <button class="btn primary full">Voir les disponibilités</button>
-        </form>
+        <figure class="ba" id="ba">
+          <div class="ba-layer">${ART.facade(false, 'Avant le ménage : façade ternie')}</div>
+          <div class="ba-layer ba-clean" id="baClean">${ART.facade(true, 'Après le ménage : tout brille')}</div>
+          <div class="ba-handle" id="baHandle" aria-hidden="true"><span><svg viewBox="0 0 32 32" width="22" height="22">${ART.star(16, 16, 13, '#ff6a3d')}</svg></span></div>
+          <input type="range" min="0" max="100" value="50" id="baRange" aria-label="Avant et après le ménage : faites glisser pour faire briller">
+          <figcaption><span>Avant</span><b>Faites glisser pour faire briller</b><span>Après</span></figcaption>
+        </figure>
       </section>
-      <section class="steps3">
-        <div><b>1. Choisissez</b><span>Votre ménage, la date et l'heure souhaitées. L'équipe confirme ensuite l'intervenante.</span></div>
-        <div><b>2. Une intervenante vérifiée vient</b><span>Vous connaissez son prénom avant le ménage et la retrouvez la fois suivante.</span></div>
-        <div><b>3. Vous suivez tout</b><span>Messages, checklist, photos avant / après si vous le souhaitez, reçu.</span></div>
+
+      <ul class="promises">
+        <li>${ico('lock')}<span><b>Paiement sécurisé</b>Par carte, avec Stripe</span></li>
+        <li>${ico('clock')}<span><b>Annulation gratuite</b>Jusqu'à 24 h avant</span></li>
+        <li>${ico('badge')}<span><b>Intervenantes vérifiées</b>Identité, entretien, suivi qualité</span></li>
+        <li>${ico('swap')}<span><b>Remplaçante prévue</b>Si votre intervenante est absente</span></li>
+      </ul>
+
+      <section class="offers" aria-labelledby="offersT">
+        <h2 id="offersT">Trois ménages, un prix clair</h2>
+        <div class="offer-grid">
+          <article class="offer">
+            <span class="offer-art">${ART.services.menage}</span>
+            <h3>Ménage à domicile</h3>
+            <p class="offer-price"><b>37 €</b> de l'heure</p>
+            <ul><li>Cuisine, salle de bain, sols, poussière</li><li>Même intervenante chaque semaine si vous le souhaitez</li><li>Checklist personnalisée</li></ul>
+            <button class="btn ghost full" data-book="menage">Réserver ce ménage</button>
+          </article>
+          <article class="offer offer-feature">
+            <span class="offer-art">${ART.services.airbnb}</span>
+            <h3>Ménage Airbnb</h3>
+            <p class="offer-price"><b id="airPrice">119 €</b> le forfait, linge compris</p>
+            <div class="chips" role="group" aria-label="Taille du logement">${AIR.map(([k, t]) => `<button type="button" data-air="${k}" data-price="${k === 'studio' ? 95 : k === 'T2' ? 119 : k === 'T3' ? 145 : 195}" aria-pressed="${k === 'T2'}">${t}</button>`).join('')}</div>
+            <ul><li>Ménage et changement du linge entre deux voyageurs</li><li>Calendrier de l'annonce synchronisé</li><li>Photos avant / après sur demande</li></ul>
+            <button class="btn primary full" data-book="airbnb">Réserver pour mon logement</button>
+          </article>
+          <article class="offer">
+            <span class="offer-art">${ART.services.grand}</span>
+            <h3>Grand nettoyage</h3>
+            <p class="offer-price"><b>42 €</b> de l'heure</p>
+            <ul><li>Fin de bail, emménagement, remise en état</li><li>Intérieur des placards, plinthes, vitres accessibles</li><li>Matériel apporté sur demande</li></ul>
+            <button class="btn ghost full" data-book="grand">Réserver ce ménage</button>
+          </article>
+        </div>
+        <p class="small muted offers-note">Prix TTC en Île-de-France. Matériel et produits apportés : +15 €. Dimanche et jours fériés : +20 %. Arrivée dans les 3 heures : +25 %.</p>
+      </section>
+
+      <section class="live">
+        <div class="phone" aria-hidden="true">
+          <div class="phone-screen">
+            <div class="hello mini"><div class="hello-text"><p class="hello-hi">Bonjour Claire</p><h1>Votre ménage est en cours</h1><p class="hello-when">Mardi à 10:00</p>
+              <ol class="track"><li class="done">Réservé</li><li class="done">Confirmée</li><li class="now">En cours</li><li>Terminé</li></ol></div></div>
+            <div class="card mini-card">
+              <div class="shine"><div class="shine-top"><b>Presque fini</b><span>4 sur 5</span></div><div class="shine-bar"><i class="shine-demo"></i></div></div>
+              <p class="mini-line"><b>Fatima</b>, intervenante vérifiée</p>
+              <p class="mini-line muted">Cuisine ✓ · Salle de bain ✓ · Sols ✓ · Poussière ✓</p>
+            </div>
+          </div>
+        </div>
+        <div class="live-text">
+          <h2>Vous suivez votre ménage en direct</h2>
+          <ol class="flow">
+            <li><b>Vous réservez en 2 minutes</b><span>Le type de ménage, la date, l'heure. Le prix total s'affiche avant de payer.</span></li>
+            <li><b>Vous savez qui vient</b><span>Le prénom de votre intervenante vérifiée, avant le ménage. Vous pouvez la garder pour les prochaines fois.</span></li>
+            <li><b>Vous voyez où elle en est</b><span>Chaque tâche cochée fait avancer la jauge. Messages, photos et reçu restent dans votre espace.</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="hosts">
+        <div>
+          <h2>Hôtes Airbnb et conciergeries</h2>
+          <p>Reliez le calendrier de votre annonce : un ménage est proposé après chaque départ de voyageurs, avec la même intervenante, vos consignes et votre checklist.</p>
+          <a class="btn primary" href="#/inscription" id="hostCta">Ajouter mon logement</a>
+        </div>
+        <ul>
+          <li>Calendrier Airbnb, Abritel ou Booking synchronisé</li>
+          <li>Une intervenante préférée par logement</li>
+          <li>Consignes d'accès et checklist enregistrées</li>
+          <li>Un séjour annulé ne supprime jamais un ménage sans votre accord</li>
+        </ul>
+      </section>
+
+      <section class="faq-home">
+        <h2>Questions fréquentes</h2>
+        <details class="faq"><summary>Qui vient chez moi ?</summary><p>Une intervenante sélectionnée par Proprigo : identité vérifiée, entretien, première mission accompagnée. Vous voyez son prénom avant le ménage.</p></details>
+        <details class="faq"><summary>Dois-je fournir le matériel ?</summary><p>Vous pouvez fournir aspirateur et produits, ou choisir l'option « matériel apporté » pour 15 €. Pour un logement Airbnb, le matériel reste sur place.</p></details>
+        <details class="faq"><summary>Puis-je annuler ou changer l'heure ?</summary><p>Oui, depuis votre espace. C'est gratuit jusqu'à 24 h avant le ménage ; ensuite, 50 % du prix est retenu.</p></details>
+        <details class="faq"><summary>Et si mon intervenante est absente ?</summary><p>L'équipe cherche une remplaçante vérifiée et vous prévient. Vous pouvez aussi choisir un autre créneau pour garder la vôtre.</p></details>
+        <p><a href="#/aide">Toutes les questions</a></p>
+      </section>
+
+      <section class="final">
+        <h2>On s'occupe de votre ménage ?</h2>
+        <form id="start2" class="cp-row">
+          <label>Code postal<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" placeholder="Ex. 75011" required></label>
+          <button class="btn primary">Voir les créneaux</button>
+        </form>
+        <p class="small">Vous faites le ménage ? <a href="#/inscription-intervenante">Rejoignez les intervenantes Proprigo</a></p>
       </section>`;
+    // avant / après : on glisse pour faire briller
+    const range = document.getElementById('baRange');
+    const paintBA = () => {
+      const v = Number(range.value);
+      document.getElementById('baClean').style.clipPath = `inset(0 0 0 ${v}%)`;
+      document.getElementById('baHandle').style.left = `${v}%`;
+    };
+    range.oninput = paintBA;
+    paintBA();
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      // un seul balayage au chargement, pour montrer le geste
+      const t0 = performance.now();
+      const sweep = (t) => {
+        if (range.dataset.touched) return;
+        const k = Math.min(1, (t - t0) / 1600);
+        const e = k < 0.5 ? 2 * k * k : 1 - (2 - 2 * k) ** 2 / 2;
+        range.value = String(Math.round(82 - (82 - 30) * e));
+        paintBA();
+        if (k < 1) requestAnimationFrame(sweep);
+      };
+      setTimeout(() => requestAnimationFrame(sweep), 450);
+    }
+    range.addEventListener('pointerdown', () => { range.dataset.touched = '1'; });
+    // tailles Airbnb
+    $app.querySelectorAll('[data-air]').forEach((b) => b.onclick = () => {
+      $app.querySelectorAll('[data-air]').forEach((x) => x.setAttribute('aria-pressed', x === b));
+      document.getElementById('airPrice').textContent = `${b.dataset.price} €`;
+      draft.size = b.dataset.air;
+    });
+    // les boutons « Réserver » remontent au formulaire avec la prestation choisie
+    $app.querySelectorAll('[data-book]').forEach((b) => b.onclick = () => {
+      draft.service = b.dataset.book;
+      $app.querySelectorAll('[data-pick]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.pick === draft.service));
+      document.getElementById('start').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => document.querySelector('#start [name=cp]').focus({ preventScroll: true }), 400);
+    });
+    document.getElementById('hostCta').onclick = () => { draft.service = 'airbnb'; sessionStorage.setItem('after', '#/logements'); };
+    document.getElementById('start2').onsubmit = (e) => {
+      e.preventDefault();
+      const f = document.getElementById('start');
+      f.cp.value = e.target.cp.value;
+      f.requestSubmit();
+      f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
     $app.querySelectorAll('[data-pick]').forEach((b) => b.onclick = () => {
       draft.service = b.dataset.pick;
       $app.querySelectorAll('[data-pick]').forEach((x) => x.setAttribute('aria-pressed', x === b));
