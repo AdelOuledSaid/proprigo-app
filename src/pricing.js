@@ -6,14 +6,16 @@ const IDF_DEPTS = ['75', '77', '78', '91', '92', '93', '94', '95'];
 const OPEN_ZONES = ['IDF']; // zones où l'on peut réserver aujourd'hui
 
 const GRID = {
-  IDF: { menage: 37, grand: 42, airbnb: { studio: 95, T2: 119, T3: 145, maison: 195 } },
-  FR: { menage: 34, grand: 38, airbnb: { studio: 89, T2: 115, T3: 139, maison: 185 } },
+  IDF: { menage: 37, grand: 42, bureau: 42, airbnb: { studio: 95, T2: 119, T3: 145, maison: 195 } },
+  FR: { menage: 34, grand: 38, bureau: 39, airbnb: { studio: 89, T2: 115, T3: 139, maison: 185 } },
 };
 const AIRBNB_HOURS = { studio: 2, T2: 2.5, T3: 3, maison: 4 };
 const SIZE_LABEL = { studio: 'Studio', T2: 'T2', T3: 'T3', maison: 'Maison' };
 const SUNDAY_RATE = 0.20;
 const URGENT_RATE = 0.25;
 const KIT_PRICE = 15;
+const SERVICES = ['menage', 'grand', 'airbnb', 'bureau'];
+const PRO_SERVICES = ['airbnb', 'bureau']; // facturés à des professionnels : TVA à 20 %, pas de crédit d'impôt
 const MIN_HOURS = 2;
 const MAX_HOURS = 8;
 
@@ -90,12 +92,13 @@ const round2 = (n) => Math.round(n * 100) / 100;
 /**
  * Calcule le prix d'une prestation. Toujours appelé côté serveur : le prix envoyé
  * par le navigateur n'est jamais utilisé.
- * input: { service: 'menage'|'grand'|'airbnb', size?, hours?, cp, date, urgent?, kit? }
+ * input: { service: 'menage'|'grand'|'airbnb'|'bureau', size?, hours?, cp, date, urgent?, kit? }
+ * Les bureaux sont une prestation aux entreprises : TVA à 20 %, pas de crédit d'impôt.
  */
 function quote(input, now = new Date()) {
   const errors = [];
   const service = input.service;
-  if (!['menage', 'grand', 'airbnb'].includes(service)) errors.push('Prestation inconnue.');
+  if (!SERVICES.includes(service)) errors.push('Prestation inconnue.');
   const zone = zoneOf(input.cp);
   if (!zone) errors.push('Code postal invalide (5 chiffres).');
   if (!isValidDate(input.date)) errors.push('Date invalide.');
@@ -112,14 +115,14 @@ function quote(input, now = new Date()) {
       base = g.airbnb[input.size];
       label = `Forfait Airbnb ${SIZE_LABEL[input.size]} (ménage + linge)`;
     }
-  } else if (service === 'menage' || service === 'grand') {
+  } else if (service === 'menage' || service === 'grand' || service === 'bureau') {
     hours = Number(input.hours);
     if (!Number.isInteger(hours * 2) || hours < MIN_HOURS || hours > MAX_HOURS) {
       errors.push(`Durée entre ${MIN_HOURS} h et ${MAX_HOURS} h, par demi-heure.`);
     } else {
       const rate = g[service];
       base = hours * rate;
-      label = `${service === 'grand' ? 'Grand nettoyage' : 'Ménage'} ${String(hours).replace('.', ',')} h × ${rate} €`;
+      label = `${{ grand: 'Grand nettoyage', bureau: 'Nettoyage de bureaux' }[service] || 'Ménage'} ${String(hours).replace('.', ',')} h × ${rate} €`;
     }
   }
 
@@ -163,13 +166,13 @@ function quote(input, now = new Date()) {
     hours,
     lines,
     total,
-    pro: service === 'airbnb',
+    pro: PRO_SERVICES.includes(service),
   };
 }
 
 /** Marge estimée d'une réservation, avec les mêmes formules que le tableau. */
 function estimateMargin(b, worker) {
-  const tva = b.service === 'airbnb' ? COSTS.tvaPro : COSTS.tvaParticulier;
+  const tva = PRO_SERVICES.includes(b.service) ? COSTS.tvaPro : COSTS.tvaParticulier;
   const ht = b.total / (1 + tva);
   const frais = b.total * COSTS.paiementPct + COSTS.paiementFixe + (b.kit ? COSTS.kitCout : COSTS.produits);
   const hourCost = worker && worker.statut === 'I' && worker.rate ? worker.rate : COSTS.salarieeParHeureFacturee;
@@ -178,6 +181,7 @@ function estimateMargin(b, worker) {
 }
 
 module.exports = {
+  SERVICES, PRO_SERVICES,
   GRID, AIRBNB_HOURS, SIZE_LABEL, IDF_DEPTS, OPEN_ZONES, KIT_PRICE, COSTS,
   zoneOf, isOpen, quote, estimateMargin, todayParis, isValidDate, holidays, nowParisMinutes,
 };

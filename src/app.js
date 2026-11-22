@@ -663,12 +663,12 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   route('GET', '/api/me/attestation', ({ user, query, res }) => {
     need(user, 'client');
     const year = /^\d{4}$/.test(query.get('year') || '') ? query.get('year') : pricing.todayParis(now()).slice(0, 4);
-    const rows = db.prepare("SELECT * FROM bookings WHERE client_id = ? AND status = 'terminee' AND service <> 'airbnb' AND substr(date, 1, 4) = ? AND (paid = 1 OR ? = 0) ORDER BY date").all(user.id, year, production ? 1 : 0);
+    const rows = db.prepare("SELECT * FROM bookings WHERE client_id = ? AND status = 'terminee' AND service IN ('menage','grand') AND substr(date, 1, 4) = ? AND (paid = 1 OR ? = 0) ORDER BY date").all(user.id, year, production ? 1 : 0);
     const total = Math.round(rows.reduce((t, b) => t + b.total, 0) * 100) / 100;
     const e = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const html = `<!doctype html><html lang="fr"><meta charset="utf-8"><title>Attestation ${year}</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:760px;margin:30px auto;padding:0 20px;color:#0f1a4a}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin:16px 0}td,th{border-bottom:1px solid #dfe5f3;padding:7px;text-align:left}td.n,th.n{text-align:right}.warn{background:#fff1e6;border:1px solid #ffb999;padding:12px;border-radius:10px}@media print{.noprint{display:none}}</style>
-<p class="warn"><b>Document provisoire.</b> Cette attestation ne vaut pour le crédit d'impôt qu'une fois Proprigo déclaré « services à la personne » (n° [À COMPLÉTER]). Les ménages de logements de location courte durée n'y ouvrent pas droit et ne sont pas listés.</p>
+<p class="warn"><b>Document provisoire.</b> Cette attestation ne vaut pour le crédit d'impôt qu'une fois Proprigo déclaré « services à la personne » (n° [À COMPLÉTER]). Les ménages de logements de location courte durée et le nettoyage de bureaux n'y ouvrent pas droit et ne sont pas listés.</p>
 <h1>Attestation fiscale annuelle ${year}</h1>
 <p>Proprigo, [RAISON SOCIALE, ADRESSE, SIRET] atteste que <b>${e(user.name)}</b> a bénéficié des prestations de ménage à domicile suivantes, réglées en ${year} :</p>
 <table><tr><th>Date</th><th>Prestation</th><th>Adresse</th><th class="n">Heures</th><th class="n">Montant TTC</th></tr>
@@ -790,7 +790,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     const name = str(body.name ?? old.name, 60);
     const address = str(body.address ?? old.address, 200);
     const cp = str(body.cp ?? old.cp, 5);
-    const service = ['airbnb', 'menage', 'grand'].includes(body.service) ? body.service : old.service || 'airbnb';
+    const service = pricing.SERVICES.includes(body.service) ? body.service : old.service || 'airbnb';
     if (name.length < 2) throw new HttpError(400, 'Donnez un nom au logement (ex. : Studio Montmartre).');
     if (address.length < 5) throw new HttpError(400, 'Indiquez l\'adresse complète.');
     if (!pricing.zoneOf(cp)) throw new HttpError(400, 'Code postal invalide.');
@@ -1003,10 +1003,10 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
     if (b.status !== 'terminee' || (production && !b.paid)) throw new HttpError(409, 'Le reçu est disponible après paiement et réalisation du ménage.');
     const c = db.prepare('SELECT name, email FROM users WHERE id = ?').get(b.client_id);
-    const tva = b.service === 'airbnb' ? pricing.COSTS.tvaPro : pricing.COSTS.tvaParticulier;
+    const tva = pricing.PRO_SERVICES.includes(b.service) ? pricing.COSTS.tvaPro : pricing.COSTS.tvaParticulier;
     const ht = Math.round((b.total / (1 + tva)) * 100) / 100;
     const e = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-    const label = b.service === 'airbnb' ? `Ménage Airbnb ${pricing.SIZE_LABEL[b.size]} (ménage + linge)` : `${b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'} ${b.hours} h${b.kit ? ', matériel et produits fournis' : ''}`;
+    const label = b.service === 'airbnb' ? `Ménage Airbnb ${pricing.SIZE_LABEL[b.size]} (ménage + linge)` : `${b.service === 'bureau' ? 'Nettoyage de bureaux' : b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'} ${b.hours} h${b.kit ? ', matériel et produits fournis' : ''}`;
     const num = `PG-${b.date.slice(0, 4)}-${String(b.id).padStart(6, '0')}`;
     const eur = (n) => n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\u00a0€';
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
@@ -1018,7 +1018,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
 <p><b>Client :</b> ${e(c.name)}<br>${e(b.address)}, ${e(b.cp)}</p>
 <table><thead><tr><th>Prestation</th><th class="n">Montant HT</th><th class="n">TVA</th><th class="n">Total TTC</th></tr></thead>
 <tbody><tr><td>${e(label)}<br><span class="muted">${e(fr(b.date))} à ${e(b.time)}</span></td><td class="n">${eur(ht)}</td><td class="n">${Math.round(tva * 100)} % · ${eur(b.total - ht)}</td><td class="n"><b>${eur(b.total)}</b></td></tr></tbody></table>
-<p class="muted">${b.service === 'airbnb' ? 'Prestation à un professionnel.' : "Service à la personne : l'attestation fiscale annuelle pour le crédit d'impôt sera disponible dès la déclaration de l'entreprise (à confirmer par l'expert-comptable)."}</p>
+<p class="muted">${pricing.PRO_SERVICES.includes(b.service) ? 'Prestation à un professionnel.' : "Service à la personne : l'attestation fiscale annuelle pour le crédit d'impôt sera disponible dès la déclaration de l'entreprise (à confirmer par l'expert-comptable)."}</p>
 <p class="noprint muted">Pour l'enregistrer en PDF : Ctrl + P sur ordinateur, ou Partager › Imprimer sur téléphone.</p>
 </body></html>`);
     return { streamed: true };
@@ -1249,7 +1249,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     const workers = db.prepare('SELECT w.user_id, w.statut, w.cp, w.absent, u.name FROM workers w JOIN users u ON u.id = w.user_id ORDER BY u.name').all()
       .filter((w) => engine.isActive({ ...workerProfile(w.user_id) }));
     const rows = db.prepare("SELECT id, date, time, hours, cp, service, size, status, worker_id, paid, payment_status FROM bookings WHERE date BETWEEN ? AND ? AND status IN ('en_attente','proposee','attribuee','en_cours','terminee') ORDER BY date, time").all(start, end);
-    return { start, end, workers, bookings: rows.map((b) => ({ ...b, label: `${b.service === 'airbnb' ? 'Airbnb ' + (b.size || '') : b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'} ${b.service === 'airbnb' ? '' : String(b.hours).replace('.', ',') + ' h'}`.trim() })) };
+    return { start, end, workers, bookings: rows.map((b) => ({ ...b, label: `${b.service === 'airbnb' ? 'Airbnb ' + (b.size || '') : b.service === 'bureau' ? 'Bureaux' : b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'} ${b.service === 'airbnb' ? '' : String(b.hours).replace('.', ',') + ' h'}`.trim() })) };
   });
 
   route('GET', '/api/admin/bookings/:id/candidates', ({ user, id }) => {

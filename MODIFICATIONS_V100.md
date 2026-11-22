@@ -28,3 +28,11 @@
 ## Déploiement
 Les nouvelles colonnes et tables s'ajoutent toutes seules au démarrage. Sauvegardez d'abord la base Render, puis `npm test`, `git add .`, `git commit -m "Proprigo v1.0"`, `git push origin main`.
 Après le déploiement, faites un remboursement test d'un petit montant en mode test Stripe avant de l'utiliser pour un vrai client.
+
+# v1.1.0 — nettoyage de bureaux
+
+- Nouvelle prestation « Nettoyage de bureaux » : 42 € TTC / h en Île-de-France (35 € HT), 39 € TTC / h ailleurs (32,50 € HT). Marge estimée : environ 36 % et 31 %.
+- Prestation aux professionnels : TVA à 20 %, affichée au récapitulatif ; pas de crédit d'impôt ; reçu « prestation à un professionnel » ; jamais dans l'attestation fiscale.
+- Checklist par défaut adaptée aux bureaux (postes de travail, corbeilles, sanitaires, coin café, salle de réunion, poignées).
+- Quatrième tuile sur l'accueil et dans la réservation, quatrième fiche « Nettoyage de bureaux » dans les prix, illustration de bureau.
+- Les prix se changent dans `src/pricing.js` (ligne GRID, colonne `bureau`).

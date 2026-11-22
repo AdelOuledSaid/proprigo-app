@@ -619,3 +619,11 @@ tr.unassigned .pcell { background: color-mix(in srgb, var(--coral) 8%, var(--app
 .note-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 .note-form textarea { margin: 0; }
 .file-dlg .plain li .pill { flex: 0 0 auto; }
+
+/* bureaux : quatre prestations */
+.svc.svc4 { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 1000px) { .hero2 .svc.svc4, .wizard .svc.svc4 { grid-template-columns: repeat(4, 1fr); } }
+.offer-grid { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 1100px) { .offer-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 760px) { .svc.svc4 { grid-template-columns: 1fr; } .offer-grid { grid-template-columns: 1fr; } }
+.offer ul { align-content: start; }

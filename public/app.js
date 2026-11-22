@@ -11,7 +11,8 @@
   const dateFr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
   const todayParis = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const SIZE = { studio: 'Studio', T2: 'T2', T3: 'T3', maison: 'Maison' };
-  const SERVICE = { menage: 'Ménage', grand: 'Grand nettoyage', airbnb: 'Ménage Airbnb' };
+  const SERVICE = { menage: 'Ménage', grand: 'Grand nettoyage', airbnb: 'Ménage Airbnb', bureau: 'Nettoyage de bureaux' };
+  const PRO = ['airbnb', 'bureau']; // prestations aux professionnels : TVA 20 %, pas de crédit d'impôt
   const STATUS = {
     en_attente: ['Recherche en cours', 'warn'], proposee: ['Recherche en cours', 'warn'], attribuee: ['Confirmée', ''],
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
@@ -104,6 +105,7 @@
     menage: ['Cuisine : plans de travail, évier, extérieur des appareils', 'Salle de bain et WC', 'Sols : aspirateur et serpillière', 'Poussière des surfaces', 'Vider les poubelles'],
   };
   DEFAULT_TASKS.grand = [...DEFAULT_TASKS.menage, 'Intérieur du four et du réfrigérateur', 'Vitres accessibles', 'Intérieur des placards'];
+  DEFAULT_TASKS.bureau = ['Bureaux : poussière des postes de travail, sans déplacer les dossiers', 'Vider les corbeilles et trier les déchets', 'Sols : aspirateur et serpillière', 'Cuisine ou coin café : plans de travail, évier, machine à café', 'Sanitaires : nettoyage et réassort (papier, savon)', 'Salle de réunion : tables et chaises', 'Poignées de porte et interrupteurs'];
   DEFAULT_TASKS.airbnb = [...DEFAULT_TASKS.menage, 'Changer les draps et les serviettes', 'Faire les lits', 'Réassort : papier toilette, savon, café', "Vérifier l'état du logement et signaler tout dégât"];
   const WEEKDAYS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
   const HALF_HOURS = Array.from({ length: 29 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
@@ -155,7 +157,7 @@
     grand: '<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.6 4.6 2.3 6.4 7 7-4.7.6-6.4 2.4-7 7-.6-4.6-2.3-6.4-7-7 4.7-.6 6.4-2.4 7-7z"/><path d="M19 15.5c.25 1.9.9 2.6 2.8 2.8-1.9.25-2.55.9-2.8 2.8-.25-1.9-.9-2.55-2.8-2.8 1.9-.2 2.55-.9 2.8-2.8z"/></svg>',
     airbnb: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3.5M21 12v2.5"/></svg>',
   };
-  const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge' };
+  const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge', bureau: 'Locaux professionnels, 35 € HT/h' };
   const dateLong = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 
   // ---------- accueil ----------
@@ -175,9 +177,9 @@
       <section class="hero2">
         <div class="hero2-text">
           <h1>Chez vous, tout brille.</h1>
-          <p class="lead">Ménage à domicile, logements Airbnb et grand nettoyage à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
+          <p class="lead">Ménage à domicile, logements Airbnb, grand nettoyage et bureaux à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
           <form class="card stack choose" id="start">
-            <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: '37 € / h', airbnb: 'dès 95 €', grand: '42 € / h' }[k]}</span></button>`).join('')}</div>
+            <div class="svc svc4">${['menage', 'airbnb', 'grand', 'bureau'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: '37 € / h', airbnb: 'dès 95 €', grand: '42 € / h', bureau: '35 € HT / h' }[k]}</span></button>`).join('')}</div>
             <div class="cp-row">
               <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="Ex. 75011" required></label>
               <button class="btn primary">Voir les créneaux</button>
@@ -202,7 +204,7 @@
       </ul>
 
       <section class="offers" aria-labelledby="offersT">
-        <h2 id="offersT">Trois ménages, un prix clair</h2>
+        <h2 id="offersT">Quatre prestations, un prix clair</h2>
         <div class="offer-grid">
           <article class="offer">
             <span class="offer-art">${ART.services.menage}</span>
@@ -226,8 +228,15 @@
             <ul><li>Fin de bail, emménagement, remise en état</li><li>Intérieur des placards, plinthes, vitres accessibles</li><li>Matériel apporté sur demande</li></ul>
             <button class="btn ghost full" data-book="grand">Réserver ce ménage</button>
           </article>
+          <article class="offer">
+            <span class="offer-art">${ART.services.bureau}</span>
+            <h3>Nettoyage de bureaux</h3>
+            <p class="offer-price"><b>35 €</b> HT de l'heure</p>
+            <ul><li>Postes de travail, sols, sanitaires, coin café</li><li>Avant l'ouverture ou après la fermeture</li><li>Chaque semaine avec la même intervenante, facture avec TVA</li></ul>
+            <button class="btn ghost full" data-book="bureau">Demander un passage</button>
+          </article>
         </div>
-        <p class="small muted offers-note">Prix TTC en Île-de-France. Matériel et produits apportés : +15 €. Dimanche et jours fériés : +20 %. Arrivée dans les 3 heures : +25 %.</p>
+        <p class="small muted offers-note">Prix TTC en Île-de-France (bureaux : 35 € HT, soit 42 € TTC). Matériel et produits apportés : +15 €. Dimanche et jours fériés : +20 %. Arrivée dans les 3 heures : +25 %.</p>
       </section>
 
       <section class="live">
@@ -517,11 +526,11 @@
       shell(`
         <h1>Votre ménage</h1>
         ${homes.length ? `<label>Logement<select id="homeSel"><option value="">Autre adresse</option>${homes.map((h) => `<option value="${h.id}" ${draft.home_id === h.id ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select></label>` : ''}
-        <div class="svc">${['menage', 'grand', 'airbnb'].map((k) => `<button type="button" data-svc="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
+        <div class="svc svc4">${['menage', 'grand', 'airbnb', 'bureau'].map((k) => `<button type="button" data-svc="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
         ${draft.service === 'airbnb'
           ? `<fieldset class="box"><legend>Taille du logement</legend><div class="chips">${Object.keys(SIZE).map((k) => `<button type="button" data-size="${k}" aria-pressed="${draft.size === k}">${SIZE[k]}</button>`).join('')}</div></fieldset>`
           : `<label>Durée<select id="hours">${[2, 2.5, 3, 3.5, 4, 5, 6, 7, 8].map((h) => `<option value="${h}" ${Number(draft.hours) === h ? 'selected' : ''}>${String(h).replace('.', ',')} h</option>`).join('')}</select></label>
-             <p class="small muted" style="margin:0">Repère : 2 h pour un studio, 3 h pour un 2 pièces, 4 h pour un 3 pièces.</p>
+             <p class="small muted" style="margin:0">${draft.service === 'bureau' ? 'Repère : environ 1 h pour 80 m² de bureaux (6 à 8 postes), plus les sanitaires et le coin café.' : 'Repère : 2 h pour un studio, 3 h pour un 2 pièces, 4 h pour un 3 pièces.'}</p>
              <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : l'intervenante apporte aspirateur et produits (+15 €)</label>`}
         <details class="box"><summary>Ce qui doit être fait (${t.length} tâches)</summary>
           <div id="tasks">${t.map((x, i) => `<label class="check"><input type="checkbox" data-task="${i}" checked> ${esc(x)}</label>`).join('')}</div>
@@ -620,10 +629,10 @@
         ${q.ok ? `<div class="price">
           <div class="row"><span>Total TTC${n > 1 ? ' du premier ménage' : ''}</span><span class="total">${eur(q.total)}</span></div>
           ${q.lines.map((l) => `<div class="line"><span>${esc(l.label)}</span><span>${eur(l.amount)}</span></div>`).join('')}
-          ${q.service !== 'airbnb' ? `<div class="line"><span>Après crédit d'impôt de 50 %*</span><span>${eur(q.total / 2)}</span></div>` : ''}
+          ${!PRO.includes(q.service) ? `<div class="line"><span>Après crédit d'impôt de 50 %*</span><span>${eur(q.total / 2)}</span></div>` : `<div class="line"><span>Dont TVA 20 %</span><span>${eur(q.total - q.total / 1.2)}</span></div>`}
         </div>
         ${n > 1 ? '<p class="small muted">Chaque ménage est facturé à son prix (supplément le dimanche ou un jour férié).</p>' : ''}
-        ${q.service !== 'airbnb' ? '<p class="small muted">* Selon les conditions en vigueur, une fois l\'entreprise déclarée « services à la personne ».</p>' : ''}` : `<p class="err">${q.errors.map(esc).join(' ')}</p>`}
+        ${!PRO.includes(q.service) ? '<p class="small muted">* Selon les conditions en vigueur, une fois l\'entreprise déclarée « services à la personne ».</p>' : ''}` : `<p class="err">${q.errors.map(esc).join(' ')}</p>`}
         <p class="box small">${FREE_CANCEL} Vous pouvez modifier la date ou l'heure jusqu'à 24 h avant.</p>
         <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="next" ${q.ok ? '' : 'disabled'}>Continuer vers le paiement</button></div>`, 3);
       $app.querySelectorAll('[data-goto]').forEach((b) => b.onclick = () => { draft.step = Number(b.dataset.goto); render(); });
@@ -838,7 +847,7 @@
       <label>Code postal<input type="text" name="cp" inputmode="numeric" maxlength="5" value="${esc(h.cp || '')}" required></label></div>
       <label>Adresse<input type="text" name="address" value="${esc(h.address || '')}" placeholder="Numéro, rue, étage" required></label>
       <div class="grid2" style="gap:12px">
-        <label>Type de ménage<select name="service">${['airbnb', 'menage', 'grand'].map((k) => `<option value="${k}" ${service === k ? 'selected' : ''}>${SERVICE[k]}</option>`).join('')}</select></label>
+        <label>Type de ménage<select name="service">${['airbnb', 'menage', 'grand', 'bureau'].map((k) => `<option value="${k}" ${service === k ? 'selected' : ''}>${SERVICE[k]}</option>`).join('')}</select></label>
         <label>Taille (Airbnb)<select name="size">${Object.keys(SIZE).map((k) => `<option value="${k}" ${(h.size || 'T2') === k ? 'selected' : ''}>${SIZE[k]}</option>`).join('')}</select></label>
         <label>Durée (ménage à l'heure)<select name="hours">${[2, 2.5, 3, 3.5, 4, 5, 6].map((x) => `<option value="${x}" ${(h.hours || 3) === x ? 'selected' : ''}>${String(x).replace('.', ',')} h</option>`).join('')}</select></label>
         <label>Heure de départ des voyageurs<select name="checkout_time">${HALF_HOURS.map((t) => `<option ${(h.checkout_time || '11:00') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>

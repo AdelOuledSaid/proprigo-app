@@ -4,6 +4,7 @@ const BASE = ['Cuisine : plans de travail, évier, extérieur des appareils', 'S
 const DEFAULTS = {
   menage: BASE,
   grand: [...BASE, 'Intérieur du four et du réfrigérateur', 'Vitres accessibles', 'Intérieur des placards'],
+  bureau: ['Bureaux : poussière des postes de travail, sans déplacer les dossiers', 'Vider les corbeilles et trier les déchets', 'Sols : aspirateur et serpillière', 'Cuisine ou coin café : plans de travail, évier, machine à café', 'Sanitaires : nettoyage et réassort (papier, savon)', 'Salle de réunion : tables et chaises', 'Poignées de porte et interrupteurs'],
   airbnb: [...BASE, 'Changer les draps et les serviettes', 'Faire les lits', 'Réassort : papier toilette, savon, café', "Vérifier l'état du logement et signaler tout dégât"],
 };
 

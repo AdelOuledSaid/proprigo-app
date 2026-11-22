@@ -153,3 +153,35 @@ test('fiches, notes internes, vrais chiffres et compte « planning » limité', 
     assert.equal((await (await logged('claire@proprigo.test'))('GET', `/api/admin/clients/${claire}`)).status, 403);
   } finally { server.close(); }
 });
+
+test('nettoyage de bureaux : prix HT, TVA 20 %, jamais à perte, pas dans l\'attestation', async () => {
+  const pricing = require('../src/pricing');
+  const at = new Date('2026-11-23T08:00:00Z');
+  const idf = pricing.quote({ service: 'bureau', hours: 3, cp: '75008', date: '2026-12-01' }, at);
+  assert.ok(idf.ok);
+  assert.equal(idf.total, 126, '3 h × 42 € TTC');
+  assert.equal(idf.pro, true);
+  const fr = pricing.quote({ service: 'bureau', hours: 3, cp: '69001', date: '2026-12-01' }, at);
+  assert.equal(fr.total, 117);
+  for (const q of [idf, fr]) {
+    const m = pricing.estimateMargin({ service: 'bureau', total: q.total, hours: 3, kit: 0 }, null);
+    assert.ok(m.marge / m.ht >= 0.25, `marge ${Math.round((m.marge / m.ht) * 100)} %`);
+  }
+  const { server, db, logged } = await startServer();
+  try {
+    const c = await logged('claire@proprigo.test');
+    const r = await c('POST', '/api/bookings', { service: 'bureau', hours: 3, cp: '75008', address: '10 avenue Test, 2e étage', date: '2026-12-01', time: '08:00', checklist: [] });
+    assert.ok([200, 201].includes(r.status), JSON.stringify(r.data));
+    const b = db.prepare("SELECT * FROM bookings WHERE service = 'bureau'").get();
+    assert.match(b.checklist, /Postes de travail|postes de travail/);
+    db.prepare("UPDATE bookings SET status = 'terminee', paid = 1 WHERE id = ?").run(b.id);
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'claire@proprigo.test', password: 'demo-proprigo' }) });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const html = await (await fetch(base + '/api/me/attestation?year=2026', { headers: { Cookie: cookie } })).text();
+    assert.ok(!html.includes('126,00 €'), 'les bureaux n\'ouvrent pas droit au crédit d\'impôt');
+    const receipt = await (await fetch(base + `/api/bookings/${b.id}/receipt`, { headers: { Cookie: cookie } })).text();
+    assert.match(receipt, /Nettoyage de bureaux/);
+    assert.match(receipt, /professionnel/);
+  } finally { server.close(); }
+});
