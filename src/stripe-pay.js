@@ -25,18 +25,49 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   params.set('payment_method_types[0]', 'card');
   params.set('line_items[0][price_data][currency]', 'eur');
   params.set('line_items[0][price_data][unit_amount]', String(amount));
-  params.set('line_items[0][price_data][product_data][name]', `PROPRIGO — ${bookings.length} prestation(s) de nettoyage`);
+  params.set('line_items[0][price_data][product_data][name]', `PROPRIGO - ${bookings.length} prestation(s) de nettoyage`);
   params.set('line_items[0][quantity]', '1');
   params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&booking=${ids[0]}#/mes-reservations`);
   params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
   params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
-  const resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-    method: 'POST', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': crypto.randomUUID() }, body: params,
-    signal: AbortSignal.timeout(15000),
-  });
-  const session = await resp.json();
-  if (!resp.ok || !session.id || !session.url) throw new Error('Stripe session failed');
-  db.prepare('INSERT INTO stripe_payments (session_id, client_id, booking_ids, amount_cents, status) VALUES (?, ?, ?, ?, ?)').run(session.id, clientId, JSON.stringify(ids), amount, 'pending');
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Idempotency-Key': crypto.randomUUID(),
+      },
+      body: params,
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    console.error('Stripe Checkout network error:', { name: err.name, message: err.message, cause: err.cause?.code });
+    throw new Error('Stripe Checkout network error');
+  }
+  let session;
+  try {
+    session = await resp.json();
+  } catch (err) {
+    console.error('Stripe Checkout invalid response:', { status: resp.status, message: err.message });
+    throw new Error('Stripe Checkout invalid response');
+  }
+  if (!resp.ok || !session.id || !session.url) {
+    console.error('Stripe Checkout error:', {
+      status: resp.status,
+      type: session.error?.type,
+      code: session.error?.code,
+      message: session.error?.message,
+    });
+    throw new Error('Stripe session failed');
+  }
+  try {
+    db.prepare('INSERT INTO stripe_payments (session_id, client_id, booking_ids, amount_cents, status) VALUES (?, ?, ?, ?, ?)').run(session.id, clientId, JSON.stringify(ids), amount, 'pending');
+  } catch (err) {
+    console.error('Stripe Checkout database error:', { code: err.code, message: err.message });
+    throw err;
+  }
   return { url: session.url };
 }
 module.exports = { configured, validBaseUrl, verifyEvent, checkout };
