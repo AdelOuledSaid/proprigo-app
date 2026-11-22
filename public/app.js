@@ -43,7 +43,33 @@
   const formData = (form) => Object.fromEntries(new FormData(form).entries());
 
   // ---------- navigation ----------
+  const TAB_ICON = {
+    home: '<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/>',
+    book: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/>',
+    list: '<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+    homes: '<path d="M3 20V9l6-4 6 4v11M15 20h6v-8l-6-3"/><path d="M7 13h4M7 16h4"/>',
+    user: '<circle cx="12" cy="8.5" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+    todo: '<path d="M12 3.5 21 19H3z"/><path d="M12 10v4M12 16.5v.5"/>',
+    team: '<circle cx="9" cy="9" r="3.5"/><circle cx="17" cy="10" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M15 20a4.5 4.5 0 0 1 6-4.2"/>',
+    help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17v.5"/>',
+  };
+  const tabsFor = (role) => ({
+    client: [['#/', 'Accueil', 'home'], ['#/reserver', 'Réserver', 'book'], ['#/mes-reservations', 'Ménages', 'list'], ['#/logements', 'Logements', 'homes'], ['#/compte', 'Compte', 'user']],
+    intervenante: [['#/intervenante', 'Missions', 'list'], ['#/aide', 'Aide', 'help'], ['#/compte', 'Compte', 'user']],
+    admin: [['#/admin', 'Tableau', 'todo'], ['#/aide', 'Aide', 'help'], ['#/compte', 'Compte', 'user']],
+  }[role] || []);
+  function paintTabbar() {
+    const bar = document.getElementById('tabbar');
+    const tabs = me ? tabsFor(me.role) : [];
+    document.body.classList.toggle('has-tabbar', tabs.length > 0);
+    bar.hidden = !tabs.length;
+    const here = location.hash.split('?')[0] || '#/';
+    bar.innerHTML = tabs.map(([h, t, i]) => `<a href="${h}" ${here === h || (h === '#/' && here === '#') ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TAB_ICON[i]}</svg><span>${t}</span></a>`).join('');
+  }
+  window.addEventListener('hashchange', () => paintTabbar());
+
   function renderNav() {
+    paintTabbar();
     const links = [];
     if (!me) links.push('<a href="#/inscription-intervenante">Devenir intervenante</a>', '<a href="#/connexion">Se connecter</a>', '<a class="cta" href="#/reserver">Réserver</a>');
     else {
@@ -137,26 +163,170 @@
     if (me && me.role === 'intervenante') return go('#/intervenante');
     if (me && me.role === 'admin') return go('#/admin');
     if (me && me.role === 'client') return clientHome();
+    const ICO = {
+      lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+      clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+      badge: '<path d="M12 3l7 3v5.5c0 4.3-3 7.6-7 9-4-1.4-7-4.7-7-9V6z"/><path d="m8.8 12 2.2 2.2 4.4-4.6"/>',
+      swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+    };
+    const ico = (k) => `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICO[k]}</svg>`;
+    const AIR = [['studio', 'Studio', 95], ['T2', '2 pièces', 119], ['T3', '3 pièces', 145], ['maison', 'Maison', 195]];
     $app.innerHTML = `
-      <section class="hero">
-        <div class="stack">
-          <h1>Un intérieur propre, sans complication.</h1>
-          <p class="lead">Réservez votre ménage en quelques minutes, avec des intervenantes vérifiées. Le prix est affiché avant de payer.</p>
-          <ul class="trust"><li>✓ Intervenantes sélectionnées et vérifiées</li><li>✓ Annulation gratuite jusqu'à 24 h avant</li><li>✓ Remplaçante garantie en cas d'absence</li></ul>
+      <section class="hero2">
+        <div class="hero2-text">
+          <h1>Chez vous, tout brille.</h1>
+          <p class="lead">Ménage à domicile, logements Airbnb et grand nettoyage à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
+          <form class="card stack choose" id="start">
+            <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: '37 € / h', airbnb: 'dès 95 €', grand: '42 € / h' }[k]}</span></button>`).join('')}</div>
+            <div class="cp-row">
+              <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="Ex. 75011" required></label>
+              <button class="btn primary">Voir les créneaux</button>
+            </div>
+            <p class="msg" id="zone"></p>
+          </form>
         </div>
-        <form class="card stack choose" id="start">
-          <h2>De quel ménage avez-vous besoin ?</h2>
-          <div class="svc">${['menage', 'airbnb', 'grand'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}">${ICON[k]}<b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
-          <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="75011" required></label>
-          <p class="msg" id="zone"></p>
-          <button class="btn primary full">Voir les disponibilités</button>
-        </form>
+        <figure class="ba" id="ba">
+          <div class="ba-layer">${ART.room(false, 'Avant le ménage : salon en désordre, vitre ternie')}</div>
+          <div class="ba-layer ba-clean" id="baClean">${ART.room(true, 'Après le ménage : salon rangé, vitre qui brille, intervenante Proprigo au travail')}</div>
+          <div class="ba-handle" id="baHandle" aria-hidden="true"><span><svg viewBox="0 0 32 32" width="22" height="22">${ART.star(16, 16, 13, '#ff6a3d')}</svg></span></div>
+          <input type="range" min="0" max="100" value="50" id="baRange" aria-label="Avant et après le ménage : faites glisser pour faire briller">
+          <figcaption><span>Avant</span><b>Faites glisser pour faire briller</b><span>Après</span></figcaption>
+        </figure>
       </section>
-      <section class="steps3">
-        <div><b>1. Choisissez</b><span>Votre ménage, la date et l'heure souhaitées. L'équipe confirme ensuite l'intervenante.</span></div>
-        <div><b>2. Une intervenante vérifiée vient</b><span>Vous connaissez son prénom avant le ménage et la retrouvez la fois suivante.</span></div>
-        <div><b>3. Vous suivez tout</b><span>Messages, checklist, photos avant / après si vous le souhaitez, reçu.</span></div>
+
+      <ul class="promises">
+        <li>${ico('lock')}<span><b>Paiement sécurisé</b>Par carte, avec Stripe</span></li>
+        <li>${ico('clock')}<span><b>Annulation gratuite</b>Jusqu'à 24 h avant</span></li>
+        <li>${ico('badge')}<span><b>Intervenantes vérifiées</b>Identité, entretien, suivi qualité</span></li>
+        <li>${ico('swap')}<span><b>Remplaçante prévue</b>Si votre intervenante est absente</span></li>
+      </ul>
+
+      <section class="offers" aria-labelledby="offersT">
+        <h2 id="offersT">Trois ménages, un prix clair</h2>
+        <div class="offer-grid">
+          <article class="offer">
+            <span class="offer-art">${ART.services.menage}</span>
+            <h3>Ménage à domicile</h3>
+            <p class="offer-price"><b>37 €</b> de l'heure</p>
+            <ul><li>Cuisine, salle de bain, sols, poussière</li><li>Même intervenante chaque semaine si vous le souhaitez</li><li>Checklist personnalisée</li></ul>
+            <button class="btn ghost full" data-book="menage">Réserver ce ménage</button>
+          </article>
+          <article class="offer offer-feature">
+            <span class="offer-art">${ART.services.airbnb}</span>
+            <h3>Ménage Airbnb</h3>
+            <p class="offer-price"><b id="airPrice">119 €</b> le forfait, linge compris</p>
+            <div class="chips" role="group" aria-label="Taille du logement">${AIR.map(([k, t]) => `<button type="button" data-air="${k}" data-price="${k === 'studio' ? 95 : k === 'T2' ? 119 : k === 'T3' ? 145 : 195}" aria-pressed="${k === 'T2'}">${t}</button>`).join('')}</div>
+            <ul><li>Ménage et changement du linge entre deux voyageurs</li><li>Calendrier de l'annonce synchronisé</li><li>Photos avant / après sur demande</li></ul>
+            <button class="btn primary full" data-book="airbnb">Réserver pour mon logement</button>
+          </article>
+          <article class="offer">
+            <span class="offer-art">${ART.services.grand}</span>
+            <h3>Grand nettoyage</h3>
+            <p class="offer-price"><b>42 €</b> de l'heure</p>
+            <ul><li>Fin de bail, emménagement, remise en état</li><li>Intérieur des placards, plinthes, vitres accessibles</li><li>Matériel apporté sur demande</li></ul>
+            <button class="btn ghost full" data-book="grand">Réserver ce ménage</button>
+          </article>
+        </div>
+        <p class="small muted offers-note">Prix TTC en Île-de-France. Matériel et produits apportés : +15 €. Dimanche et jours fériés : +20 %. Arrivée dans les 3 heures : +25 %.</p>
+      </section>
+
+      <section class="live">
+        <div class="phone" aria-hidden="true">
+          <div class="phone-screen">
+            <div class="hello mini"><div class="hello-text"><p class="hello-hi">Bonjour Claire</p><h1>Votre ménage est en cours</h1><p class="hello-when">Mardi à 10:00</p>
+              <ol class="track"><li class="done">Réservé</li><li class="done">Confirmée</li><li class="now">En cours</li><li>Terminé</li></ol></div></div>
+            <div class="card mini-card">
+              <div class="shine"><div class="shine-top"><b>Presque fini</b><span>4 sur 5</span></div><div class="shine-bar"><i class="shine-demo"></i></div></div>
+              <p class="mini-line"><b>Fatima</b>, intervenante vérifiée</p>
+              <p class="mini-line muted">Cuisine ✓ · Salle de bain ✓ · Sols ✓ · Poussière ✓</p>
+            </div>
+          </div>
+        </div>
+        <div class="live-text">
+          <h2>Vous suivez votre ménage en direct</h2>
+          <ol class="flow">
+            <li><b>Vous réservez en 2 minutes</b><span>Le type de ménage, la date, l'heure. Le prix total s'affiche avant de payer.</span></li>
+            <li><b>Vous savez qui vient</b><span>Le prénom de votre intervenante vérifiée, avant le ménage. Vous pouvez la garder pour les prochaines fois.</span></li>
+            <li><b>Vous voyez où elle en est</b><span>Chaque tâche cochée fait avancer la jauge. Messages, photos et reçu restent dans votre espace.</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="hosts">
+        <div>
+          <h2>Hôtes Airbnb et conciergeries</h2>
+          <p>Reliez le calendrier de votre annonce : un ménage est proposé après chaque départ de voyageurs, avec la même intervenante, vos consignes et votre checklist.</p>
+          <a class="btn primary" href="#/inscription" id="hostCta">Ajouter mon logement</a>
+        </div>
+        <ul>
+          <li>Calendrier Airbnb, Abritel ou Booking synchronisé</li>
+          <li>Une intervenante préférée par logement</li>
+          <li>Consignes d'accès et checklist enregistrées</li>
+          <li>Un séjour annulé ne supprime jamais un ménage sans votre accord</li>
+        </ul>
+      </section>
+
+      <section class="faq-home">
+        <h2>Questions fréquentes</h2>
+        <details class="faq"><summary>Qui vient chez moi ?</summary><p>Une intervenante sélectionnée par Proprigo : identité vérifiée, entretien, première mission accompagnée. Vous voyez son prénom avant le ménage.</p></details>
+        <details class="faq"><summary>Dois-je fournir le matériel ?</summary><p>Vous pouvez fournir aspirateur et produits, ou choisir l'option « matériel apporté » pour 15 €. Pour un logement Airbnb, le matériel reste sur place.</p></details>
+        <details class="faq"><summary>Puis-je annuler ou changer l'heure ?</summary><p>Oui, depuis votre espace. C'est gratuit jusqu'à 24 h avant le ménage ; ensuite, 50 % du prix est retenu.</p></details>
+        <details class="faq"><summary>Et si mon intervenante est absente ?</summary><p>L'équipe cherche une remplaçante vérifiée et vous prévient. Vous pouvez aussi choisir un autre créneau pour garder la vôtre.</p></details>
+        <p><a href="#/aide">Toutes les questions</a></p>
+      </section>
+
+      <section class="final">
+        <h2>On s'occupe de votre ménage ?</h2>
+        <form id="start2" class="cp-row">
+          <label>Code postal<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" placeholder="Ex. 75011" required></label>
+          <button class="btn primary">Voir les créneaux</button>
+        </form>
+        <p class="small">Vous faites le ménage ? <a href="#/inscription-intervenante">Rejoignez les intervenantes Proprigo</a></p>
       </section>`;
+    // avant / après : on glisse pour faire briller
+    const range = document.getElementById('baRange');
+    const paintBA = () => {
+      const v = Number(range.value);
+      document.getElementById('baClean').style.clipPath = `inset(0 0 0 ${v}%)`;
+      document.getElementById('baHandle').style.left = `${v}%`;
+    };
+    range.oninput = paintBA;
+    paintBA();
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      // un seul balayage au chargement, pour montrer le geste
+      const t0 = performance.now();
+      const sweep = (t) => {
+        if (range.dataset.touched) return;
+        const k = Math.min(1, (t - t0) / 1600);
+        const e = k < 0.5 ? 2 * k * k : 1 - (2 - 2 * k) ** 2 / 2;
+        range.value = String(Math.round(82 - (82 - 30) * e));
+        paintBA();
+        if (k < 1) requestAnimationFrame(sweep);
+      };
+      setTimeout(() => requestAnimationFrame(sweep), 450);
+    }
+    range.addEventListener('pointerdown', () => { range.dataset.touched = '1'; });
+    // tailles Airbnb
+    $app.querySelectorAll('[data-air]').forEach((b) => b.onclick = () => {
+      $app.querySelectorAll('[data-air]').forEach((x) => x.setAttribute('aria-pressed', x === b));
+      document.getElementById('airPrice').textContent = `${b.dataset.price} €`;
+      draft.size = b.dataset.air;
+    });
+    // les boutons « Réserver » remontent au formulaire avec la prestation choisie
+    $app.querySelectorAll('[data-book]').forEach((b) => b.onclick = () => {
+      draft.service = b.dataset.book;
+      $app.querySelectorAll('[data-pick]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.pick === draft.service));
+      document.getElementById('start').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => document.querySelector('#start [name=cp]').focus({ preventScroll: true }), 400);
+    });
+    document.getElementById('hostCta').onclick = () => { draft.service = 'airbnb'; sessionStorage.setItem('after', '#/logements'); };
+    document.getElementById('start2').onsubmit = (e) => {
+      e.preventDefault();
+      const f = document.getElementById('start');
+      f.cp.value = e.target.cp.value;
+      f.requestSubmit();
+      f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
     $app.querySelectorAll('[data-pick]').forEach((b) => b.onclick = () => {
       draft.service = b.dataset.pick;
       $app.querySelectorAll('[data-pick]').forEach((x) => x.setAttribute('aria-pressed', x === b));
@@ -186,11 +356,27 @@
   };
 
   // ---------- accueil du client : prochain ménage ----------
-  const TRACK = ['Réservé', 'Intervenante confirmée', 'Ménage en cours', 'Terminé'];
-  const trackIndex = (s) => ({ en_attente: 0, proposee: 0, attribuee: 1, en_cours: 2, terminee: 3 }[s] ?? 0);
+  const TRACK = ['Réservé', 'Confirmée', 'En route', 'En cours', 'Terminé'];
+  const trackIndex = (b) => (b.status === 'terminee' ? 4 : b.status === 'en_cours' ? 3 : b.status === 'attribuee' ? (b.on_way_at ? 2 : 1) : 0);
   function tracker(b) {
-    const i = trackIndex(b.status);
-    return `<ol class="track">${TRACK.map((t, k) => `<li class="${k < i ? 'done' : k === i ? 'now' : ''}">${t}</li>`).join('')}</ol>`;
+    const i = trackIndex(b);
+    const labels = [...TRACK];
+    if (b.status === 'attribuee' && b.arrived_at) labels[2] = 'Arrivée';
+    return `<ol class="track five">${labels.map((t, k) => `<li class="${k < i ? 'done' : k === i ? 'now' : ''}">${t}</li>`).join('')}</ol>`;
+  }
+  // fiche de l'intervenante (prénom, ancienneté, note réelle, langues, présentation)
+  async function workerCard(id) {
+    let c;
+    try { c = await api('GET', `/api/workers/${id}/card`); } catch { return ''; }
+    const since = new Date(c.since + '-01T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const meta = [`Intervenante vérifiée depuis ${since}`, c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
+    return `<div class="wcard">
+      <div class="wcard-av" aria-hidden="true">${esc(c.firstName.slice(0, 1))}</div>
+      <div class="wcard-name">${esc(c.firstName)}</div>
+      <div class="wcard-meta">${esc(meta)}${c.languages ? `<br>Parle ${esc(c.languages)}` : ''}</div>
+      ${c.bio ? `<p class="wcard-bio">${esc(c.bio)}</p>` : ''}
+      ${c.reviews.length ? `<p class="wcard-rev">« ${esc(c.reviews[0].review)} »</p>` : ''}
+    </div>`;
   }
   function rebook(b) {
     draft = { ...DRAFT0(), step: 2, service: b.service, size: b.size || 'T2', hours: b.hours, kit: !!b.kit, cp: b.cp, address: b.address, photoConsent: !!b.photo_consent, home_id: b.home_id || null, tasks: b.checklist.map((t) => t.task), tasksService: b.service };
@@ -204,14 +390,22 @@
     const toRate = list.find((b) => b.status === 'terminee' && !b.rating);
     const last = list.find((b) => b.status === 'terminee');
     $app.innerHTML = `
-      <div class="row"><h1>Bonjour ${esc(me.name.split(' ')[0])}</h1><a class="btn primary" href="#/reserver" id="newB">Réserver un ménage</a></div>
+      <section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Bonjour ${esc(me.name.split(' ')[0])}</p>
+          <h1>${next ? (next.status === 'en_cours' ? 'Votre ménage est en cours' : 'Votre prochain ménage') : 'Aucun ménage prévu'}</h1>
+          ${next ? `<p class="hello-when">${esc(dateLong(next.date))} à ${esc(next.time)}</p>${tracker(next)}` : `<p class="hello-sub">Choisissez une date : l'équipe vous confirme l'intervenante.</p>
+            ${last ? `<button class="btn primary" data-again="${last.id}">Refaire le même ménage</button>` : '<a class="btn primary" href="#/reserver" id="newB0">Réserver un ménage</a>'}`}
+        </div>
+        <div class="hello-art" aria-hidden="true">${next ? ART.services[next.service] || ART.services.menage : ART.empty}</div>
+      </section>
       ${next ? `
         <article class="card next">
-          <p class="small muted" style="margin:0">${next.status === 'en_cours' ? 'En ce moment' : 'Prochain ménage'}</p>
-          <h2 style="margin-top:4px">${esc(dateLong(next.date))} à ${esc(next.time)}</h2>
-          ${tracker(next)}
+          ${next.status === 'attribuee' && next.on_way_at ? `<p class="live-line"><span class="live-dot"></span>${next.arrived_at ? `${esc((next.worker_name || '').split(' ')[0])} est arrivée chez vous.` : `${esc((next.worker_name || '').split(' ')[0])} est en route.`}</p>` : ''}
+          ${next.worker_id ? '<div id="wcardHost"></div>' : ''}
+          ${next.status === 'en_cours' && next.checklist.length ? shine(next) : ''}
           <dl class="facts">
-            <div><dt>Intervenante</dt><dd>${next.worker_name ? `<b>${esc(next.worker_name.split(' ')[0])}</b>, intervenante vérifiée` : 'Nous confirmons votre intervenante très vite'}</dd></div>
+            ${next.worker_id ? '' : `<div><dt>Intervenante</dt><dd>L'équipe vous confirme votre intervenante très vite</dd></div>`}
             <div><dt>Adresse</dt><dd>${esc(next.address)}, ${esc(next.cp)}</dd></div>
             <div><dt>Prestation</dt><dd>${esc(label(next))} · <b>${eur(next.total)}</b></dd></div>
           </dl>
@@ -223,21 +417,71 @@
             <button class="btn ghost" data-again="${next.id}">Réserver à nouveau</button>
           </div>
           <div id="thread-${next.id}"></div>
-        </article>` : `
-        <article class="card empty"><h2>Aucun ménage prévu</h2><p class="muted">Réservez en quelques minutes : vous ne voyez que les créneaux réellement libres.</p>
-          ${last ? `<button class="btn primary" data-again="${last.id}">Refaire le même ménage</button>` : '<a class="btn primary" href="#/reserver">Réserver un ménage</a>'}</article>`}
+        </article>` : ''}
+      <a class="book-cta" href="#/compte" id="refCta"><span class="book-ico gift"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="9" width="17" height="11" rx="2"/><path d="M3.5 13h17M12 9v11M12 9S10.5 4 8 4.5 7 9 12 9zM12 9s1.5-5 4-4.5S17 9 12 9z"/></svg></span><span><b>Offrez 10 € à un proche</b><span>Et recevez 10 € après son premier ménage</span></span></a>
+      <a class="book-cta" href="#/reserver" id="newB"><span class="book-ico"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">${ART.star(16, 16, 13, '#fff')}</svg></span><span><b>Réserver un ménage</b><span>À domicile, Airbnb ou grand nettoyage</span></span></a>
       ${upcoming.length > 1 ? `<section class="card"><h3>À venir</h3><ul class="plain">${upcoming.slice(1, 6).map((b) => `<li><span><b>${dateFr(b.date)}</b> ${esc(b.time)} · ${esc(label(b))}</span><span>${b.worker_name ? esc(b.worker_name.split(' ')[0]) : '<span class="muted">à confirmer</span>'}</span></li>`).join('')}</ul></section>` : ''}
       ${toRate ? `<section class="card"><h3>Comment s'est passé le ménage du ${dateFr(toRate.date)} ?</h3><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${toRate.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div></section>` : ''}
       <nav class="quick" aria-label="Raccourcis"><a href="#/mes-reservations">Toutes mes réservations et reçus</a><a href="#/logements">Mes logements</a><a href="#/aide">Aide et réclamations</a></nav>`;
     document.getElementById('newB').onclick = () => { draft = DRAFT0(); };
+    const nb0 = document.getElementById('newB0');
+    if (nb0) nb0.onclick = () => { draft = DRAFT0(); };
     $app.querySelectorAll('[data-again]').forEach((b) => b.onclick = () => rebook(list.find((x) => String(x.id) === b.dataset.again)));
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-cancel]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Ménage annulé.'); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { sessionStorage.setItem('openEdit', b.dataset.edit); go('#/mes-reservations'); });
-    $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = async () => {
-      try { await api('POST', `/api/bookings/${btn.dataset.rate}/rate`, { stars: Number(btn.dataset.stars) }); toast('Merci pour votre avis.'); route(); } catch (e) { toast(e.message); }
-    });
+    $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
     bindThreads([]);
+    if (next && next.worker_id) workerCard(next.worker_id).then((h) => { const el = document.getElementById('wcardHost'); if (el) el.innerHTML = h; });
+    // le jour du ménage, l'écran se met à jour tout seul toutes les 45 secondes
+    clearTimeout(window.__liveTimer);
+    if (next && next.date === todayParis() && ['attribuee', 'en_cours'].includes(next.status)) {
+      window.__liveTimer = setTimeout(() => { if ((location.hash || '#/') === '#/' && !document.querySelector('.thread textarea:focus')) route(); }, 45000);
+    }
+  }
+
+  // Avis : on choisit les étoiles, puis on peut ajouter un mot avant d'envoyer
+  function pickStars(btn) {
+    const box = btn.closest('.stars');
+    const id = btn.dataset.rate;
+    const n = Number(btn.dataset.stars);
+    box.querySelectorAll('[data-rate]').forEach((b) => { b.classList.toggle('on', Number(b.dataset.stars) <= n); b.setAttribute('aria-pressed', Number(b.dataset.stars) === n); });
+    let f = box.nextElementSibling && box.nextElementSibling.classList.contains('review-form') ? box.nextElementSibling : null;
+    if (!f) {
+      f = document.createElement('form');
+      f.className = 'review-form stack';
+      f.innerHTML = '<label><span class="rv-label"></span><textarea name="review" rows="2" maxlength="500"></textarea></label><button class="btn blue">Envoyer mon avis</button>';
+      box.after(f);
+    }
+    f.querySelector('.rv-label').textContent = n >= 4 ? 'Un mot sur ce que vous avez aimé (facultatif)' : "Qu'est-ce qui n'allait pas ? L'équipe vous recontacte.";
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      try { const r = await api('POST', `/api/bookings/${id}/rate`, { stars: n, review: f.review.value }); toast(r.message || 'Merci pour votre avis.'); route(); } catch (err) { toast(err.message); }
+    };
+    f.review.focus({ preventScroll: true });
+  }
+
+  // Jauge « ça brille » : avance avec la checklist du ménage
+  const SHINE_WORDS = (pct) => (pct >= 100 ? 'Ça brille !' : pct >= 60 ? 'Presque fini' : pct > 0 ? "C'est parti" : 'Prêt à commencer');
+  function shine(b) {
+    const n = b.checklist.length;
+    const d = b.checklist.filter((t) => t.done).length;
+    const pct = n ? Math.round((d / n) * 100) : 0;
+    return `<div class="shine ${pct >= 100 ? 'full' : ''}" data-shine="${b.id}" role="progressbar" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${d}" aria-label="Tâches faites">
+      <div class="shine-top"><b>${SHINE_WORDS(pct)}</b><span>${d} sur ${n}</span></div>
+      <div class="shine-bar"><i style="width:${pct}%"></i></div></div>`;
+  }
+  function updateShine(id) {
+    const boxes = [...$app.querySelectorAll(`[data-check="${id}"]`)];
+    const el = $app.querySelector(`[data-shine="${id}"]`);
+    if (!el) return;
+    const d = boxes.filter((c) => c.checked).length;
+    const pct = boxes.length ? Math.round((d / boxes.length) * 100) : 0;
+    el.querySelector('b').textContent = SHINE_WORDS(pct);
+    el.querySelector('span').textContent = `${d} sur ${boxes.length}`;
+    el.querySelector('i').style.width = `${pct}%`;
+    el.setAttribute('aria-valuenow', d);
+    el.classList.toggle('full', pct >= 100);
   }
 
   // ---------- réservation en 4 étapes ----------
@@ -273,7 +517,7 @@
       shell(`
         <h1>Votre ménage</h1>
         ${homes.length ? `<label>Logement<select id="homeSel"><option value="">Autre adresse</option>${homes.map((h) => `<option value="${h.id}" ${draft.home_id === h.id ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select></label>` : ''}
-        <div class="svc">${['menage', 'grand', 'airbnb'].map((k) => `<button type="button" data-svc="${k}" aria-pressed="${draft.service === k}">${ICON[k]}<b>${SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
+        <div class="svc">${['menage', 'grand', 'airbnb'].map((k) => `<button type="button" data-svc="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${SERVICE[k]}</b><span>${SERVICE_HINT[k]}</span></button>`).join('')}</div>
         ${draft.service === 'airbnb'
           ? `<fieldset class="box"><legend>Taille du logement</legend><div class="chips">${Object.keys(SIZE).map((k) => `<button type="button" data-size="${k}" aria-pressed="${draft.size === k}">${SIZE[k]}</button>`).join('')}</div></fieldset>`
           : `<label>Durée<select id="hours">${[2, 2.5, 3, 3.5, 4, 5, 6, 7, 8].map((h) => `<option value="${h}" ${Number(draft.hours) === h ? 'selected' : ''}>${String(h).replace('.', ',')} h</option>`).join('')}</select></label>
@@ -411,7 +655,7 @@
           const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined });
           if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
           $app.innerHTML = `<section class="card wizard done-card">
-            <p class="big-check" aria-hidden="true">✓</p>
+            <div class="done-art">${ART.done}</div>
             <h1>C'est réservé !</h1>
             <p>${esc(dateLong(r.date))} à ${esc(r.time)}, ${esc(r.address)}.</p>
             <p>${r.worker_name ? `<b>${esc(r.worker_name.split(' ')[0])}</b>, intervenante vérifiée, viendra.` : 'Nous confirmons votre intervenante très vite.'}${r.created > 1 ? ` ${r.created} ménages sont réservés.` : ''}</p>
@@ -449,8 +693,10 @@
     };
   };
 
-  function signup(role) {
+  function signup(role, params) {
     const worker = role === 'intervenante';
+    const ref = params && params.get('ref') ? params.get('ref').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) : (sessionStorage.getItem('ref') || '');
+    if (ref) sessionStorage.setItem('ref', ref);
     $app.innerHTML = `
       <section class="card stack" style="max-width:520px;margin:auto">
         <h1>${worker ? 'Devenir intervenante' : 'Créer un compte'}</h1>
@@ -460,6 +706,7 @@
           <label>E-mail<input type="email" name="email" autocomplete="email" required></label>
           <label>Téléphone<input type="tel" name="phone" autocomplete="tel"></label>
           <label>Mot de passe (10 caractères minimum)<input type="password" name="password" autocomplete="new-password" minlength="10" required></label>
+          ${worker ? '' : `<label>Code de parrainage (facultatif)<input type="text" name="ref" maxlength="12" autocapitalize="characters" value="${esc(ref)}" placeholder="Ex. CLAIRE123"></label>${ref ? '<p class="msg ok" style="margin:0">10 € offerts sur votre premier ménage.</p>' : ''}`}
           ${worker ? `
             <label>Code postal de votre domicile<input type="text" name="cp" inputmode="numeric" maxlength="5" required></label>
             <label>Vous souhaitez travailler comme
@@ -475,14 +722,15 @@
       e.preventDefault();
       try {
         await api('POST', '/api/signup', { ...formData(e.target), role });
+        sessionStorage.removeItem('ref');
         await loadMe();
         go(worker ? '#/intervenante' : (sessionStorage.getItem('after') || '#/reserver'));
         sessionStorage.removeItem('after');
       } catch (err) { toast(err.message); }
     };
   }
-  views['inscription'] = () => signup('client');
-  views['inscription-intervenante'] = () => signup('intervenante');
+  views['inscription'] = (p) => signup('client', p);
+  views['inscription-intervenante'] = (p) => signup('intervenante', p);
 
   const REPEAT = { 7: 'Chaque semaine', 14: 'Toutes les 2 semaines' };
   views['mes-reservations'] = async () => {
@@ -508,7 +756,7 @@
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
           <p class="small muted" style="margin:6px 0 0">${PAY[b.payment_status] || ''}</p>
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
-          ${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
+          ${b.checklist.length && ['en_cours', 'terminee'].includes(b.status) ? shine(b) : ''}${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
           <div class="row" style="justify-content:flex-start;margin-top:10px">
             ${active && hoursLeft(b) >= 24 ? `<button class="btn ghost" data-edit="${b.id}">Modifier</button>` : ''}
@@ -547,7 +795,7 @@
     act('[data-pay-booking]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.payBooking}/pay`, {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); } });
     act('[data-cancel]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
     act('[data-stop]', async (btn) => { try { const r = await api('POST', `/api/series/${btn.dataset.stop}/stop`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
-    act('[data-rate]', async (btn) => { try { await api('POST', `/api/bookings/${btn.dataset.rate}/rate`, { stars: Number(btn.dataset.stars) }); toast('Merci pour votre avis.'); route(); } catch (e) { toast(e.message); } });
+    $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
     act('[data-edit]', (btn) => {
       const b = list.find((x) => String(x.id) === btn.dataset.edit);
       const box = document.getElementById(`edit-${b.id}`);
@@ -671,7 +919,15 @@
     const r = await api('GET', '/api/worker/missions');
     const p = r.profile;
     const isI = p.statut === 'I';
-    const head = `<div class="row"><h1>Bonjour ${esc(p.name.split(' ')[0])}</h1><span class="pill">${isI ? 'Indépendante' : 'Salariée'} · ${esc(p.cp)}</span></div>`;
+    const nToday = r.missions.filter((b) => b.date <= todayParis()).length;
+    const head = `<section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Bonjour ${esc(p.name.split(' ')[0])}</p>
+          <h1>${!r.active ? 'Votre candidature' : nToday ? `${nToday} mission${nToday > 1 ? 's' : ''} aujourd'hui` : 'Pas de mission aujourd\'hui'}</h1>
+          <p class="hello-sub">${isI ? 'Indépendante' : 'Salariée'} · secteur ${esc(p.cp)}</p>
+        </div>
+        <div class="hello-art" aria-hidden="true">${nToday ? ART.services.grand : ART.empty}</div>
+      </section>`;
     const cal = {};
     for (const a of r.availability) cal[a.weekday] = a;
     const calendar = `
@@ -711,21 +967,31 @@
           <div class="row"><h3>${esc(label(b))}</h3>${pill(b.status)}</div>
           <p style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · <b>${esc(b.address)}</b>, ${esc(b.cp)}</p>
           <p class="muted" style="margin:4px 0 0">Client : ${esc(b.client_name.split(' ')[0])}${b.home_name ? ` · ${esc(b.home_name)}` : ''}</p>
+          ${['attribuee', 'en_cours'].includes(b.status) ? routeLinks(b) : ''}
           ${b.instructions ? `<div class="box"><b>Consignes du logement</b><p style="margin:4px 0 0;white-space:pre-line">${esc(b.instructions)}</p></div>` : ''}
           ${b.kit ? '<p><span class="pill warn">Apporter le kit matériel et produits</span></p>' : ''}
-          ${b.checklist.length ? `<fieldset class="box"><legend>À faire</legend>${b.checklist.map((t, i) => `<label class="check"><input type="checkbox" data-check="${b.id}" data-index="${i}" ${t.done ? 'checked' : ''}> ${esc(t.task)}</label>`).join('')}</fieldset>` : ''}
+          ${b.checklist.length ? `${shine(b)}<fieldset class="box"><legend>À faire</legend>${b.checklist.map((t, i) => `<label class="check"><input type="checkbox" data-check="${b.id}" data-index="${i}" ${t.done ? 'checked' : ''}> ${esc(t.task)}</label>`).join('')}</fieldset>` : ''}
           ${b.photo_consent ? `<div class="box stack"><b>Photos avant / après</b>
             ${b.photos.length ? `<div class="photos">${b.photos.map((ph) => `<figure><img src="/api/photos/${ph.id}" alt="Photo ${ph.kind}" loading="lazy"><figcaption>${ph.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
             ${b.status === 'en_cours' ? `<div class="row" style="justify-content:flex-start"><label class="btn ghost">Photo avant<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="avant" hidden></label>
               <label class="btn ghost">Photo après<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="apres" hidden></label></div>
               <p class="small muted">Au moins une photo « après » est demandée pour terminer.</p>` : '<p class="small muted">Le client a accepté les photos : vous pourrez les prendre une fois le ménage commencé.</p>'}
           </div>` : '<p class="small muted">Pas de photos pour ce ménage (le client ne l\'a pas demandé).</p>'}
-          <div class="row" style="justify-content:flex-start">${act(b)}<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></div>
+          <div class="row" style="justify-content:flex-start">${act(b)}<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button>${['attribuee', 'en_cours'].includes(b.status) && b.date === todayParis() ? `<button class="btn ghost warn-ghost" data-problem="${b.id}">Problème sur place</button>` : ''}</div>
+          <div id="problem-${b.id}"></div>
           <div id="thread-${b.id}"></div>
         </article>`;
-    const act = (b) => b.status === 'attribuee'
-      ? `<button class="btn primary full" data-act="start" data-id="${b.id}">Commencer le ménage</button>`
-      : `<button class="btn primary full" data-act="finish" data-id="${b.id}">Terminer la mission</button>`;
+    // le jour J : je pars → je suis arrivée → commencer → terminer
+    const act = (b) => {
+      if (b.status !== 'attribuee') return `<button class="btn primary full" data-act="finish" data-id="${b.id}">Terminer la mission</button>`;
+      const isToday = b.date === todayParis();
+      const steps = isToday ? `<div class="dayflow">
+          <button class="btn ${b.on_way_at ? 'ghost done' : 'blue'}" data-act="onway" data-id="${b.id}" ${b.on_way_at ? 'disabled' : ''}>${b.on_way_at ? '✓ En route' : 'Je pars'}</button>
+          <button class="btn ${b.arrived_at ? 'ghost done' : b.on_way_at ? 'blue' : 'ghost'}" data-act="arrived" data-id="${b.id}" ${b.arrived_at ? 'disabled' : ''}>${b.arrived_at ? '✓ Arrivée' : 'Je suis arrivée'}</button>
+        </div>` : '';
+      return `${steps}<button class="btn primary full" data-act="start" data-id="${b.id}" ${isToday ? '' : 'disabled'}>Commencer le ménage</button>${isToday ? '' : '<p class="small muted" style="margin:4px 0 0">Les boutons du jour J s\'activent le jour de la mission.</p>'}`;
+    };
+    const routeLinks = (b) => { const dest = encodeURIComponent(`${b.address}, ${b.cp}, France`); return `<div class="route-links"><a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=transit" target="_blank" rel="noopener">Itinéraire Google Maps</a><a href="https://citymapper.com/directions?endaddress=${dest}" target="_blank" rel="noopener">Citymapper</a></div>`; };
     $app.innerHTML = `${head}
       ${p.absent ? '<p class="card"><span class="pill warn">Absente</span> Vos missions sont confiées à d\'autres intervenantes.</p>' : ''}
       <p class="muted">${isI ? `Vous choisissez vos missions et pouvez refuser sans pénalité. Votre tarif : ${eur(p.rate)}/h.` : 'Vos missions sont attribuées par le planning Proprigo.'}</p>
@@ -738,15 +1004,45 @@
         </article>`).join('') : '<p class="card muted">Aucune proposition pour le moment.</p>'}` : ''}
       ${today.length ? `<h2 style="margin-top:20px">Aujourd'hui</h2>${today.map(card).join('')}` : '<p class="card muted" style="margin-top:20px">Pas de mission aujourd\'hui.</p>'}
       ${later.length ? `<h2 style="margin-top:20px">À venir</h2>${(() => { const one = (b) => `<details class="card later"><summary><b>${dateFr(b.date)} ${esc(b.time)}</b> · ${esc(label(b))} · ${esc(b.cp)} ${pill(b.status)}</summary>${card(b)}</details>`; return later.slice(0, 5).map(one).join('') + (later.length > 5 ? `<details class="more"><summary>Voir les ${later.length - 5} autres missions</summary>${later.slice(5).map(one).join('')}</details>` : ''); })()}` : ''}
-      <section class="card"><h3>${isI ? 'Facturé' : 'Heures effectuées'}</h3>
-        <p style="margin:6px 0 0"><b style="font-family:Outfit;font-size:30px">${isI ? eur(r.done.h * p.rate) : String(r.done.h).replace('.', ',') + ' h'}</b></p>
-        <p class="small muted">${r.done.n} mission${r.done.n > 1 ? 's' : ''} terminée${r.done.n > 1 ? 's' : ''}</p></section>
+      <section class="card" id="gains"><h2>Mes gains</h2><p class="muted small">Chargement…</p></section>
       ${calendar}`;
     $app.querySelectorAll('[data-act]').forEach((btn) => btn.onclick = async () => {
-      try { await api('POST', `/api/worker/missions/${btn.dataset.id}/${btn.dataset.act}`, {}); toast('C\'est enregistré.'); route(); } catch (e) { toast(e.message); }
+      try { const r = await api('POST', `/api/worker/missions/${btn.dataset.id}/${btn.dataset.act}`, {}); toast(r.message || 'C\'est enregistré.'); route(); } catch (e) { toast(e.message); }
     });
+    // problème sur place : alerte immédiate de l'équipe
+    $app.querySelectorAll('[data-problem]').forEach((btn) => btn.onclick = () => {
+      const host = document.getElementById(`problem-${btn.dataset.problem}`);
+      if (host.innerHTML) { host.innerHTML = ''; return; }
+      host.innerHTML = `<form class="box stack problem-form">
+        <b>Que se passe-t-il ?</b>
+        ${[['acces', "Je n'arrive pas à entrer"], ['casse', 'Un objet est cassé ou abîmé'], ['etat', 'Logement bien plus sale que prévu'], ['securite', 'Je ne me sens pas en sécurité'], ['autre', 'Autre problème']].map(([k, t]) => `<label class="check"><input type="radio" name="kind" value="${k}" required> ${t}</label>`).join('')}
+        <label>Précisions (facultatif)<textarea name="text" rows="2" maxlength="600"></textarea></label>
+        <p class="small muted" style="margin:0">En cas de danger, appelez le 17.</p>
+        <button class="btn primary full">Prévenir l'équipe maintenant</button></form>`;
+      host.querySelector('form').onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r = await api('POST', `/api/worker/missions/${btn.dataset.problem}/problem`, formData(e.target)); host.innerHTML = `<p class="msg ok">${esc(r.message)}</p>`; } catch (err) { toast(err.message); }
+      };
+    });
+    // mes gains
+    api('GET', '/api/worker/earnings').then((g) => {
+      const el = document.getElementById('gains');
+      if (!el) return;
+      const val = (x) => (g.statut === 'I' ? eur(x.eur) : `${String(x.h).replace('.', ',')} h`);
+      const mname = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', timeZone: 'UTC' });
+      const max = Math.max(1, ...g.history.map((h) => h.h));
+      el.innerHTML = `<h2>Mes gains</h2>
+        <div class="gain-grid">
+          <div class="gain main"><span>Ce mois-ci</span><b>${val(g.month)}</b><small>${g.month.n} ménage${g.month.n > 1 ? 's' : ''} terminé${g.month.n > 1 ? 's' : ''}</small></div>
+          <div class="gain"><span>Mois dernier</span><b>${val(g.lastMonth)}</b><small>${g.lastMonth.n} ménage${g.lastMonth.n > 1 ? 's' : ''}</small></div>
+          <div class="gain"><span>À venir</span><b>${val(g.upcoming)}</b><small>${g.upcoming.n} mission${g.upcoming.n > 1 ? 's' : ''} prévue${g.upcoming.n > 1 ? 's' : ''}</small></div>
+        </div>
+        ${g.history.length ? `<div class="gain-bars" aria-label="Heures des derniers mois">${g.history.slice().reverse().map((h) => `<div><i style="height:${Math.max(6, Math.round((h.h / max) * 70))}px"></i><span>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'short', timeZone: 'UTC' })}</span></div>`).join('')}</div>` : ''}
+        <p class="small muted" style="margin:8px 0 0">${g.statut === 'I' ? `Calculé avec votre tarif de ${eur(g.rate)}/h, avant vos cotisations.` : 'Heures de ménage réalisées. Le salaire figure sur votre fiche de paie.'}</p>`;
+    }).catch(() => {});
     $app.querySelectorAll('[data-check]').forEach((c) => c.onchange = async () => {
-      try { await api('POST', `/api/worker/missions/${c.dataset.check}/checklist`, { index: Number(c.dataset.index), done: c.checked }); } catch (e) { toast(e.message); c.checked = !c.checked; }
+      updateShine(c.dataset.check);
+      try { await api('POST', `/api/worker/missions/${c.dataset.check}/checklist`, { index: Number(c.dataset.index), done: c.checked }); } catch (e) { toast(e.message); c.checked = !c.checked; updateShine(c.dataset.check); }
     });
     $app.querySelectorAll('[data-photo]').forEach((inp) => inp.onchange = async () => {
       const f = inp.files[0];
@@ -799,6 +1095,8 @@
   views['admin'] = async () => {
     if (!me || me.role !== 'admin') return go('#/connexion');
     const r = await api('GET', '/api/admin/overview');
+    const owner = r.staff !== 'planning';
+    const m = r.metrics;
     const k = r.kpis;
     const ob = await api('GET', '/api/admin/outbox').catch(() => ({ list: [] }));
     const bk = await api('GET', '/api/admin/backups').catch(() => ({ enabled: false, list: [] }));
@@ -807,16 +1105,37 @@
       ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
-      ...r.incidents.map((x) => `<li class="urgent"><span><b>Réclamation</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
+      ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
       ...(k.aRembourser.n ? [`<li><span><b>Remboursements</b> · ${k.aRembourser.n} réservation(s), ${eur(k.aRembourser.montant)}</span><button class="btn ghost" data-goto="table">Voir</button></li>`] : []),
       ...(r.workers.some((w) => !w.active) ? [`<li><span><b>Candidatures</b> · ${r.workers.filter((w) => !w.active).length} intervenante(s) en cours de recrutement</span><button class="btn ghost" data-goto="team">Voir</button></li>`] : []),
     ];
     $app.innerHTML = `
-      <h1>Tableau de bord</h1>
+      <section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Tableau de bord</p>
+          <h1>${todo.length ? `${todo.length} chose${todo.length > 1 ? 's' : ''} à traiter` : 'Tout est en ordre'}</h1>
+          <p class="hello-sub">${k.reservations} réservation${k.reservations > 1 ? 's' : ''} · note moyenne ${k.noteMoyenne ? String(k.noteMoyenne).replace('.', ',') + ' / 5' : '–'}</p>
+        </div>
+        <div class="hello-art" aria-hidden="true">${todo.length ? ART.empty : ART.done}</div>
+      </section>
       ${r.paymentsEnabled ? '' : '<p class="card"><span class="pill warn">Paiement simulé</span> Aucun argent n\'est encaissé dans cette version. Le chiffre d\'affaires affiché est théorique.</p>'}
-      <nav class="tabs" role="tablist" aria-label="Administration">${[['todo', `À traiter${todo.length ? ` (${todo.length})` : ''}`], ['resa', 'Réservations'], ['equipe', 'Équipe'], ['chiffres', 'Chiffres'], ['suivi', 'Suivi']].map(([k, t]) => `<button type="button" role="tab" data-tab-btn="${k}">${t}</button>`).join('')}</nav>
+      <nav class="tabs" role="tablist" aria-label="Administration">${[['todo', `À traiter${todo.length ? ` (${todo.length})` : ''}`], ['planning', 'Planning'], ['resa', 'Réservations'], ['equipe', 'Équipe'], ...(owner ? [['chiffres', 'Chiffres'], ['suivi', 'Suivi']] : [])].map(([k, t]) => `<button type="button" role="tab" data-tab-btn="${k}">${t}</button>`).join('')}</nav>
       <section class="card todo" data-tab="todo"><h2>À traiter maintenant</h2>${todo.length ? `<ul class="plain">${todo.join('')}</ul>` : '<p class="msg ok">Rien d\'urgent : toutes les missions des 3 prochains jours ont une intervenante.</p>'}</section>
+      ${m ? `<section class="card" data-tab="chiffres"><h2>Argent réellement encaissé</h2>
+        <p class="small muted">Paiements confirmés par Stripe, remboursements déduits.</p>
+        <div class="gain-grid">
+          <div class="gain main"><span>Ce mois-ci</span><b>${eur(m.encaisseMois)}</b><small>${m.encaisseMoisPrecedent ? `${m.encaisseMois >= m.encaisseMoisPrecedent ? '+' : ''}${Math.round(((m.encaisseMois - m.encaisseMoisPrecedent) / m.encaisseMoisPrecedent) * 100)} % sur le mois dernier` : 'Premier mois'}</small></div>
+          <div class="gain"><span>Mois dernier</span><b>${eur(m.encaisseMoisPrecedent)}</b><small>Encaissé net</small></div>
+          <div class="gain"><span>Depuis le début</span><b>${eur(m.encaisseTotal)}</b><small>Encaissé net</small></div>
+        </div>
+        <div class="gain-grid" style="margin-top:10px">
+          <div class="gain"><span>Clients qui reviennent</span><b>${m.clientsActifs ? Math.round((m.clientsFideles / m.clientsActifs) * 100) : 0} %</b><small>${m.clientsFideles} sur ${m.clientsActifs} ont fait 2 ménages ou plus</small></div>
+          <div class="gain"><span>Annulations</span><b>${m.tauxAnnulation} %</b><small>des réservations</small></div>
+          <div class="gain"><span>Parrainages</span><b>${m.parrainages}</b><small>clients venus par un proche</small></div>
+        </div>
+        ${m.zones.length ? `<h3 style="margin-top:16px">Codes postaux les plus demandés</h3><ul class="plain">${m.zones.map((z) => `<li><span>${esc(z.cp)}</span><span class="muted">${z.n} réservation${z.n > 1 ? 's' : ''}</span></li>`).join('')}</ul>` : ''}
+      </section>` : ''}
       <div class="kpis" data-tab="chiffres">
         <div class="kpi"><span class="small muted">Réservations</span><b>${k.reservations}</b><span class="small muted">${k.terminees} terminées</span></div>
         <div class="kpi"><span class="small muted">Chiffre d'affaires HT</span><b>${eur(k.caHT)}</b><span class="small muted">missions terminées</span></div>
@@ -824,11 +1143,12 @@
         <div class="kpi"><span class="small muted">À rembourser</span><b>${eur(k.aRembourser.montant)}</b><span class="small muted">${k.aRembourser.n} réservation${k.aRembourser.n > 1 ? 's' : ''} annulée${k.aRembourser.n > 1 ? 's' : ''}</span></div>
         <div class="kpi"><span class="small muted">Note moyenne</span><b>${k.noteMoyenne ? String(k.noteMoyenne).replace('.', ',') + ' / 5' : '–'}</b><span class="small muted">${k.clients} client${k.clients > 1 ? 's' : ''}</span></div>
       </div>
+      <section class="card plan-card" data-tab="planning"><div id="plan"><p class="muted">Chargement du planning…</p></div><div id="planPick"></div></section>
       <section class="card" id="sec-table" data-tab="resa"><h2>Réservations</h2><div class="scroll"><table class="bk">
         <thead><tr><th>N°</th><th>Prestation</th><th>Date</th><th>Code postal</th><th>Intervenante</th><th>État</th><th class="n">Prix TTC</th><th>Paiement</th><th></th></tr></thead>
         <tbody>${r.bookings.map((b) => `<tr class="bkrow"><td data-l="N°"><b>n° ${b.id}</b></td><td data-l="Prestation">${esc(label(b))}${b.kit ? ' <span class="pill">matériel</span>' : ''}</td><td data-l="Date">${dateFr(b.date)} ${esc(b.time)}</td><td data-l="Code postal">${esc(b.cp)}</td>
           <td data-l="Intervenante">${b.worker_name ? esc(b.worker_name) : '<span class="muted">–</span>'}</td><td data-l="État">${pill(b.status)}${b.rating ? ' ' + '★'.repeat(b.rating) : ''}</td><td class="n" data-l="Prix TTC">${eur(b.total)}</td><td class="small" data-l="Paiement">${PAY[b.payment_status] || ''}</td>
-          <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) && b.paid ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${b.payment_status === 'a_rembourser' ? `<button class="btn ghost" data-refund="${b.id}">Marquer remboursé</button>` : ''}<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
+          <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) && b.paid ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${owner && b.payment_status === 'a_rembourser' ? `<button class="btn blue" data-srefund="${b.id}" data-amount="${eur(b.refund_amount ?? b.total)}">Rembourser ${eur(b.refund_amount ?? b.total)}</button><button class="btn ghost" data-refund="${b.id}">Déjà remboursé dans Stripe</button>` : ''}<button class="btn ghost" data-cfile="${b.client_id}">Fiche client</button><button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
       </table></div></section>
       ${r.incidents.length ? `<section class="card" id="sec-incidents" data-tab="todo"><h2>Problèmes signalés par les clients</h2>${r.incidents.map((x) => `
         <div class="row box" style="margin-top:8px"><div><b>Réservation n° ${x.booking_id}</b> · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}<br>${esc(x.text)}</div>
@@ -836,7 +1156,7 @@
         <div id="thread-inc-${x.booking_id}"></div>`).join('')}</section>` : ''}
       <section class="card" id="sec-team" data-tab="equipe"><h2>Équipe et recrutement</h2>
         <p class="small muted">Aucune mission avant le statut « Active ».</p>
-        <form id="admin-add-worker" class="card" style="margin:12px 0;padding:16px">
+        ${owner ? `<form id="admin-add-worker" class="card" style="margin:12px 0;padding:16px">
           <h3>Ajouter une intervenante réelle</h3>
           <div class="grid2">
             <label>Nom<input name="name" required maxlength="80" placeholder="Prénom et nom"></label>
@@ -854,9 +1174,19 @@
           <p class="small muted">Cinq profils fictifs marqués TEST, inactifs et absents. Ils ne doivent jamais être attribués à une mission réelle. Sur Render, autorisation temporaire ALLOW_DEMO_WORKERS=true nécessaire.</p>
           <button type="button" class="btn ghost" id="admin-demo-workers">Créer les 5 profils fictifs</button>
         </div>
+        <details class="card" style="margin:12px 0;padding:16px" id="staffBox"><summary>Comptes de l'équipe</summary>
+          <p class="small muted">Un compte « planning » voit le planning, les réservations, l'équipe et les messages. Il ne voit ni les chiffres, ni les coordonnées complètes, et ne peut pas rembourser.</p>
+          <ul class="plain small" id="staffList"><li class="muted">Chargement…</li></ul>
+          <form id="staffForm" class="grid2" style="gap:10px;margin-top:10px">
+            <label>Nom<input name="name" required maxlength="80"></label>
+            <label>E-mail<input name="email" type="email" required maxlength="120"></label>
+            <label>Mot de passe provisoire (12 caractères min.)<input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+            <button class="btn blue" style="align-self:end">Créer un compte planning</button>
+          </form>
+        </details>` : ''}
         <div class="grid2" style="gap:12px">${r.workers.map((w) => `
           <div class="card" style="margin:0">
-            <div class="row"><b>${esc(w.name)}</b><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span></div>
+            <div class="row"><b>${esc(w.name)}</b><span class="row" style="gap:6px"><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span><button class="btn ghost small-btn" data-wfile="${w.user_id}">Fiche</button></span></div>
             <span class="small muted">${esc(w.cp)}${w.rate ? ' · ' + eur(w.rate) + '/h' : ''} · ${esc(w.email)}</span>
             <div class="prog"><i style="width:${(w.step / (w.steps.length - 1)) * 100}%"></i></div>
             <div class="row"><span class="small">${w.active ? (w.absent ? '<span class="pill warn">Absente</span>' : '<span class="pill ok">Active</span>') : 'À valider : ' + esc(w.steps[w.step + 1])}</span>
@@ -872,8 +1202,8 @@
           ${bk.error ? `<p class="msg warn">Dernière sauvegarde en échec : ${esc(bk.error)}</p>` : ''}
           <ul class="plain small">${bk.list.map((x) => `<li><span>${new Date(x.time).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><span class="muted">${Math.max(1, Math.round(x.size / 1024))} Ko</span></li>`).join('') || '<li class="muted">Aucune sauvegarde pour le moment.</li>'}</ul>
           <button class="btn ghost" id="doBackup">Sauvegarder maintenant</button>` : '<p class="small muted">Sauvegardes désactivées.</p>'}</section>
-        <section class="card" data-tab="chiffres"><h2>Hypothèses de marge</h2><p class="small muted">La marge est une estimation. Ces valeurs sont dans le fichier <b>config/couts.json</b> : faites-les valider par votre expert-comptable puis modifiez-les si besoin (redémarrage nécessaire).</p>
-          <ul class="small"><li>Coût d'une salariée par heure facturée : ${eur(r.couts.salarieeParHeureFacturee)}</li><li>TVA particuliers : ${Math.round(r.couts.tvaParticulier * 100)} % · professionnels : ${Math.round(r.couts.tvaPro * 100)} %</li><li>Produits par mission : ${eur(r.couts.produits)} · matériel fourni : ${eur(r.couts.kitCout)}</li></ul></section>
+        ${r.couts ? `<section class="card" data-tab="chiffres"><h2>Hypothèses de marge</h2><p class="small muted">La marge est une estimation. Ces valeurs sont dans le fichier <b>config/couts.json</b> : faites-les valider par votre expert-comptable puis modifiez-les si besoin (redémarrage nécessaire).</p>
+          <ul class="small"><li>Coût d'une salariée par heure facturée : ${eur(r.couts.salarieeParHeureFacturee)}</li><li>TVA particuliers : ${Math.round(r.couts.tvaParticulier * 100)} % · professionnels : ${Math.round(r.couts.tvaPro * 100)} %</li><li>Produits par mission : ${eur(r.couts.produits)} · matériel fourni : ${eur(r.couts.kitCout)}</li></ul></section>` : ''}
         <section class="card" data-tab="suivi" id="journal"><h2>Journal</h2>
           <div class="grid2" style="gap:10px">
             <label>Type<select id="jType"><option value="">Tout</option>${Object.entries(EVENT_TYPES).map(([k, [t]]) => `<option value="${k}">${t}</option>`).join('')}</select></label>
@@ -906,12 +1236,125 @@
     bind('data-advance', (id) => `/api/admin/workers/${id}/advance`);
     bind('data-absent', (id) => `/api/admin/workers/${id}/absent`);
     bind('data-refund', (id) => `/api/admin/bookings/${id}/refunded`);
+    const openFile = async (kind, id) => {
+      let dlg = document.getElementById('fileDlg');
+      if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'fileDlg'; dlg.className = 'file-dlg'; document.body.appendChild(dlg); }
+      dlg.innerHTML = '<p class="muted">Chargement…</p>';
+      if (!dlg.open) dlg.showModal();
+      let d;
+      try { d = await api('GET', kind === 'client' ? `/api/admin/clients/${id}` : `/api/admin/workers/${id}/file`); } catch (e) { dlg.innerHTML = `<p class="err">${esc(e.message)}</p><button class="btn ghost" data-close>Fermer</button>`; dlg.querySelector('[data-close]').onclick = () => dlg.close(); return; }
+      const notes = `<h3>Notes de l'équipe</h3>
+        <form class="note-form"><textarea name="text" rows="2" maxlength="1000" placeholder="Ex. préfère le matin, code d'accès changé…" aria-label="Nouvelle note"></textarea><button class="btn blue">Ajouter</button></form>
+        <ul class="plain small">${d.notes.map((n) => `<li><span>${esc(n.text)}<br><span class="muted">${esc(n.author)} · ${new Date(n.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span></span></li>`).join('') || '<li class="muted">Aucune note.</li>'}</ul>`;
+      if (kind === 'client') {
+        const c = d.client;
+        dlg.innerHTML = `<div class="dlg-head"><h2>${esc(c.name)}</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
+          <p class="muted small">Client depuis ${new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}${c.email ? ` · ${esc(c.email)}` : ''}${c.phone ? ` · ${esc(c.phone)}` : ''}${c.referred_by ? ' · venu par parrainage' : ''}</p>
+          <div class="gain-grid"><div class="gain"><span>Ménages</span><b>${d.stats.menages}</b></div><div class="gain"><span>Annulés</span><b>${d.stats.annules}</b></div>${d.stats.depense !== null ? `<div class="gain"><span>Dépensé</span><b>${eur(d.stats.depense)}</b></div>` : ''}</div>
+          ${d.homes.length ? `<p class="small" style="margin-top:10px"><b>Logements :</b> ${d.homes.map((h) => esc(h.name)).join(', ')}</p>` : ''}
+          <h3>Historique</h3><ul class="plain small">${d.bookings.slice(0, 12).map((b) => `<li><span>n° ${b.id} · ${dateFr(b.date)} ${esc(b.time)} · ${esc(label(b))}${b.rating ? ` · ${'★'.repeat(b.rating)}` : ''}${b.review ? `<br><span class="muted">« ${esc(b.review)} »</span>` : ''}</span>${pill(b.status)}</li>`).join('')}</ul>${notes}`;
+      } else {
+        const w = d.worker;
+        dlg.innerHTML = `<div class="dlg-head"><h2>${esc(w.name)}</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
+          <p class="muted small">${w.statut === 'S' ? 'Salariée' : `Indépendante · ${eur(w.rate)}/h`} · ${esc(w.cp)}${w.email ? ` · ${esc(w.email)}` : ''}${w.phone ? ` · ${esc(w.phone)}` : ''}${w.languages ? ` · parle ${esc(w.languages)}` : ''}</p>
+          <div class="gain-grid"><div class="gain"><span>Missions</span><b>${d.stats.missions}</b><small>${String(d.stats.heures).replace('.', ',')} h</small></div><div class="gain"><span>Note</span><b>${d.stats.note ? String(d.stats.note).replace('.', ',') + ' / 5' : '–'}</b><small>${d.stats.avis} avis</small></div><div class="gain"><span>Refus · problèmes</span><b>${d.stats.refus} · ${d.stats.problemes}</b></div></div>
+          ${d.lowRatings.length ? `<h3>Notes basses à suivre</h3><ul class="plain small">${d.lowRatings.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} · ${'★'.repeat(x.rating)}${x.review ? `<br><span class="muted">« ${esc(x.review)} »</span>` : ''}</span></li>`).join('')}</ul>` : ''}
+          <h3>Prochaines missions</h3><ul class="plain small">${d.upcoming.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}</span></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>${notes}`;
+      }
+      dlg.querySelector('[data-close]').onclick = () => dlg.close();
+      dlg.querySelector('.note-form').onsubmit = async (e) => {
+        e.preventDefault();
+        try { await api('POST', '/api/admin/notes', { kind: kind === 'client' ? 'client' : 'worker', target_id: id, text: e.target.text.value }); toast('Note enregistrée.'); openFile(kind, id); } catch (err) { toast(err.message); }
+      };
+    };
+    $app.querySelectorAll('[data-cfile]').forEach((b) => b.onclick = () => openFile('client', Number(b.dataset.cfile)));
+    $app.querySelectorAll('[data-wfile]').forEach((b) => b.onclick = () => openFile('worker', Number(b.dataset.wfile)));
+    const staffBox = document.getElementById('staffBox');
+    if (staffBox) {
+      staffBox.addEventListener('toggle', async () => {
+        if (!staffBox.open) return;
+        const list = await api('GET', '/api/admin/staff').catch(() => []);
+        document.getElementById('staffList').innerHTML = list.map((u) => `<li><span>${esc(u.name)}<br><span class="muted">${esc(u.email)}</span></span><span class="pill">${u.level === 'planning' ? 'Planning' : 'Responsable'}</span></li>`).join('');
+      });
+      document.getElementById('staffForm').onsubmit = async (e) => {
+        e.preventDefault();
+        try { const res = await api('POST', '/api/admin/staff', formData(e.target)); toast(res.message); e.target.reset(); staffBox.open = false; staffBox.open = true; } catch (err) { toast(err.message); }
+      };
+    }
+    $app.querySelectorAll('[data-srefund]').forEach((btn) => btn.onclick = async () => {
+      if (!confirm(`Rembourser ${btn.dataset.amount} au client par Stripe ? L'argent part tout de suite sur sa carte.`)) return;
+      btn.disabled = true;
+      try { const r = await api('POST', `/api/admin/bookings/${btn.dataset.srefund}/refund`, {}); toast(r.message); route(); }
+      catch (e) { toast(e.message); btn.disabled = false; }
+    });
     bind('data-resolve', (id) => `/api/admin/incidents/${id}/resolve`);
     const showTab = (k) => {
       sessionStorage.setItem('adminTab', k);
       $app.querySelectorAll('[data-tab]').forEach((el) => { el.hidden = el.dataset.tab !== k; });
       $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.setAttribute('aria-selected', t.dataset.tabBtn === k));
+      if (k === 'planning') loadPlanning(planStart);
     };
+    // ---- planning de la semaine : une ligne par intervenante, glisser un ménage pour l'attribuer ----
+    let planStart = sessionStorage.getItem('planStart') || todayParis();
+    const addDays = (d, n) => new Date(Date.parse(d + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+    async function loadPlanning(start) {
+      planStart = start;
+      sessionStorage.setItem('planStart', start);
+      const box = document.getElementById('plan');
+      let p;
+      try { p = await api('GET', `/api/admin/planning?start=${start}`); } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+      const days = Array.from({ length: 7 }, (_, i) => addDays(p.start, i));
+      const chip = (b, movable) => `<button type="button" class="pchip st-${b.status}" data-bk="${b.id}" ${movable ? 'draggable="true"' : ''} title="Réservation n° ${b.id}">
+          <b>${esc(b.time)}</b> ${esc(b.label)}<span>${esc(b.cp)}${b.paid ? '' : ' · à payer'}</span></button>`;
+      const movable = (b) => ['en_attente', 'proposee', 'attribuee'].includes(b.status);
+      const cell = (wid, d) => {
+        const list = p.bookings.filter((b) => b.date === d && (wid ? b.worker_id === wid : !b.worker_id));
+        return `<td class="pcell" data-worker="${wid || ''}" data-day="${d}">${list.map((b) => chip(b, movable(b))).join('')}</td>`;
+      };
+      const unassigned = p.bookings.filter((b) => !b.worker_id).length;
+      box.innerHTML = `
+        <div class="plan-head">
+          <h2>Semaine du ${dateFr(p.start)}</h2>
+          <div class="row" style="gap:6px;flex-wrap:nowrap">
+            <button class="btn ghost" data-week="-7" aria-label="Semaine précédente">‹</button>
+            <button class="btn ghost" data-week="0">Aujourd'hui</button>
+            <button class="btn ghost" data-week="7" aria-label="Semaine suivante">›</button>
+          </div>
+        </div>
+        <p class="small muted">${unassigned ? `${unassigned} ménage${unassigned > 1 ? 's' : ''} à attribuer. ` : ''}Faites glisser un ménage sur la ligne d'une intervenante, ou touchez-le pour choisir dans la liste.</p>
+        <div class="plan-scroll"><table class="plan">
+          <thead><tr><th></th>${days.map((d) => `<th class="${d === todayParis() ? 'today' : ''}">${dateFr(d)}</th>`).join('')}</tr></thead>
+          <tbody>
+            <tr class="unassigned"><th>À attribuer</th>${days.map((d) => cell(null, d)).join('')}</tr>
+            ${p.workers.map((w) => `<tr class="${w.absent ? 'absent' : ''}"><th>${esc(w.name)}<span>${w.statut === 'S' ? 'Salariée' : 'Indépendante'}${w.absent ? ' · absente' : ''}</span></th>${days.map((d) => cell(w.user_id, d)).join('')}</tr>`).join('') || '<tr><td colspan="8" class="muted">Aucune intervenante active.</td></tr>'}
+          </tbody></table></div>`;
+      box.querySelectorAll('[data-week]').forEach((b) => b.onclick = () => loadPlanning(b.dataset.week === '0' ? todayParis() : addDays(planStart, Number(b.dataset.week))));
+      box.querySelectorAll('.pchip').forEach((c) => {
+        c.onclick = () => {
+          box.querySelectorAll('.pchip.sel').forEach((x) => x.classList.remove('sel'));
+          c.classList.add('sel');
+          const host = document.getElementById('planPick');
+          showPicker(c.dataset.bk, host);
+          host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        };
+        c.ondragstart = (e) => { e.dataTransfer.setData('text/plain', c.dataset.bk); e.dataTransfer.effectAllowed = 'move'; c.classList.add('dragging'); };
+        c.ondragend = () => c.classList.remove('dragging');
+      });
+      box.querySelectorAll('.pcell[data-worker]:not([data-worker=""])').forEach((td) => {
+        td.ondragover = (e) => { e.preventDefault(); td.classList.add('over'); };
+        td.ondragleave = () => td.classList.remove('over');
+        td.ondrop = async (e) => {
+          e.preventDefault();
+          td.classList.remove('over');
+          const id = e.dataTransfer.getData('text/plain');
+          const b = p.bookings.find((x) => String(x.id) === id);
+          if (!b) return;
+          if (b.date !== td.dataset.day) { toast('Pour changer de jour, modifiez la réservation. Ici, on change seulement d\'intervenante.'); return; }
+          try { const r = await api('POST', `/api/admin/bookings/${id}/assign`, { worker_id: td.dataset.worker }); toast(r.message || 'Intervenante attribuée.'); loadPlanning(planStart); }
+          catch (err) { toast(err.message); }
+        };
+      });
+    }
     $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.onclick = () => { showTab(t.dataset.tabBtn); window.scrollTo(0, 0); });
     showTab(sessionStorage.getItem('adminTab') || 'todo');
     const paintJournal = () => {
@@ -1027,10 +1470,38 @@
   };
 
   // ---------- mon compte ----------
-  views['compte'] = () => {
+  views['compte'] = async () => {
     if (!me) return go('#/connexion');
+    let card = null;
+    let ref = null;
+    if (me.role === 'intervenante') card = await api('GET', `/api/workers/${me.id}/card`).catch(() => null);
+    if (me.role === 'client') ref = await api('GET', '/api/referral').catch(() => null);
+    const year = new Date().getFullYear();
     $app.innerHTML = `
       <h1>Mon compte</h1>
+      ${ref ? `<section class="hello refer">
+        <div class="hello-text">
+          <p class="hello-hi">Parrainage</p>
+          <h1>Offrez ${ref.amount} €, recevez ${ref.amount} €</h1>
+          <p class="hello-sub">Votre proche a ${ref.amount} € de réduction sur son premier ménage. Vous recevez ${ref.amount} € dès qu'il est fait.${ref.credit ? ` <b>Crédit disponible : ${eur(ref.credit)}</b>, déduit de votre prochaine réservation.` : ''}</p>
+          <div class="ref-code"><span>Votre code</span><b>${esc(ref.code)}</b></div>
+          <div class="actions"><button class="btn primary" id="shareRef">Partager mon lien</button><button class="btn ghost light" id="copyRef">Copier le lien</button></div>
+          ${ref.friends ? `<p class="hello-sub" style="margin:10px 0 0">${ref.friends} proche${ref.friends > 1 ? 's' : ''} inscrit${ref.friends > 1 ? 's' : ''} avec votre code.</p>` : ''}
+        </div>
+      </section>
+      <section class="card stack"><h2>Mes documents</h2>
+        <p class="small muted">Les reçus de chaque ménage sont dans « Mes ménages ». L'attestation annuelle récapitule les ménages à domicile pour le crédit d'impôt.</p>
+        <div class="actions" style="margin:0"><a class="btn ghost" href="/api/me/attestation?year=${year}" target="_blank" rel="noopener">Attestation ${year}</a><a class="btn ghost" href="/api/me/attestation?year=${year - 1}" target="_blank" rel="noopener">Attestation ${year - 1}</a></div>
+      </section>` : ''}
+      ${me.role === 'intervenante' ? `<section class="card stack">
+        <h2>Ma présentation aux clients</h2>
+        <p class="small muted">Vos clients voient votre prénom, votre ancienneté, votre note et ce texte. Jamais votre nom de famille ni votre téléphone.</p>
+        <form id="wprof" class="stack">
+          <label>Quelques mots sur vous<textarea name="bio" rows="3" maxlength="300" placeholder="Ex. Sept ans d'expérience, j'aime les intérieurs nets et je fais attention aux objets fragiles.">${esc(card ? card.bio : '')}</textarea></label>
+          <label>Langues parlées<input type="text" name="languages" maxlength="120" value="${esc(card ? card.languages : '')}" placeholder="Ex. français, arabe"></label>
+          <button class="btn blue">Enregistrer ma présentation</button>
+        </form>
+      </section>` : ''}
       <div class="grid2">
         <section class="card stack">
           <h2>Mes informations</h2>
@@ -1051,6 +1522,7 @@
           </form>
         </section>
       </div>
+      <button type="button" class="btn ghost full" id="logout2">Se déconnecter</button>
       <section class="card stack">
         <h2>Mes données</h2>
         <p class="small">Vos données servent seulement à organiser vos ménages. Détails dans la <a href="#/confidentialite">politique de confidentialité</a>.</p>
@@ -1063,6 +1535,17 @@
           </form>
         </details>` : `<p class="small muted">${me.role === 'admin' ? 'Compte administrateur : choisissez un mot de passe long et unique avant de partager le site.' : "Pour fermer votre compte intervenante, écrivez à l'équipe Proprigo : certains documents liés à votre activité doivent être conservés."}</p>`}
       </section>`;
+    if (ref) {
+      const text = `Je te recommande Proprigo pour le ménage : ${ref.amount} € offerts sur ton premier ménage avec mon code ${ref.code}.`;
+      document.getElementById('copyRef').onclick = async () => { try { await navigator.clipboard.writeText(ref.link); toast('Lien copié.'); } catch { toast(ref.link); } };
+      document.getElementById('shareRef').onclick = async () => {
+        if (navigator.share) { try { await navigator.share({ title: 'Proprigo', text, url: ref.link }); } catch { /* partage annulé */ } }
+        else { try { await navigator.clipboard.writeText(`${text} ${ref.link}`); toast('Message copié : collez-le dans un SMS ou WhatsApp.'); } catch { toast(ref.link); } }
+      };
+    }
+    const wp = document.getElementById('wprof');
+    if (wp) wp.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/worker/profile', formData(wp)); toast(r.message); } catch (err) { toast(err.message); } };
+    document.getElementById('logout2').onclick = async () => { await api('POST', '/api/logout', {}); me = null; renderNav(); go('#/'); route(); };
     document.getElementById('info').onsubmit = async (e) => {
       e.preventDefault();
       try { const r = await api('POST', '/api/account', formData(e.target)); await loadMe(); renderNav(); toast(r.message); } catch (err) { toast(err.message); }

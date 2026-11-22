@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY,
   booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
   text TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'client',
   resolved INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -168,6 +169,19 @@ function open(file) {
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
   db.exec(`CREATE TABLE IF NOT EXISTS stripe_payments (session_id TEXT PRIMARY KEY, client_id INTEGER NOT NULL, booking_ids TEXT NOT NULL, amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')));`);
+  const spCols = db.prepare('PRAGMA table_info(stripe_payments)').all().map((c) => c.name);
+  if (!spCols.includes('payment_intent')) db.exec('ALTER TABLE stripe_payments ADD COLUMN payment_intent TEXT');
+  if (!spCols.includes('refunded_cents')) db.exec('ALTER TABLE stripe_payments ADD COLUMN refunded_cents INTEGER NOT NULL DEFAULT 0');
+  const usCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  for (const [c, t] of [['staff_level', 'TEXT'], ['ref_code', 'TEXT'], ['referred_by', 'INTEGER']]) if (!usCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${t}`);
+  db.exec(`CREATE TABLE IF NOT EXISTS credits (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), amount REAL NOT NULL, reason TEXT NOT NULL, ref_user INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS admin_notes (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, target_id INTEGER NOT NULL, author_id INTEGER NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));`);
+  if (!db.prepare('PRAGMA table_info(incidents)').all().some((c) => c.name === 'source')) db.exec("ALTER TABLE incidents ADD COLUMN source TEXT NOT NULL DEFAULT 'client'");
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_ref_code ON users(ref_code) WHERE ref_code IS NOT NULL');
+  const wkCols = db.prepare('PRAGMA table_info(workers)').all().map((c) => c.name);
+  for (const [c, t] of [['bio', 'TEXT'], ['languages', 'TEXT']]) if (!wkCols.includes(c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  const bkCols = db.prepare('PRAGMA table_info(bookings)').all().map((c) => c.name);
+  for (const [c, t] of [['refund_id', 'TEXT'], ['on_way_at', 'TEXT'], ['arrived_at', 'TEXT'], ['review', 'TEXT'], ['problem', 'TEXT'], ['problem_at', 'TEXT'], ['discount', 'REAL NOT NULL DEFAULT 0']]) if (!bkCols.includes(c)) db.exec(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`);
   // mise à jour des bases créées par une version précédente
   const cols = db.prepare('PRAGMA table_info(bookings)').all().map((c) => c.name);
   if (!cols.includes('payment_status')) {

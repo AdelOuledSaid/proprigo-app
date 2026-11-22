@@ -88,4 +88,42 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   }
   return { url: session.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout };
+/**
+ * Remboursement réel dans Stripe. La clé d'idempotence est fixe pour une réservation et un montant :
+ * deux clics ou deux essais ne peuvent jamais rembourser deux fois.
+ */
+async function refund({ db, bookingId, amountCents }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (!Number.isSafeInteger(amountCents) || amountCents < 1) throw new Error('Invalid amount');
+  const pay = db.prepare("SELECT * FROM stripe_payments WHERE status = 'paid' AND EXISTS (SELECT 1 FROM json_each(booking_ids) WHERE value = ?) ORDER BY created_at DESC LIMIT 1").get(bookingId);
+  if (!pay) throw new Error('No Stripe payment for this booking');
+  if ((pay.refunded_cents || 0) + amountCents > pay.amount_cents) throw new Error('Refund exceeds payment');
+  let pi = pay.payment_intent;
+  if (!pi) {
+    const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(pay.session_id)}`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000) });
+    const sess = await r.json().catch(() => ({}));
+    if (!r.ok || !sess.payment_intent) throw new Error('Payment intent not found');
+    pi = typeof sess.payment_intent === 'string' ? sess.payment_intent : sess.payment_intent.id;
+    db.prepare('UPDATE stripe_payments SET payment_intent = ? WHERE session_id = ?').run(pi, pay.session_id);
+  }
+  const params = new URLSearchParams({ payment_intent: pi, amount: String(amountCents), 'metadata[booking_id]': String(bookingId) });
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `proprigo-refund-${bookingId}-${amountCents}` },
+      body: params, signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    console.error('Stripe refund network error:', { name: err.name, message: err.message });
+    throw new Error('Stripe refund network error');
+  }
+  const out = await resp.json().catch(() => ({}));
+  if (!resp.ok || !out.id || !['succeeded', 'pending'].includes(out.status)) {
+    console.error('Stripe refund error:', { status: resp.status, code: out.error?.code, message: out.error?.message });
+    throw new Error(out.error?.message ? `Stripe : ${out.error.message}` : 'Stripe refund failed');
+  }
+  db.prepare('UPDATE stripe_payments SET refunded_cents = COALESCE(refunded_cents, 0) + ? WHERE session_id = ?').run(amountCents, pay.session_id);
+  return { id: out.id, status: out.status };
+}
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund };

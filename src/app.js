@@ -16,7 +16,8 @@ const stripePay = require('./stripe-pay');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const SESSION_DAYS = 14;
-const MIN_LEAD_MIN = 60; // un ménage du jour se réserve au moins 1 h à l'avance (temps de trajet)
+const MIN_LEAD_MIN = 60;
+const REFERRAL_EUR = 10; // offert au filleul sur son premier ménage, et au parrain après ce ménage // un ménage du jour se réserve au moins 1 h à l'avance (temps de trajet)
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -79,12 +80,17 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!t) return null;
     const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(t);
     if (!s || s.expires < Date.now()) return null;
-    return db.prepare('SELECT id, role, email, name, phone FROM users WHERE id = ?').get(s.user_id) || null;
+    return db.prepare('SELECT id, role, email, name, phone, staff_level FROM users WHERE id = ?').get(s.user_id) || null;
   };
   const need = (user, role) => {
     if (!user) throw new HttpError(401, 'Connectez-vous pour continuer.');
     if (role && user.role !== role) throw new HttpError(403, 'Accès réservé.');
+    // compte « planning » : seulement le planning, les réservations, l'équipe et les messages
+    if (role === 'admin' && user.staff_level === 'planning') throw new HttpError(403, 'Accès réservé au responsable.');
   };
+  // routes ouvertes au compte « planning » comme au responsable
+  const needStaff = (user) => { need(user); if (user.role !== 'admin') throw new HttpError(403, 'Accès réservé.'); };
+  const isOwner = (user) => user && user.role === 'admin' && user.staff_level !== 'planning';
   const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
   const login = (res, userId) => {
     const token = crypto.randomBytes(32).toString('hex');
@@ -177,7 +183,15 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
         if (!(rate >= 15 && rate <= 40)) throw new HttpError(400, 'Tarif horaire entre 15 et 40 €.');
       }
     }
+    const refCode = str(body.ref, 12).toUpperCase();
+    const sponsor = role === 'client' && refCode ? db.prepare("SELECT id FROM users WHERE ref_code = ? AND role = 'client'").get(refCode) : null;
+    if (role === 'client' && refCode && !sponsor) throw new HttpError(400, 'Code de parrainage inconnu. Vérifiez-le ou laissez le champ vide.');
     const id = db_.createUser(db, { role, email, password, name, phone: str(body.phone, 20) });
+    if (sponsor) {
+      db.prepare('UPDATE users SET referred_by = ? WHERE id = ?').run(sponsor.id, id);
+      db.prepare("INSERT INTO credits (user_id, amount, reason, ref_user) VALUES (?, ?, 'Bienvenue : parrainage', ?)").run(id, REFERRAL_EUR, sponsor.id);
+      db_.log(db, `Nouveau client parrainé (code ${refCode}) : ${REFERRAL_EUR} € offerts sur son premier ménage.`);
+    }
     if (role === 'intervenante') {
       db.prepare('INSERT INTO workers (user_id, statut, cp, rate) VALUES (?, ?, ?, ?)').run(id, statut, cp, rate);
       db_.setAvailability(db, id, db_.NEW_WORKER_WEEK);
@@ -287,7 +301,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return { data: { ok: true }, headers: { 'Set-Cookie': sessionCookie('', 0) } };
   });
 
-  route('POST', '/api/quote', ({ body }) => pricing.quote(body, now()));
+  route('POST', '/api/quote', ({ body, user }) => {
+    const q = pricing.quote(body, now());
+    if (q.ok && user && user.role === 'client') {
+      const d = Math.min(creditOf(user.id), Math.floor(q.total / 2));
+      if (d > 0) { q.discount = d; q.lines = [...q.lines, { label: 'Crédit parrainage', amount: -d }]; q.total = Math.round((q.total - d) * 100) / 100; }
+    }
+    return q;
+  });
 
   route('POST', '/api/waitlist', ({ body }) => {
     const email = str(body.email, 120).toLowerCase();
@@ -336,6 +357,11 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return b;
   });
 
+  const creditOf = (clientId) => {
+    const got = db.prepare('SELECT COALESCE(SUM(amount), 0) AS t FROM credits WHERE user_id = ?').get(clientId).t;
+    const used = db.prepare("SELECT COALESCE(SUM(discount), 0) AS t FROM bookings WHERE client_id = ? AND status <> 'annulee'").get(clientId).t;
+    return Math.max(0, Math.round((got - used) * 100) / 100);
+  };
   route('POST', '/api/bookings', async ({ user, body }) => {
     need(user, 'client');
     // Sécurité : en production, aucune réservation sans vrai paiement en ligne.
@@ -385,11 +411,15 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const ids = [];
     for (let k = 0; k < count; k++) {
       const date = addDays(body.date, k * every);
-      const qk = k === 0 ? q : pricing.quote({ ...body, date, urgent: false }, now());
+      const qk0 = k === 0 ? q : pricing.quote({ ...body, date, urgent: false }, now());
+      // crédit (parrainage) appliqué au premier ménage ; le prix ne descend jamais sous 50 % du tarif
+      const discount = k === 0 ? Math.min(creditOf(user.id), Math.floor(qk0.total / 2)) : 0;
+      const qk = { ...qk0, total: Math.round((qk0.total - discount) * 100) / 100 };
       const r = db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, series_id, checklist, photo_consent, home_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
         user.id, q.service, q.size, q.hours, body.cp, address, date, time, k === 0 && body.urgent ? 1 : 0, body.kit ? 1 : 0, qk.total, q.zone, seriesId, tasks, consent, home ? home.id : null);
       const id = Number(r.lastInsertRowid);
+      if (discount) db.prepare('UPDATE bookings SET discount = ? WHERE id = ?').run(discount, id);
       ids.push(id);
       db_.log(db, `Réservation n° ${id} créée, paiement ${stripeReady ? 'en attente' : 'simulé'} : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
       if (!stripeReady && !production) engine.assign(db, id); // mode démonstration seulement
@@ -510,10 +540,12 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     need(user, 'client');
     const stars = Number(body.stars);
     if (![1, 2, 3, 4, 5].includes(stars)) throw new HttpError(400, 'Note de 1 à 5.');
-    const r = db.prepare("UPDATE bookings SET rating = ? WHERE id = ? AND client_id = ? AND status = 'terminee' AND rating IS NULL").run(stars, id, user.id);
+    const review = str(body.review, 500) || null;
+    const r = db.prepare("UPDATE bookings SET rating = ?, review = ? WHERE id = ? AND client_id = ? AND status = 'terminee' AND rating IS NULL").run(stars, review, id, user.id);
     if (!r.changes) throw new HttpError(409, 'Cette réservation ne peut pas être notée.');
-    db_.log(db, `Réservation n° ${id} : note ${stars}/5.${stars < 4 ? ' Alerte qualité : rappeler le client.' : ''}`);
-    return { ok: true };
+    db_.log(db, `Réservation n° ${id} : note ${stars}/5${review ? ' avec commentaire' : ''}.${stars < 4 ? ' Alerte qualité : rappeler le client.' : ''}`);
+    if (stars < 4) db.prepare("INSERT INTO incidents (booking_id, text, source) VALUES (?, ?, 'note')").run(id, `Note ${stars}/5${review ? ` : ${review}` : ''}`);
+    return { ok: true, message: 'Merci pour votre avis.' };
   });
 
   // ----- intervenante -----
@@ -558,11 +590,193 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db_.log(db, `Réservation n° ${id} : ${action === 'start' ? 'ménage commencé' : 'ménage terminé'} par ${user.name}.`);
       const cl = db.prepare('SELECT email FROM users WHERE id = ?').get(b.client_id);
       if (action === 'start') mailer.send(cl.email, 'Votre ménage a commencé', `${user.name.split(' ')[0]} a commencé votre ménage`, [`Ménage du ${fr(b.date)}, ${b.address}.`], { label: 'Suivre le ménage', path: '/#/' });
-      else mailer.send(cl.email, 'Votre ménage est terminé', 'Votre ménage est terminé', [`${user.name.split(' ')[0]} a terminé le ménage du ${fr(b.date)}.`, 'Donnez votre avis en un clic : il nous aide à garantir la qualité. Un problème ? Signalez-le depuis la réservation.'], { label: 'Donner mon avis', path: '/#/mes-reservations' });
+      if (action === 'finish') rewardSponsor(b.client_id);
+      if (action === 'finish') mailer.send(cl.email, 'Votre ménage est terminé', 'Votre ménage est terminé', [`${user.name.split(' ')[0]} a terminé le ménage du ${fr(b.date)}.`, 'Donnez votre avis en un clic : il nous aide à garantir la qualité. Un problème ? Signalez-le depuis la réservation.'], { label: 'Donner mon avis', path: '/#/mes-reservations' });
     }
     return { ok: true };
   };
+  // parrain récompensé une seule fois, quand le premier ménage de son filleul est terminé
+  function rewardSponsor(clientId) {
+    const u = db.prepare('SELECT referred_by, name FROM users WHERE id = ?').get(clientId);
+    if (!u || !u.referred_by) return;
+    if (db.prepare("SELECT 1 FROM credits WHERE user_id = ? AND ref_user = ? AND reason = 'Parrainage : filleul servi'").get(u.referred_by, clientId)) return;
+    db.prepare("INSERT INTO credits (user_id, amount, reason, ref_user) VALUES (?, ?, 'Parrainage : filleul servi', ?)").run(u.referred_by, REFERRAL_EUR, clientId);
+    const sp = db.prepare('SELECT email, name FROM users WHERE id = ?').get(u.referred_by);
+    if (sp) mailer.send(sp.email, `${REFERRAL_EUR} € offerts sur votre prochain ménage`, 'Merci pour votre parrainage', [`${u.name.split(' ')[0]} a fait son premier ménage avec Proprigo.`, `${REFERRAL_EUR} € sont déduits automatiquement de votre prochaine réservation.`], { label: 'Réserver', path: '/#/reserver' });
+    db_.log(db, `Parrainage : ${REFERRAL_EUR} € offerts au parrain du client n° ${clientId}.`);
+  }
   for (const a of ['accept', 'refuse', 'start', 'finish']) route('POST', `/api/worker/missions/:id/${a}`, workerAction(a));
+
+  // ----- parrainage : code personnel et crédit disponible -----
+  route('GET', '/api/referral', ({ user }) => {
+    need(user, 'client');
+    let code = db.prepare('SELECT ref_code FROM users WHERE id = ?').get(user.id).ref_code;
+    if (!code) {
+      const base = (user.name.split(' ')[0] || 'AMI').normalize('NFD').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 6) || 'AMI';
+      for (let i = 0; i < 20 && !code; i++) {
+        const c = base + crypto.randomInt(100, 999);
+        if (!db.prepare('SELECT 1 FROM users WHERE ref_code = ?').get(c)) code = c;
+      }
+      db.prepare('UPDATE users SET ref_code = ? WHERE id = ?').run(code, user.id);
+    }
+    const friends = db.prepare('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?').get(user.id).n;
+    return { code, credit: creditOf(user.id), amount: REFERRAL_EUR, friends, link: `${appUrl.replace(/\/$/, '')}/#/inscription?ref=${code}` };
+  });
+
+  // ----- intervenante : mes gains -----
+  route('GET', '/api/worker/earnings', ({ user }) => {
+    need(user, 'intervenante');
+    const w = workerProfile(user.id);
+    const m0 = pricing.todayParis(now()).slice(0, 7);
+    const prev = new Date(Date.parse(m0 + '-15T12:00:00Z') - 30 * 864e5).toISOString().slice(0, 7);
+    const sum = (where, ...args) => db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(hours), 0) AS h FROM bookings WHERE worker_id = ? AND ${where}`).get(user.id, ...args);
+    const pack = (r) => ({ n: r.n, h: r.h, eur: w.statut === 'I' ? Math.round(r.h * (w.rate || 0) * 100) / 100 : null });
+    const months = db.prepare("SELECT substr(date, 1, 7) AS m, COUNT(*) AS n, SUM(hours) AS h FROM bookings WHERE worker_id = ? AND status = 'terminee' GROUP BY m ORDER BY m DESC LIMIT 6").all(user.id);
+    return {
+      statut: w.statut, rate: w.rate,
+      month: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", m0)),
+      lastMonth: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", prev)),
+      upcoming: pack(sum("status IN ('attribuee','en_cours') AND date >= ?", pricing.todayParis(now()))),
+      history: months.map((r) => ({ month: r.m, ...pack(r) })),
+    };
+  });
+
+  // ----- intervenante : problème sur place -----
+  const PROBLEMS = { acces: "Je n'arrive pas à entrer (clé, code, personne)", casse: "Un objet a été cassé ou abîmé", etat: "Le logement est bien plus sale que prévu", securite: 'Je ne me sens pas en sécurité', autre: 'Autre problème' };
+  route('POST', '/api/worker/missions/:id/problem', ({ user, id, body }) => {
+    need(user, 'intervenante');
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND worker_id = ?').get(id, user.id);
+    if (!b) throw new HttpError(404, 'Mission introuvable.');
+    if (!['attribuee', 'en_cours'].includes(b.status)) throw new HttpError(409, 'Signalement possible pendant la mission.');
+    const kind = Object.hasOwn(PROBLEMS, body.kind) ? body.kind : null;
+    if (!kind) throw new HttpError(400, 'Choisissez le type de problème.');
+    const text = str(body.text, 600);
+    db.prepare("UPDATE bookings SET problem = ?, problem_at = datetime('now') WHERE id = ?").run(kind, id);
+    db.prepare("INSERT INTO incidents (booking_id, text, source) VALUES (?, ?, 'intervenante')").run(id, `${PROBLEMS[kind]}${text ? ` : ${text}` : ''}`);
+    db.prepare('INSERT INTO messages (booking_id, sender_id, text) VALUES (?, ?, ?)').run(id, user.id, `Problème signalé à l'équipe : ${PROBLEMS[kind]}.`);
+    db_.log(db, `URGENT · Réservation n° ${id} : ${user.name} signale « ${PROBLEMS[kind]} ».`);
+    for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin'").all()) mailer.send(a.email, `Urgent : problème sur place (n° ${id})`, 'Problème signalé par une intervenante', [`${user.name} · ${b.address}, ${b.cp} · ${fr(b.date)} ${b.time}`, `${PROBLEMS[kind]}${text ? ` : ${text}` : ''}`], { label: 'Ouvrir le tableau de bord', path: '/#/admin' });
+    return { ok: true, message: "L'équipe est prévenue et vous rappelle. Si vous êtes en danger, appelez le 17." };
+  });
+
+  // ----- client : attestation annuelle (crédit d'impôt) -----
+  route('GET', '/api/me/attestation', ({ user, query, res }) => {
+    need(user, 'client');
+    const year = /^\d{4}$/.test(query.get('year') || '') ? query.get('year') : pricing.todayParis(now()).slice(0, 4);
+    const rows = db.prepare("SELECT * FROM bookings WHERE client_id = ? AND status = 'terminee' AND service <> 'airbnb' AND substr(date, 1, 4) = ? AND (paid = 1 OR ? = 0) ORDER BY date").all(user.id, year, production ? 1 : 0);
+    const total = Math.round(rows.reduce((t, b) => t + b.total, 0) * 100) / 100;
+    const e = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const html = `<!doctype html><html lang="fr"><meta charset="utf-8"><title>Attestation ${year}</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:760px;margin:30px auto;padding:0 20px;color:#0f1a4a}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin:16px 0}td,th{border-bottom:1px solid #dfe5f3;padding:7px;text-align:left}td.n,th.n{text-align:right}.warn{background:#fff1e6;border:1px solid #ffb999;padding:12px;border-radius:10px}@media print{.noprint{display:none}}</style>
+<p class="warn"><b>Document provisoire.</b> Cette attestation ne vaut pour le crédit d'impôt qu'une fois Proprigo déclaré « services à la personne » (n° [À COMPLÉTER]). Les ménages de logements de location courte durée n'y ouvrent pas droit et ne sont pas listés.</p>
+<h1>Attestation fiscale annuelle ${year}</h1>
+<p>Proprigo, [RAISON SOCIALE, ADRESSE, SIRET] atteste que <b>${e(user.name)}</b> a bénéficié des prestations de ménage à domicile suivantes, réglées en ${year} :</p>
+<table><tr><th>Date</th><th>Prestation</th><th>Adresse</th><th class="n">Heures</th><th class="n">Montant TTC</th></tr>
+${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>${b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'}</td><td>${e(b.address)}, ${e(b.cp)}</td><td class="n">${String(b.hours).replace('.', ',')}</td><td class="n">${b.total.toFixed(2).replace('.', ',')} €</td></tr>`).join('') || '<tr><td colspan="5">Aucune prestation éligible cette année.</td></tr>'}
+<tr><th colspan="4">Total réglé</th><th class="n">${total.toFixed(2).replace('.', ',')} €</th></tr></table>
+<p>Montant ouvrant droit au crédit d'impôt, selon les conditions en vigueur : ${total.toFixed(2).replace('.', ',')} €.</p>
+<p class="noprint"><button onclick="print()">Imprimer ou enregistrer en PDF</button></p></html>`;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'", 'Cache-Control': 'no-store' });
+    res.end(html);
+    return { streamed: true };
+  });
+
+  // ----- fiches client et intervenante, notes internes de l'équipe -----
+  route('GET', '/api/admin/clients/:id', ({ user, id }) => {
+    needStaff(user);
+    const c = db.prepare("SELECT id, name, email, phone, created_at, referred_by FROM users WHERE id = ? AND role = 'client'").get(id);
+    if (!c) throw new HttpError(404, 'Client introuvable.');
+    const bookings = db.prepare('SELECT id, date, time, service, size, hours, cp, status, total, rating, review, worker_id FROM bookings WHERE client_id = ? ORDER BY date DESC LIMIT 50').all(id);
+    const homes = db.prepare('SELECT id, name, cp FROM homes WHERE client_id = ?').all(id);
+    const owner = isOwner(user);
+    return {
+      client: { ...c, email: owner ? c.email : '', phone: owner ? c.phone : '' },
+      stats: { menages: bookings.filter((b) => b.status === 'terminee').length, annules: bookings.filter((b) => b.status === 'annulee').length, depense: owner ? Math.round(bookings.filter((b) => b.status === 'terminee').reduce((t, b) => t + b.total, 0)) : null, credit: owner ? creditOf(id) : null },
+      bookings: bookings.map((b) => ({ ...b, total: owner ? b.total : null })), homes,
+      notes: db.prepare("SELECT n.id, n.text, n.created_at, u.name AS author FROM admin_notes n JOIN users u ON u.id = n.author_id WHERE kind = 'client' AND target_id = ? ORDER BY n.id DESC").all(id),
+    };
+  });
+  route('GET', '/api/admin/workers/:id/file', ({ user, id }) => {
+    needStaff(user);
+    const w = workerProfile(id);
+    if (!w) throw new HttpError(404, 'Intervenante introuvable.');
+    const st = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(hours), 0) AS h, AVG(rating) AS avg, COUNT(rating) AS rated FROM bookings WHERE worker_id = ? AND status = 'terminee'").get(id);
+    const refused = db.prepare("SELECT COUNT(*) AS n FROM offers WHERE worker_id = ? AND state = 'refused'").get(id).n;
+    const problems = db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE worker_id = ? AND problem IS NOT NULL").get(id).n;
+    const low = db.prepare("SELECT id, date, rating, review FROM bookings WHERE worker_id = ? AND rating IS NOT NULL AND rating < 4 ORDER BY date DESC LIMIT 5").all(id);
+    return {
+      worker: { user_id: w.user_id, name: w.name, statut: w.statut, cp: w.cp, rate: w.rate, step: w.step, steps: db_.STEPS[w.statut], absent: w.absent, bio: w.bio, languages: w.languages, email: isOwner(user) ? w.email : '', phone: isOwner(user) ? w.phone : '' },
+      stats: { missions: st.n, heures: st.h, note: st.rated ? Math.round(st.avg * 10) / 10 : null, avis: st.rated, refus: refused, problemes: problems },
+      lowRatings: low,
+      upcoming: db.prepare("SELECT id, date, time, cp, hours FROM bookings WHERE worker_id = ? AND status IN ('attribuee','en_cours') ORDER BY date, time LIMIT 10").all(id),
+      notes: db.prepare("SELECT n.id, n.text, n.created_at, u.name AS author FROM admin_notes n JOIN users u ON u.id = n.author_id WHERE kind = 'worker' AND target_id = ? ORDER BY n.id DESC").all(id),
+    };
+  });
+  route('POST', '/api/admin/notes', ({ user, body }) => {
+    needStaff(user);
+    const kind = body.kind === 'worker' ? 'worker' : body.kind === 'client' ? 'client' : null;
+    const target = Number(body.target_id);
+    const text = str(body.text, 1000);
+    if (!kind || !target || text.length < 2) throw new HttpError(400, 'Note vide.');
+    db.prepare('INSERT INTO admin_notes (kind, target_id, author_id, text) VALUES (?, ?, ?, ?)').run(kind, target, user.id, text);
+    return { ok: true, message: 'Note enregistrée.' };
+  });
+
+  // ----- comptes de l'équipe : accès « planning » sans argent ni remboursements -----
+  route('GET', '/api/admin/staff', ({ user }) => {
+    need(user, 'admin');
+    return db.prepare("SELECT id, name, email, COALESCE(staff_level, 'owner') AS level, created_at FROM users WHERE role = 'admin' ORDER BY id").all();
+  });
+  route('POST', '/api/admin/staff', ({ user, body }) => {
+    need(user, 'admin');
+    const email = str(body.email, 120).toLowerCase();
+    const name = str(body.name, 80);
+    const password = typeof body.password === 'string' ? body.password : '';
+    if (!name || !EMAIL_RE.test(email)) throw new HttpError(400, 'Nom et e-mail valides requis.');
+    if (password.length < 12) throw new HttpError(400, 'Mot de passe provisoire : 12 caractères minimum.');
+    if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new HttpError(409, 'Un compte existe déjà avec cet e-mail.');
+    const id = db_.createUser(db, { role: 'admin', email, password, name, phone: '' });
+    db.prepare("UPDATE users SET staff_level = 'planning' WHERE id = ?").run(id);
+    db_.log(db, `Compte « planning » créé pour ${name}.`);
+    return { status: 201, data: { ok: true, message: `Compte planning créé pour ${name}. Demandez-lui de changer son mot de passe dans « Mon compte ».` } };
+  });
+  for (const step of ['onway', 'arrived']) route('POST', `/api/worker/missions/:id/${step}`, ({ user, id }) => {
+    need(user, 'intervenante');
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND worker_id = ?').get(id, user.id);
+    if (!b) throw new HttpError(404, 'Mission introuvable.');
+    if (b.status !== 'attribuee') throw new HttpError(409, 'Cette mission a déjà commencé ou est terminée.');
+    if (b.date !== pricing.todayParis(now())) throw new HttpError(409, 'Ce bouton sert le jour de la mission.');
+    const first = user.name.split(' ')[0];
+    if (step === 'onway') {
+      if (b.on_way_at) return { ok: true, message: 'Le client sait déjà que vous êtes en route.' };
+      db.prepare("UPDATE bookings SET on_way_at = datetime('now') WHERE id = ?").run(id);
+      engine.notify(db, id, `${first} est en route vers votre logement.`);
+      return { ok: true, message: 'Le client est prévenu que vous êtes en route.' };
+    }
+    if (b.arrived_at) return { ok: true, message: 'Arrivée déjà signalée.' };
+    db.prepare("UPDATE bookings SET arrived_at = datetime('now'), on_way_at = COALESCE(on_way_at, datetime('now')) WHERE id = ?").run(id);
+    engine.notify(db, id, `${first} est arrivée.`);
+    return { ok: true, message: 'Arrivée signalée au client.' };
+  });
+
+  // ----- fiche de l'intervenante, visible par ses clients -----
+  route('GET', '/api/workers/:id/card', ({ user, id }) => {
+    need(user);
+    const allowed = user.role === 'admin' || user.id === id || db.prepare("SELECT 1 FROM bookings WHERE client_id = ? AND worker_id = ? AND status IN ('attribuee','en_cours','terminee')").get(user.id, id);
+    if (!allowed) throw new HttpError(404, 'Fiche introuvable.');
+    const w = db.prepare('SELECT w.user_id, w.bio, w.languages, u.name, u.created_at FROM workers w JOIN users u ON u.id = w.user_id WHERE w.user_id = ?').get(id);
+    if (!w) throw new HttpError(404, 'Fiche introuvable.');
+    const st = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS avg, COUNT(rating) AS rated FROM bookings WHERE worker_id = ? AND status = 'terminee'").get(id);
+    const reviews = db.prepare("SELECT rating, review, date FROM bookings WHERE worker_id = ? AND status = 'terminee' AND review IS NOT NULL AND rating >= 4 ORDER BY date DESC LIMIT 3").all(id);
+    return { id, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
+  });
+  route('POST', '/api/worker/profile', ({ user, body }) => {
+    need(user, 'intervenante');
+    const bio = str(body.bio, 300);
+    const languages = str(body.languages, 120);
+    db.prepare('UPDATE workers SET bio = ?, languages = ? WHERE user_id = ?').run(bio || null, languages || null, user.id);
+    return { ok: true, message: 'Votre présentation est enregistrée.' };
+  });
 
   // ----- espace propriétaires : logements -----
   const homeView = (h) => {
@@ -825,8 +1039,28 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
   });
 
   // ----- administrateur -----
+  // vrais chiffres : argent réellement encaissé dans Stripe, clients qui reviennent, zones
+  const metrics = () => {
+    const m0 = pricing.todayParis(now()).slice(0, 7);
+    const paidRows = db.prepare("SELECT amount_cents, refunded_cents, substr(created_at, 1, 7) AS m FROM stripe_payments WHERE status = 'paid'").all();
+    const sum = (rows) => rows.reduce((t, r) => t + (r.amount_cents - (r.refunded_cents || 0)), 0) / 100;
+    const prev = new Date(Date.parse(m0 + '-15T12:00:00Z') - 30 * 864e5).toISOString().slice(0, 7);
+    const clientsWith = db.prepare("SELECT client_id, COUNT(*) AS n FROM bookings WHERE status = 'terminee' GROUP BY client_id").all();
+    const zones = db.prepare("SELECT cp, COUNT(*) AS n FROM bookings WHERE status <> 'annulee' GROUP BY cp ORDER BY n DESC LIMIT 5").all();
+    const cancels = db.prepare("SELECT COUNT(*) AS n, SUM(status = 'annulee') AS a FROM bookings WHERE NOT (payment_status = 'paiement_echoue')").get();
+    return {
+      encaisseTotal: Math.round(sum(paidRows) * 100) / 100,
+      encaisseMois: Math.round(sum(paidRows.filter((r) => r.m === m0)) * 100) / 100,
+      encaisseMoisPrecedent: Math.round(sum(paidRows.filter((r) => r.m === prev)) * 100) / 100,
+      clientsActifs: clientsWith.length,
+      clientsFideles: clientsWith.filter((c) => c.n >= 2).length,
+      tauxAnnulation: cancels.n ? Math.round((cancels.a / cancels.n) * 100) : 0,
+      zones,
+      parrainages: db.prepare('SELECT COUNT(*) AS n FROM users WHERE referred_by IS NOT NULL').get().n,
+    };
+  };
   route('GET', '/api/admin/overview', ({ user }) => {
-    need(user, 'admin');
+    needStaff(user);
     const bookings = db.prepare('SELECT * FROM bookings ORDER BY date DESC, time DESC LIMIT 200').all().map(bookingView);
     const icalFlagged = db.prepare("SELECT b.id, b.date, b.time, b.cp, h.name AS home_name FROM bookings b LEFT JOIN homes h ON h.id = b.home_id WHERE b.ical_flagged = 1 AND b.status IN ('en_attente','proposee','attribuee') ORDER BY b.date").all();
     const done = db.prepare("SELECT * FROM bookings WHERE status = 'terminee'").all(); // toutes, pas seulement les 200 dernières
@@ -843,6 +1077,10 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     const events = db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 300').all();
     const incidents = db.prepare('SELECT i.*, b.date, b.time, b.cp FROM incidents i JOIN bookings b ON b.id = i.booking_id WHERE i.resolved = 0 ORDER BY i.id DESC').all();
     const clients = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client'").get().n;
+    if (!isOwner(user)) {
+      return { kpis: { reservations: totals.n, noteMoyenne: totals.avis ? Math.round(totals.note * 10) / 10 : null, clients, terminees: done.length, caHT: 0, marge: 0, aRembourser: { n: 0, montant: 0 } },
+        couts: null, paymentsEnabled, bookings: bookings.map((b) => ({ ...b, total: null })), icalFlagged, workers: workers.map((w) => ({ ...w, email: '', phone: '' })), waitlist: [], events: [], incidents, metrics: null, staff: 'planning' };
+    }
     return {
       kpis: {
         reservations: db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE NOT (paid = 0 AND payment_status = 'paiement_echoue' AND status = 'annulee')").get().n, terminees: done.length, caHT: Math.round(ca), marge: Math.round(marge),
@@ -851,6 +1089,8 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
       },
       couts: pricing.COSTS, paymentsEnabled,
       bookings, icalFlagged, workers, waitlist: wl, events, incidents,
+      metrics: metrics(),
+      staff: isOwner(user) ? 'owner' : 'planning',
     };
   });
 
@@ -920,7 +1160,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
   });
 
   route('POST', '/api/admin/workers/:id/absent', ({ user, id }) => {
-    need(user, 'admin');
+    needStaff(user);
     const w = workerProfile(id);
     if (!w) throw new HttpError(404, 'Intervenante introuvable.');
     const absent = w.absent ? 0 : 1;
@@ -939,7 +1179,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
   });
 
   route('POST', '/api/admin/incidents/:id/resolve', ({ user, id }) => {
-    need(user, 'admin');
+    needStaff(user);
     const r = db.prepare('UPDATE incidents SET resolved = 1 WHERE id = ?').run(id);
     if (!r.changes) throw new HttpError(404, 'Signalement introuvable.');
     db_.log(db, `Signalement n° ${id} traité.`);
@@ -959,7 +1199,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     return keepIcal(b, 'le client');
   });
   route('POST', '/api/admin/bookings/:id/ical-keep', ({ user, id }) => {
-    need(user, 'admin');
+    needStaff(user);
     const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND ical_flagged = 1').get(id);
     if (!b) throw new HttpError(404, 'Rien à vérifier pour ce ménage.');
     return keepIcal(b, "l'équipe");
@@ -985,8 +1225,35 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     return { ok: true, message: `Réservation n° ${id} marquée remboursée.` };
   });
 
-  route('GET', '/api/admin/bookings/:id/candidates', ({ user, id }) => {
+  // ----- remboursement réel dans Stripe -----
+  route('POST', '/api/admin/bookings/:id/refund', async ({ user, id }) => {
     need(user, 'admin');
+    const b = db.prepare("SELECT * FROM bookings WHERE id = ? AND payment_status = 'a_rembourser'").get(id);
+    if (!b) throw new HttpError(409, 'Rien à rembourser pour cette réservation.');
+    const amount = Math.round(Number(b.refund_amount ?? b.total) * 100);
+    if (!stripePay.configured()) throw new HttpError(503, "Stripe n'est pas configuré sur ce serveur : remboursez dans le tableau de bord Stripe, puis cliquez sur « Marquer remboursé ».");
+    let r;
+    try { r = await stripePay.refund({ db, bookingId: id, amountCents: amount }); }
+    catch (e) { throw new HttpError(502, `Remboursement refusé : ${e.message}. Rien n'a été débité ; vérifiez dans Stripe.`); }
+    db.prepare("UPDATE bookings SET payment_status = 'rembourse', refund_id = ? WHERE id = ?").run(r.id, id);
+    db_.log(db, `Réservation n° ${id} : ${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe (${r.status === 'pending' ? 'en cours' : 'effectué'}).`);
+    engine.notify(db, id, `Votre remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € a été lancé. Il apparaît sur votre compte bancaire sous 5 à 10 jours.`);
+    return { ok: true, message: `${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe.` };
+  });
+
+  // ----- planning de la semaine -----
+  route('GET', '/api/admin/planning', ({ user, query }) => {
+    needStaff(user);
+    const start = pricing.isValidDate(query.get('start')) ? query.get('start') : pricing.todayParis(now());
+    const end = new Date(Date.parse(start + 'T12:00:00Z') + 6 * 864e5).toISOString().slice(0, 10);
+    const workers = db.prepare('SELECT w.user_id, w.statut, w.cp, w.absent, u.name FROM workers w JOIN users u ON u.id = w.user_id ORDER BY u.name').all()
+      .filter((w) => engine.isActive({ ...workerProfile(w.user_id) }));
+    const rows = db.prepare("SELECT id, date, time, hours, cp, service, size, status, worker_id, paid, payment_status FROM bookings WHERE date BETWEEN ? AND ? AND status IN ('en_attente','proposee','attribuee','en_cours','terminee') ORDER BY date, time").all(start, end);
+    return { start, end, workers, bookings: rows.map((b) => ({ ...b, label: `${b.service === 'airbnb' ? 'Airbnb ' + (b.size || '') : b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'} ${b.service === 'airbnb' ? '' : String(b.hours).replace('.', ',') + ' h'}`.trim() })) };
+  });
+
+  route('GET', '/api/admin/bookings/:id/candidates', ({ user, id }) => {
+    needStaff(user);
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
     if (!b) throw new HttpError(404, 'Réservation introuvable.');
     const offered = new Set(db.prepare("SELECT worker_id FROM offers WHERE booking_id = ? AND state = 'offered'").all(id).map((r) => r.worker_id));
@@ -997,7 +1264,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
   });
 
   route('POST', '/api/admin/bookings/:id/assign', ({ user, id, body }) => {
-    need(user, 'admin');
+    needStaff(user);
     const bookingToAssign = db.prepare('SELECT paid, payment_status FROM bookings WHERE id = ?').get(id);
     if (!bookingToAssign) throw new HttpError(404, 'Réservation introuvable.');
     if (production && (!bookingToAssign.paid || bookingToAssign.payment_status !== 'paye')) throw new HttpError(409, 'Paiement confirmé requis avant attribution.');
@@ -1032,7 +1299,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
             const ids = JSON.parse(payment.booking_ids);
             db.exec('BEGIN IMMEDIATE');
             try {
-              db.prepare("UPDATE stripe_payments SET status = 'paid' WHERE session_id = ?").run(sess.id);
+              db.prepare("UPDATE stripe_payments SET status = 'paid', payment_intent = ? WHERE session_id = ?").run(typeof sess.payment_intent === 'string' ? sess.payment_intent : null, sess.id);
               for (const id of ids) {
                 const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
                 if (b && b.client_id === payment.client_id && !b.paid) {
