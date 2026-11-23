@@ -20,6 +20,22 @@
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
   };
   const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'À rembourser', remboursement_en_cours: 'Remboursement en cours', rembourse: 'Remboursé' };
+  // Le statut d'une réservation annulée prime sur une ancienne demande de paiement.
+  // Un remboursement partiel reste explicitement identifié même si Stripe le considère terminé.
+  const paymentLabel = (b) => {
+    if (b.status === 'annulee') {
+      if (b.payment_status === 'rembourse') {
+        const total = Number(b.total);
+        const refund = Number(b.refund_amount ?? b.total);
+        return Number.isFinite(total) && Number.isFinite(refund) && refund >= 0 && refund < total
+          ? `Remboursement partiel : ${eur(refund)}` : 'Remboursé';
+      }
+      if (b.payment_status === 'remboursement_en_cours') return `Remboursement en cours : ${eur(b.refund_amount ?? b.total)}`;
+      if (b.payment_status === 'a_rembourser') return `À rembourser : ${eur(b.refund_amount ?? b.total)}`;
+      if (!b.paid && ['en_attente_paiement', 'paiement_echoue', null, undefined, ''].includes(b.payment_status)) return 'Annulée — non payée';
+    }
+    return PAY[b.payment_status] || '';
+  };
   const pill = (s) => `<span class="pill ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
   const label = (b) => b.service === 'airbnb' ? `Airbnb ${SIZE[b.size]}` : `${SERVICE[b.service]} ${String(b.hours).replace('.', ',')} h`;
 
@@ -808,7 +824,7 @@
           ${b.worker_name ? `<p style="margin:8px 0 0">Intervenante vérifiée : <b>${esc(b.worker_name)}</b>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
           ${b.source === 'ical' ? '<p class="small muted" style="margin:6px 0 0">Créé automatiquement depuis le calendrier de votre annonce.</p>' : ''}
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
-          <p class="small muted" style="margin:6px 0 0">${PAY[b.payment_status] || ''}</p>
+          <p class="small muted" style="margin:6px 0 0">${paymentLabel(b)}</p>
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
           ${b.checklist.length && ['en_cours', 'terminee'].includes(b.status) ? shine(b) : ''}${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
@@ -1224,7 +1240,7 @@
       <section class="card" id="sec-table" data-tab="resa"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap"><h2>Réservations</h2><button class="btn ghost" type="button" id="admin-refresh">Actualiser</button></div><p class="small muted">Dernières réservations en premier (numéro décroissant). Actualisation automatique toutes les 20 secondes.</p><div class="scroll"><table class="bk">
         <thead><tr><th>N°</th><th>Prestation</th><th>Date</th><th>Code postal</th><th>Intervenante</th><th>État</th><th class="n">Prix TTC</th><th>Paiement</th><th></th></tr></thead>
         <tbody>${r.bookings.map((b) => `<tr class="bkrow"><td data-l="N°"><b>n° ${b.id}</b></td><td data-l="Prestation">${esc(label(b))}${b.kit ? ' <span class="pill">matériel</span>' : ''}</td><td data-l="Date">${dateFr(b.date)} ${esc(b.time)}</td><td data-l="Code postal">${esc(b.cp)}</td>
-          <td data-l="Intervenante">${b.worker_name ? esc(b.worker_name) : '<span class="muted">–</span>'}</td><td data-l="État">${pill(b.status)}${b.rating ? ' ' + '★'.repeat(b.rating) : ''}</td><td class="n" data-l="Prix TTC">${eur(b.total)}</td><td class="small" data-l="Paiement">${PAY[b.payment_status] || ''}</td>
+          <td data-l="Intervenante">${b.worker_name ? esc(b.worker_name) : '<span class="muted">–</span>'}</td><td data-l="État">${pill(b.status)}${b.rating ? ' ' + '★'.repeat(b.rating) : ''}</td><td class="n" data-l="Prix TTC">${eur(b.total)}</td><td class="small" data-l="Paiement">${paymentLabel(b)}</td>
           <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) && b.paid ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${owner && b.payment_status === 'a_rembourser' ? `<button class="btn blue" data-srefund="${b.id}" data-amount="${eur(b.refund_amount ?? b.total)}">Rembourser ${eur(b.refund_amount ?? b.total)}</button><button class="btn ghost" data-refund="${b.id}">Déjà remboursé dans Stripe</button>` : ''}<button class="btn ghost" data-cfile="${b.client_id}">Fiche client</button><button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
       </table></div></section>
       ${r.incidents.length ? `<section class="card" id="sec-incidents" data-tab="todo"><h2>Problèmes signalés par les clients</h2>${r.incidents.map((x) => `

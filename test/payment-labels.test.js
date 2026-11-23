@@ -1,0 +1,17 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+const start = source.indexOf('  const paymentLabel = (b) => {');
+const end = source.indexOf('  const pill =', start);
+assert.ok(start > 0 && end > start, 'Fonction paymentLabel introuvable');
+const code = source.slice(start, end).replace('const paymentLabel =', 'globalThis.paymentLabel =');
+const context = { eur: n => Number(n).toFixed(2).replace('.', ',') + ' €', PAY: {paye:'Payé',rembourse:'Remboursé'} };
+vm.runInNewContext(code, context);
+test('annulée non payée : aucun appel au paiement', () => assert.equal(context.paymentLabel({status:'annulee',paid:0,payment_status:'en_attente_paiement'}), 'Annulée — non payée'));
+test('remboursement partiel : montant explicite', () => assert.equal(context.paymentLabel({status:'annulee',paid:1,payment_status:'rembourse',total:111,refund_amount:55.5}), 'Remboursement partiel : 55,50 €'));
+test('remboursement intégral : libellé simple', () => assert.equal(context.paymentLabel({status:'annulee',paid:1,payment_status:'rembourse',total:133,refund_amount:133}), 'Remboursé'));
+test('paiement normal : libellé inchangé', () => assert.equal(context.paymentLabel({status:'attribuee',paid:1,payment_status:'paye'}), 'Payé'));
