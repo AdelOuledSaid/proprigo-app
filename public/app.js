@@ -17,7 +17,7 @@
     en_attente: ['Recherche en cours', 'warn'], proposee: ['Recherche en cours', 'warn'], attribuee: ['Confirmée', ''],
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
   };
-  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé' };
+  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'À rembourser', remboursement_en_cours: 'Remboursement en cours', rembourse: 'Remboursé' };
   const pill = (s) => `<span class="pill ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
   const label = (b) => b.service === 'airbnb' ? `Airbnb ${SIZE[b.size]}` : `${SERVICE[b.service]} ${String(b.hours).replace('.', ',')} h`;
 
@@ -778,17 +778,24 @@
   views['inscription-intervenante'] = (p) => signup('intervenante', p);
 
   const REPEAT = { 7: 'Chaque semaine', 14: 'Toutes les 2 semaines' };
+  let bookingHistoryTab = 'a_venir';
   views['mes-reservations'] = async () => {
     if (!me || me.role !== 'client') return go('#/connexion');
     const list = await api('GET', '/api/bookings/mine');
     const mw = await api('GET', '/api/my-workers');
     const series = {};
+    const isHistory = (b) => ['annulee', 'terminee'].includes(b.status);
+    const visibleBookings = list.filter((b) => bookingHistoryTab === 'historique' ? isHistory(b) : !isHistory(b));
     const hoursLeft = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.now()) / 36e5;
     $app.innerHTML = `
       <div class="row"><h1>Mes réservations</h1><a class="btn primary" href="#/reserver">Nouvelle réservation</a></div>
       <p class="small muted">${FREE_CANCEL}</p>
-      ${list.length ? '' : '<p class="card muted">Aucune réservation pour le moment.</p>'}
-      ${list.map((b) => {
+      <div class="row" style="justify-content:flex-start;gap:10px;margin-bottom:16px" role="group" aria-label="Filtrer mes réservations">
+        <button type="button" class="btn ${bookingHistoryTab === 'a_venir' ? 'primary' : 'ghost'}" data-booking-tab="a_venir" aria-pressed="${bookingHistoryTab === 'a_venir'}">En cours et à venir</button>
+        <button type="button" class="btn ${bookingHistoryTab === 'historique' ? 'primary' : 'ghost'}" data-booking-tab="historique" aria-pressed="${bookingHistoryTab === 'historique'}">Historique (terminées et annulées)</button>
+      </div>
+      ${visibleBookings.length ? '' : `<p class="card muted">${bookingHistoryTab === 'historique' ? 'Aucune réservation terminée ou annulée.' : 'Aucune réservation en cours ou à venir.'}</p>`}
+      ${visibleBookings.map((b) => {
         const active = ['en_attente', 'proposee', 'attribuee'].includes(b.status);
         const showStop = b.series_id && active && !series[b.series_id];
         if (b.series_id) series[b.series_id] = true;
@@ -805,7 +812,7 @@
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
           <div class="row" style="justify-content:flex-start;margin-top:10px">
             ${active && hoursLeft(b) >= 24 ? `<button class="btn ghost" data-edit="${b.id}">Modifier</button>` : ''}
-            ${active ? `<button class="btn ghost" data-cancel="${b.id}">${hoursLeft(b) >= 24 ? 'Annuler' : 'Annuler (50 % retenus)'}</button>` : ''}
+            ${active ? `<button class="btn ghost" data-cancel="${b.id}">Annuler ma réservation</button>` : ''}
             ${b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">Reçu</a>` : ''}
             ${showStop ? `<button class="btn ghost" data-stop="${b.series_id}">Arrêter la récurrence</button>` : ''}
             ${b.status !== 'annulee' ? `<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button>` : ''}
@@ -817,10 +824,11 @@
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
           ${b.status === 'terminee' && !b.rating ? `<p style="margin:10px 0 0"><b>Comment s'est passé le ménage ?</b></p><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div>` : ''}
           ${b.rating ? `<p class="small muted" style="margin:8px 0 0">Votre note : ${'★'.repeat(b.rating)}</p>` : ''}
-          ${b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
+          ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
         </article>`;
       }).join('')}`;
     const act = (sel, fn) => $app.querySelectorAll(sel).forEach((btn) => btn.onclick = () => fn(btn));
+    act('[data-booking-tab]', (btn) => { bookingHistoryTab = btn.dataset.bookingTab; route(); });
     act('[data-prefslots]', async (btn) => {
       const id = btn.dataset.prefslots;
       const box = document.getElementById(`pref-${id}`);
@@ -838,7 +846,21 @@
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     act('[data-pay-booking]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.payBooking}/pay`, {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); } });
-    act('[data-cancel]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
+    act('[data-cancel]', async (btn) => {
+      const b = list.find((item) => String(item.id) === btn.dataset.cancel);
+      if (!b || !['en_attente', 'proposee', 'attribuee'].includes(b.status)) return;
+      const late = hoursLeft(b) < 24;
+      const refund = Math.round(Number(b.total) * (late ? 0.5 : 1) * 100) / 100;
+      const retained = Math.round((Number(b.total) - refund) * 100) / 100;
+      const paid = b.paid || ['paye', 'simule'].includes(b.payment_status);
+      const explanation = paid
+        ? `Prix : ${eur(b.total)}\nMontant retenu : ${eur(retained)}\nRemboursement prévu : ${eur(refund)}\nLe remboursement sera traité séparément après l'annulation.`
+        : `Prix : ${eur(b.total)}\nMontant retenu selon les conditions : ${eur(retained)}\nAucun remboursement n'est dû tant que le paiement n'a pas été effectué.`;
+      if (!confirm(`Confirmer l'annulation de la réservation n° ${b.id} ?\n\n${explanation}\n\nCette action est définitive.`)) return;
+      btn.disabled = true;
+      try { const r = await api('POST', `/api/bookings/${b.id}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); }
+      catch (e) { btn.disabled = false; toast(e.message); }
+    });
     act('[data-stop]', async (btn) => { try { const r = await api('POST', `/api/series/${btn.dataset.stop}/stop`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
     act('[data-edit]', (btn) => {
