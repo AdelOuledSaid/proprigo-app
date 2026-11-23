@@ -402,6 +402,46 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       return { checkout_url: session.url };
     } catch (e) { throw new HttpError(502, 'Paiement indisponible. Réessayez.'); }
   });
+  // ---- double encaissement Stripe : remboursement automatique de ce qui a été payé en trop
+  db.exec(`CREATE TABLE IF NOT EXISTS stripe_intents_seen (payment_intent TEXT PRIMARY KEY, booking_ids TEXT NOT NULL, amount_cents INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  db.exec(`CREATE TABLE IF NOT EXISTS stripe_duplicate_refunds (payment_intent TEXT PRIMARY KEY, session_id TEXT, client_id INTEGER, booking_ids TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL, refund_id TEXT, status TEXT NOT NULL DEFAULT 'a_rembourser', created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  const euros = (c) => `${(c / 100).toFixed(2).replace('.', ',')} €`;
+  async function refundDuplicateCharge({ paymentIntent, amountCents, sessionId, ids, clientId }) {
+    if (!paymentIntent) {
+      db_.log(db, `ALERTE DOUBLE PAIEMENT réservation(s) ${ids.join(', ')} : encaissement sans référence Stripe, à rembourser dans Stripe.`);
+      return;
+    }
+    try {
+      const r = await stripePay.refundDuplicate({ db, paymentIntent, amountCents, sessionId, bookingIds: ids, clientId });
+      if (r.already) return;
+      if (sessionId) db.prepare("UPDATE stripe_payments SET status = 'duplicate_refunded' WHERE session_id = ?").run(sessionId);
+      db_.log(db, `Double paiement réservation(s) ${ids.join(', ')} : ${euros(amountCents)} remboursés automatiquement (${r.status === 'pending' ? 'en cours' : 'effectué'}).`);
+      const u = clientId ? db.prepare('SELECT name, email FROM users WHERE id = ?').get(clientId) : null;
+      if (u) mailer.send(u.email, 'Paiement en double remboursé', 'Paiement en double remboursé', [
+        `Bonjour ${u.name.split(' ')[0]},`,
+        `Votre réservation n° ${ids.join(', ')} a été payée deux fois. Le deuxième paiement de ${euros(amountCents)} vient d'être remboursé automatiquement.`,
+        "Le remboursement apparaît sur votre compte sous 5 à 10 jours selon votre banque. Votre réservation reste confirmée et payée une seule fois.",
+      ], { label: 'Mes réservations', path: '/#/mes-reservations' });
+    } catch (e) {
+      db_.log(db, `ALERTE DOUBLE PAIEMENT réservation(s) ${ids.join(', ')} : remboursement automatique de ${euros(amountCents)} impossible (${e.message}). À rembourser dans Stripe.`);
+    }
+  }
+  async function reconcileDuplicateIntents(ids) {
+    for (const seen of db.prepare("SELECT * FROM stripe_intents_seen WHERE created_at >= datetime('now', '-60 days')").all()) {
+      const seenIds = JSON.parse(seen.booking_ids);
+      if (!seenIds.some((id) => ids.includes(id))) continue;
+      // Ce PaymentIntent est déjà rattaché à une session connue (retenue, ou doublon déjà traité).
+      if (db.prepare('SELECT 1 FROM stripe_payments WHERE payment_intent = ?').get(seen.payment_intent)) continue;
+      if (db.prepare("SELECT 1 FROM stripe_duplicate_refunds WHERE payment_intent = ? AND status <> 'echec'").get(seen.payment_intent)) continue;
+      // Seulement si la réservation est déjà payée par un AUTRE encaissement identifié.
+      const kept = db.prepare(`SELECT * FROM stripe_payments WHERE status = 'paid' AND payment_intent IS NOT NULL AND payment_intent <> ?
+        AND EXISTS (SELECT 1 FROM json_each(booking_ids) WHERE value IN (${seenIds.map(() => '?').join(',')})) ORDER BY created_at LIMIT 1`).get(seen.payment_intent, ...seenIds);
+      if (!kept) continue;
+      await refundDuplicateCharge({ paymentIntent: seen.payment_intent, amountCents: seen.amount_cents, sessionId: null, ids: seenIds, clientId: kept.client_id });
+    }
+  }
+
   route('GET', '/api/payments/status', ({ user, query }) => {
     need(user, 'client');
     const id = Number(query.get('booking'));
@@ -1512,9 +1552,9 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
             });
             if (alreadyPaid) {
               // Never hide an actual second charge. Record it for manual refund/reconciliation.
-              db.prepare("UPDATE stripe_payments SET status = 'duplicate_paid', payment_intent = ? WHERE session_id = ?")
-                .run(typeof sess.payment_intent === 'string' ? sess.payment_intent : null, sess.id);
-              db_.log(db, `ALERTE DOUBLE PAIEMENT Stripe session ${sess.id} pour réservation(s) ${ids.join(', ')} : remboursement à vérifier.`);
+              const dupPi = typeof sess.payment_intent === 'string' ? sess.payment_intent : sess.payment_intent?.id || null;
+              db.prepare("UPDATE stripe_payments SET status = 'duplicate_paid', payment_intent = ? WHERE session_id = ?").run(dupPi, sess.id);
+              await refundDuplicateCharge({ paymentIntent: dupPi, amountCents: sess.amount_total, sessionId: sess.id, ids, clientId: payment.client_id });
             } else {
             db.exec('BEGIN IMMEDIATE');
             try {
@@ -1536,6 +1576,20 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
               }
             }
             await stripePay.expireOtherSessions(db, ids, sess.id);
+            await reconcileDuplicateIntents(ids);
+          }
+        }
+        // Filet de sécurité : le même lien Stripe ouvert dans deux onglets peut produire
+        // un deuxième encaissement sans deuxième session. Chaque PaymentIntent réussi est noté,
+        // puis comparé au paiement retenu pour la réservation.
+        if (event.type === 'payment_intent.succeeded') {
+          const pi = event.data.object;
+          let ids = [];
+          try { ids = JSON.parse(pi?.metadata?.booking_ids || '[]'); } catch { ids = []; }
+          ids = Array.isArray(ids) ? ids.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0) : [];
+          if (pi && typeof pi.id === 'string' && ids.length && pi.currency === 'eur' && Number.isSafeInteger(pi.amount_received) && pi.amount_received > 0) {
+            db.prepare('INSERT OR IGNORE INTO stripe_intents_seen (payment_intent, booking_ids, amount_cents) VALUES (?, ?, ?)').run(pi.id, JSON.stringify(ids), pi.amount_received);
+            await reconcileDuplicateIntents(ids);
           }
         }
         if (event.type === 'refund.updated') {

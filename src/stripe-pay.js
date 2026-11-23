@@ -172,6 +172,48 @@ async function refund({ db, bookingId, amountCents }) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id: out.id, status: out.status };
 }
+/**
+ * Remboursement automatique d'un encaissement en trop (deuxième onglet, deuxième session…).
+ * Une ligne par PaymentIntent : jamais deux remboursements pour le même encaissement,
+ * et la clé d'idempotence Stripe protège aussi contre les webhooks rejoués.
+ */
+async function refundDuplicate({ db, paymentIntent, amountCents, sessionId, bookingIds, clientId }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (typeof paymentIntent !== 'string' || !/^pi_[A-Za-z0-9_]+$/.test(paymentIntent)) throw new Error('Invalid payment intent');
+  if (!Number.isSafeInteger(amountCents) || amountCents < 1) throw new Error('Invalid amount');
+  db.exec(`CREATE TABLE IF NOT EXISTS stripe_duplicate_refunds (payment_intent TEXT PRIMARY KEY, session_id TEXT, client_id INTEGER, booking_ids TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL, refund_id TEXT, status TEXT NOT NULL DEFAULT 'a_rembourser', created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  const inserted = db.prepare('INSERT OR IGNORE INTO stripe_duplicate_refunds (payment_intent, session_id, client_id, booking_ids, amount_cents) VALUES (?, ?, ?, ?, ?)')
+    .run(paymentIntent, sessionId || null, clientId || null, JSON.stringify(bookingIds), amountCents);
+  const row = db.prepare('SELECT * FROM stripe_duplicate_refunds WHERE payment_intent = ?').get(paymentIntent);
+  if (!inserted.changes && row.refund_id) return { id: row.refund_id, status: row.status, already: true };
+  const params = new URLSearchParams({ payment_intent: paymentIntent, amount: String(amountCents), reason: 'duplicate',
+    'metadata[booking_ids]': JSON.stringify(bookingIds), 'metadata[proprigo]': 'duplicate_payment' });
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `proprigo-duplicate-${paymentIntent}` },
+      body: params, signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    db.prepare("UPDATE stripe_duplicate_refunds SET status = 'echec' WHERE payment_intent = ?").run(paymentIntent);
+    throw new Error('Stripe refund network error');
+  }
+  const out = await resp.json().catch(() => ({}));
+  // Déjà remboursé en totalité (par exemple à la main dans Stripe) : rien à refaire.
+  if (!resp.ok && out.error?.code === 'charge_already_refunded') {
+    db.prepare("UPDATE stripe_duplicate_refunds SET status = 'rembourse' WHERE payment_intent = ?").run(paymentIntent);
+    return { id: null, status: 'succeeded', already: true };
+  }
+  if (!resp.ok || !out.id || !['succeeded', 'pending'].includes(out.status)) {
+    db.prepare("UPDATE stripe_duplicate_refunds SET status = 'echec' WHERE payment_intent = ?").run(paymentIntent);
+    throw new Error(out.error?.message ? `Stripe : ${out.error.message}` : 'Stripe refund failed');
+  }
+  db.prepare('UPDATE stripe_duplicate_refunds SET refund_id = ?, status = ? WHERE payment_intent = ?')
+    .run(out.id, out.status === 'succeeded' ? 'rembourse' : 'remboursement_en_cours', paymentIntent);
+  return { id: out.id, status: out.status };
+}
 /** Paiement d'une carte cadeau ou d'un pack d'heures : une session Stripe dédiée, reconnue par son identifiant. */
 async function checkoutGift({ db, gift, email, appUrl }) {
   if (!configured()) throw new Error('Stripe not configured');
@@ -205,4 +247,4 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, checkoutGift };
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, checkoutGift };
