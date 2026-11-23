@@ -32,7 +32,43 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   const db = db_.open(dbFile);
   const stripeReady = paymentsEnabled && stripePay.configured();
   if (seed) db_.seedDemo(db, adminPassword);
-  const loginAttempts = new Map();
+  // Protection CSRF : une requête qui modifie des données doit venir du site lui-même.
+  // Le navigateur envoie toujours Origin (ou au moins Referer) sur un POST ; un autre site ne peut pas le falsifier.
+  const ownOrigins = new Set([(() => { try { return new URL(appUrl).origin; } catch { return ''; } })()].filter(Boolean));
+  const sameOrigin = (req) => {
+    const src = req.headers.origin || (req.headers.referer ? (() => { try { return new URL(req.headers.referer).origin; } catch { return 'invalid'; } })() : '');
+    if (!src) return !production || req.headers['sec-fetch-site'] === 'same-origin' || !req.headers['sec-fetch-site'];
+    if (src === 'null' || src === 'invalid') return false;
+    const host = req.headers.host;
+    return ownOrigins.has(src) || (host && (src === `https://${host}` || (!production && src === `http://${host}`)));
+  };
+  // Derrière Render, l'adresse du visiteur est la première de X-Forwarded-For.
+  const clientIp = (req) => (production && typeof req.headers['x-forwarded-for'] === 'string'
+    ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.socket.remoteAddress || '').slice(0, 64);
+  // Tentatives de connexion : gardées dans la base, donc conservées après un redémarrage.
+  db.exec(`CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL)`);
+  const LIMITS = [
+    { kind: 'ip+email', max: 5, lockMs: 10 * 60e3 },   // 5 erreurs pour un compte depuis une adresse → 10 min
+    { kind: 'email', max: 20, lockMs: 60 * 60e3 },     // 20 erreurs sur un compte, toutes adresses → 1 h
+    { kind: 'ip', max: 50, lockMs: 60 * 60e3 },        // 50 erreurs depuis une adresse, tous comptes → 1 h
+  ];
+  const attemptKeys = (ip, email) => ({ 'ip+email': `ie|${ip}|${email}`, email: `e|${email}`, ip: `i|${ip}` });
+  const loginBlocked = (ip, email) => {
+    const keys = attemptKeys(ip, email); const t = Date.now();
+    return LIMITS.some((l) => (db.prepare('SELECT until FROM login_attempts WHERE key = ?').get(keys[l.kind])?.until || 0) > t);
+  };
+  const loginFailed = (ip, email) => {
+    const keys = attemptKeys(ip, email); const t = Date.now();
+    for (const l of LIMITS) {
+      const k = keys[l.kind];
+      const row = db.prepare('SELECT n, updated FROM login_attempts WHERE key = ?').get(k);
+      const n = row && t - row.updated < l.lockMs ? row.n + 1 : 1; // le compteur repart de zéro après une période calme
+      if (n >= l.max) db.prepare('INSERT INTO login_attempts (key, n, until, updated) VALUES (?, 0, ?, ?) ON CONFLICT(key) DO UPDATE SET n = 0, until = excluded.until, updated = excluded.updated').run(k, t + l.lockMs, t);
+      else db.prepare('INSERT INTO login_attempts (key, n, until, updated) VALUES (?, ?, 0, ?) ON CONFLICT(key) DO UPDATE SET n = excluded.n, updated = excluded.updated').run(k, n, t);
+    }
+  };
+  const loginOk = (ip, email) => db.prepare('DELETE FROM login_attempts WHERE key = ?').run(attemptKeys(ip, email)['ip+email']);
+  const purgeAttempts = () => db.prepare('DELETE FROM login_attempts WHERE until < ? AND updated < ?').run(Date.now(), Date.now() - 24 * 3600e3);
   const syncAsks = new Map();
   mailer.configure({
     outbox: mail.outbox || (dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-outbox-')) : path.join(path.dirname(dbFile), 'outbox')),
@@ -45,11 +81,18 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   const refundFor = (b) => (hoursBefore(b) >= FREE_CANCEL_HOURS ? b.total : Math.round(b.total * (1 - LATE_CANCEL_KEEP) * 100) / 100);
   const emailOf = (uid) => (db.prepare('SELECT email FROM users WHERE id = ?').get(uid) || {}).email;
   const fr = (d) => engine.frDate(d);
-  // RGPD : les photos sont supprimées 90 jours après leur ajout
-  for (const ph of db.prepare("SELECT * FROM photos WHERE created_at < datetime('now', '-90 days')").all()) {
-    try { fs.unlinkSync(path.join(PHOTOS, ph.file)); } catch { /* déjà supprimée */ }
-    db.prepare('DELETE FROM photos WHERE id = ?').run(ph.id);
-  }
+  // RGPD : les photos sont supprimées 90 jours après leur ajout (au démarrage, puis chaque jour)
+  const purgePhotos = () => {
+    let n = 0;
+    for (const ph of db.prepare("SELECT * FROM photos WHERE created_at < datetime('now', '-90 days')").all()) {
+      try { fs.unlinkSync(path.join(PHOTOS, path.basename(ph.file))); } catch { /* déjà supprimée */ }
+      db.prepare('DELETE FROM photos WHERE id = ?').run(ph.id);
+      n += 1;
+    }
+    if (n) db_.log(db, `Photos de plus de 90 jours supprimées : ${n}.`);
+    return n;
+  };
+  purgePhotos();
 
   // ---------- outils ----------
   const send = (res, status, data, headers = {}) => {
@@ -126,14 +169,35 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
     const backupOk = !backupDir || (lastBackup && Date.now() - lastBackup < 48 * 3600e3) || Date.now() - started < 3600e3;
     const ok = dbOk && backupOk;
-    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard' };
+    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
     return ok ? data : { status: 503, data };
   });
+  // Copie hors de Render : état du dernier envoi (affiché dans l'admin et /api/health)
+  let offsite = { configured: false, ok: null, at: null, error: null, file: null };
+  try { offsite.configured = Boolean(backups.offsiteConfig()); } catch (e) { offsite = { ...offsite, configured: true, ok: false, error: e.message }; }
+  const runOffsite = async (f) => {
+    let cfg;
+    try { cfg = backups.offsiteConfig(); } catch (e) { offsite = { ...offsite, ok: false, error: e.message }; return; }
+    if (!cfg) return;
+    try {
+      const name = await backups.uploadOffsite(f, cfg);
+      offsite = { configured: true, ok: true, at: Date.now(), error: null, file: name };
+    } catch (e) {
+      offsite = { ...offsite, configured: true, ok: false, error: e.message };
+      db_.log(db, `Sauvegarde externe impossible : ${e.message}`);
+    }
+  };
+  let lastVerify = null;
   const runBackup = () => {
     try {
       const f = backups.backup(db, backupDir);
+      // Essai de restauration : la copie doit s'ouvrir et être intacte.
+      const v = backups.verify(f);
+      lastVerify = { ...v, file: path.basename(f) };
+      if (!v.ok) throw new Error('copie créée mais abîmée (contrôle d\'intégrité en échec)');
       lastBackup = Date.now();
       lastBackupError = null;
+      runOffsite(f).catch(() => {});
       return f;
     } catch (e) {
       lastBackupError = e.message;
@@ -150,7 +214,24 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   route('GET', '/api/admin/backups', ({ user }) => {
     need(user, 'admin');
     if (!backupDir) return { enabled: false, list: [] };
-    return { enabled: true, error: lastBackupError, list: backups.list(backupDir).slice(0, 5).map((b) => ({ file: b.file, size: b.size, time: new Date(b.time).toISOString() })) };
+    return { enabled: true, error: lastBackupError, verify: lastVerify,
+      offsite: { ...offsite, at: offsite.at ? new Date(offsite.at).toISOString() : null },
+      download: Boolean(process.env.BACKUP_ENCRYPTION_KEY && process.env.BACKUP_ENCRYPTION_KEY.length >= 20),
+      list: backups.list(backupDir).slice(0, 5).map((b) => ({ file: b.file, size: b.size, time: new Date(b.time).toISOString() })) };
+  });
+  // Télécharger la dernière sauvegarde, toujours chiffrée (à garder sur un autre support).
+  route('GET', '/api/admin/backups/latest', ({ user, res }) => {
+    need(user, 'admin');
+    if (!backupDir) throw new HttpError(400, 'Sauvegardes désactivées.');
+    const key = process.env.BACKUP_ENCRYPTION_KEY;
+    if (!key || key.length < 20) throw new HttpError(400, 'Définissez BACKUP_ENCRYPTION_KEY sur Render pour télécharger une sauvegarde chiffrée.');
+    const last = backups.list(backupDir)[0];
+    if (!last) throw new HttpError(404, 'Aucune sauvegarde pour le moment.');
+    const buf = backups.encrypt(fs.readFileSync(path.join(backupDir, last.file)), key);
+    db_.log(db, `Sauvegarde ${last.file} téléchargée (chiffrée) par ${user.email}.`);
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${last.file}.enc"`, 'Cache-Control': 'no-store' });
+    res.end(buf);
+    return { streamed: true };
   });
   route('POST', '/api/admin/backups', ({ user }) => {
     need(user, 'admin');
@@ -204,17 +285,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   });
 
   route('POST', '/api/login', ({ body, ip }) => {
-    const key = ip + '|' + str(body.email, 120).toLowerCase();
-    const a = loginAttempts.get(key) || { n: 0, until: 0 };
-    if (a.until > Date.now()) throw new HttpError(429, 'Trop d\'essais. Réessayez dans quelques minutes.');
-    const u = db.prepare('SELECT * FROM users WHERE email = ?').get(str(body.email, 120).toLowerCase());
+    const email = str(body.email, 120).toLowerCase();
+    if (loginBlocked(ip, email)) throw new HttpError(429, 'Trop d\'essais. Réessayez dans quelques minutes.');
+    const u = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!u || !db_.checkPassword(String(body.password || ''), u.pass_hash)) {
-      a.n += 1;
-      if (a.n >= 5) { a.until = Date.now() + 10 * 60e3; a.n = 0; }
-      loginAttempts.set(key, a);
+      loginFailed(ip, email);
       throw new HttpError(401, 'E-mail ou mot de passe incorrect.');
     }
-    loginAttempts.delete(key);
+    loginOk(ip, email);
     return { data: { ok: true, role: u.role }, headers: { 'Set-Cookie': login(null, u.id) } };
   });
 
@@ -1192,16 +1270,30 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     return { ok: true, message: 'Logement supprimé.' };
   });
 
+  // Synchronisation Airbnb. En production, chaque ménage détecté attend le paiement du client :
+  // il reçoit un message et un e-mail avec le bouton « Payer », et l'attribution n'a lieu qu'après paiement.
+  const syncOptions = () => ({
+    now: now(), allowAny: icalAllowAny, fetchText: icalFetch, prepay: production,
+    onPrepay: (id, home, total) => {
+      const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+      engine.notify(db, id, `Nouveau départ de voyageurs détecté pour « ${home.name} » le ${fr(b.date)}. Le ménage est prêt : payez-le depuis « Mes réservations » pour qu'une intervenante soit attribuée.`);
+      mailer.send(emailOf(home.client_id), `Ménage à confirmer : ${home.name}, ${fr(b.date)}`, 'Un ménage à confirmer', [
+        `Le calendrier de « ${home.name} » indique un départ de voyageurs le ${fr(b.date)}.`,
+        `Nous avons préparé le ménage (${String(total).replace('.', ',')} €). Payez-le pour qu'une intervenante soit attribuée.`,
+        "Sans paiement, aucune intervenante ne viendra. Si vous n'en avez pas besoin, annulez-le simplement.",
+      ], { label: 'Payer ce ménage', path: '/#/mes-reservations' });
+    },
+  });
   route('POST', '/api/homes/:id/sync', async ({ user, id }) => {
     need(user, 'client');
     const h = db.prepare('SELECT * FROM homes WHERE id = ? AND client_id = ?').get(id, user.id);
     if (!h) throw new HttpError(404, 'Logement introuvable.');
-    if (production) throw new HttpError(503, 'Réservations Airbnb automatiques suspendues jusqu’à la mise en place du prépaiement.');
+    if (production && !stripeReady) throw new HttpError(503, 'Réservations Airbnb automatiques indisponibles tant que le paiement en ligne n’est pas activé.');
     const lastAsk = syncAsks.get(id) || 0;
     if (now().getTime() - lastAsk < 120e3) throw new HttpError(429, 'Calendrier déjà synchronisé il y a moins de 2 minutes.');
     syncAsks.set(id, now().getTime());
     try {
-      return await ical.syncHome(db, h, { now: now(), allowAny: icalAllowAny, fetchText: icalFetch });
+      return await ical.syncHome(db, h, syncOptions());
     } catch (e) {
       db.prepare("UPDATE homes SET last_sync = datetime('now'), last_sync_result = ? WHERE id = ?").run('Erreur : ' + e.message, id);
       throw new HttpError(400, e.message);
@@ -1718,6 +1810,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
         return send(res, 200, { received: true });
       }
       if (url.pathname.startsWith('/api/')) {
+        if (req.method !== 'GET' && req.method !== 'HEAD' && !sameOrigin(req)) throw new HttpError(403, 'Requête refusée : origine non autorisée.');
         if (req.method === 'POST' && !(req.headers['content-type'] || '').startsWith('application/json')) {
           throw new HttpError(415, 'Contenu JSON attendu.');
         }
@@ -1725,7 +1818,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
         if (!r) throw new HttpError(404, 'Introuvable.');
         const id = Number((url.pathname.match(r.re) || [])[1]);
         const body = req.method === 'POST' ? await readBody(req, /\/photos$/.test(url.pathname) ? 4_000_000 : 100_000) : {};
-        const out = await r.handler({ req, res, body, id, query: url.searchParams, user: currentUser(req), ip: req.socket.remoteAddress || '' });
+        const out = await r.handler({ req, res, body, id, query: url.searchParams, user: currentUser(req), ip: clientIp(req) });
         if (out && out.streamed) return;
         if (out && out.data !== undefined && (out.status || out.headers)) return send(res, out.status || 200, out.data, out.headers);
         return send(res, 200, out);
@@ -1761,9 +1854,9 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
 
   if (autoSync) {
     const run = async () => {
-      if (production) return; // Synchronisation auto suspendue : ne pas créer de mission Airbnb impayée.
+      if (production && !stripeReady) return; // sans paiement en ligne, aucune mission Airbnb n'est créée
       for (const h of db.prepare('SELECT * FROM homes WHERE ical_url IS NOT NULL').all()) {
-        try { await ical.syncHome(db, h, { now: now(), allowAny: icalAllowAny, fetchText: icalFetch }); } catch (e) {
+        try { await ical.syncHome(db, h, syncOptions()); } catch (e) {
           db.prepare("UPDATE homes SET last_sync = datetime('now'), last_sync_result = ? WHERE id = ?").run('Erreur : ' + e.message, h.id);
         }
       }
@@ -1785,11 +1878,12 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
     return list.length;
   };
   if (autoSync) {
+    setInterval(() => { try { purgePhotos(); purgeAttempts(); } catch (e) { console.error('Nettoyage quotidien :', e.message); } }, 24 * 3600e3).unref();
     setTimeout(runReminders, 60_000).unref();
     setInterval(runReminders, 3600e3).unref();
   }
 
-  return { server, db, runReminders, runBackup };
+  return { server, db, runReminders, runBackup, purgePhotos };
 }
 
 module.exports = { createApp };

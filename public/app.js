@@ -1271,10 +1271,15 @@
         <section class="card" data-tab="suivi"><h2>E-mails envoyés</h2><p class="small muted">${ob.provider ? `Envoi réel via ${esc(ob.provider)}.` : 'Mode local : les e-mails ne partent pas, ils sont enregistrés ici pour vérification.'}</p>
           <ul class="plain small">${ob.list.slice(0, 12).map((m) => `<li><span>${esc(m.subject)}<br><span class="muted">${esc(m.to)}</span></span><a href="/api/admin/outbox/${encodeURIComponent(m.file)}" target="_blank" rel="noopener">Ouvrir</a></li>`).join('') || '<li class="muted">Aucun e-mail.</li>'}</ul></section>
         <section class="card" data-tab="suivi"><h2>Sauvegardes</h2>
-          ${bk.enabled ? `<p class="small muted">Une sauvegarde automatique par jour ; les 14 dernières sont gardées dans <b>data/backups</b>. Copiez-les aussi ailleurs (clé USB, stockage en ligne).</p>
+          ${bk.enabled ? `<p class="small muted">Une sauvegarde automatique par jour ; les 14 dernières sont gardées sur le serveur.</p>
           ${bk.error ? `<p class="msg warn">Dernière sauvegarde en échec : ${esc(bk.error)}</p>` : ''}
+          ${bk.verify && bk.verify.ok ? `<p class="small">Dernière copie vérifiée : elle s'ouvre et contient ${bk.verify.users} comptes et ${bk.verify.bookings} réservations.</p>` : ''}
+          ${!bk.offsite || !bk.offsite.configured ? '<p class="msg warn">Pas de copie hors de Render : si le disque est perdu, les sauvegardes le sont aussi. Configurez le stockage externe (voir SAUVEGARDES.md).</p>'
+            : bk.offsite.ok ? `<p class="small">Copie externe chiffrée envoyée le ${new Date(bk.offsite.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}.</p>`
+            : bk.offsite.ok === false ? `<p class="msg warn">Copie externe en échec : ${esc(bk.offsite.error || '')}</p>` : '<p class="small muted">Copie externe : envoi à la prochaine sauvegarde.</p>'}
           <ul class="plain small">${bk.list.map((x) => `<li><span>${new Date(x.time).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><span class="muted">${Math.max(1, Math.round(x.size / 1024))} Ko</span></li>`).join('') || '<li class="muted">Aucune sauvegarde pour le moment.</li>'}</ul>
-          <button class="btn ghost" id="doBackup">Sauvegarder maintenant</button>` : '<p class="small muted">Sauvegardes désactivées.</p>'}</section>
+          <button class="btn ghost" id="doBackup">Sauvegarder maintenant</button>
+          ${bk.download ? '<a class="btn ghost" href="/api/admin/backups/latest" download>Télécharger la dernière (chiffrée)</a>' : ''}` : '<p class="small muted">Sauvegardes désactivées.</p>'}</section>
         ${r.couts ? `<section class="card" data-tab="chiffres"><h2>Hypothèses de marge</h2><p class="small muted">La marge est une estimation. Ces valeurs sont dans le fichier <b>config/couts.json</b> : faites-les valider par votre expert-comptable puis modifiez-les si besoin (redémarrage nécessaire).</p>
           <ul class="small"><li>Coût d'une salariée par heure facturée : ${eur(r.couts.salarieeParHeureFacturee)}</li><li>TVA particuliers : ${Math.round(r.couts.tvaParticulier * 100)} % · professionnels : ${Math.round(r.couts.tvaPro * 100)} %</li><li>Produits par mission : ${eur(r.couts.produits)} · matériel fourni : ${eur(r.couts.kitCout)}</li></ul></section>` : ''}
         <section class="card" data-tab="suivi" id="journal"><h2>Journal</h2>

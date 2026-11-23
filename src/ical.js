@@ -96,7 +96,7 @@ function checkComplete(text) {
  * Synchronise un logement. Crée les ménages des départs à venir (60 jours).
  * Un séjour qui disparaît du calendrier n'annule rien : le ménage est seulement signalé « à vérifier ».
  */
-async function syncHome(db, home, { now = new Date(), allowAny = false, fetchText = download, canBook = true } = {}) {
+async function syncHome(db, home, { now = new Date(), allowAny = false, fetchText = download, canBook = true, prepay = false, onPrepay = null } = {}) {
   if (!home.ical_url) throw new Error('Aucun calendrier relié à ce logement.');
   const url = await checkUrl(home.ical_url, allowAny);
   const text = await fetchText(url.toString());
@@ -115,11 +115,17 @@ async function syncHome(db, home, { now = new Date(), allowAny = false, fetchTex
     const q = pricing.quote({ service: home.service, size: home.size, hours: home.hours, cp: home.cp, date: e.end }, now);
     if (!q.ok || !q.open) continue;
     const r = db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, checklist, photo_consent, home_id, source, ical_uid)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, 'simule', ?, ?, ?, 'ical', ?)`).run(
-      home.client_id, q.service, q.size, q.hours, home.cp, home.address, e.end, home.checkout_time, q.total, q.zone, home.checklist, home.photo_consent, home.id, uid);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, ?, ?, ?, 'ical', ?)`).run(
+      home.client_id, q.service, q.size, q.hours, home.cp, home.address, e.end, home.checkout_time, q.total, q.zone, prepay ? 'en_attente_paiement' : 'simule', home.checklist, home.photo_consent, home.id, uid);
     const id = Number(r.lastInsertRowid);
-    log(db, `Calendrier « ${home.name} » : départ des voyageurs le ${e.end}, ménage n° ${id} créé automatiquement (${q.total} €, paiement simulé).`);
-    engine.assign(db, id);
+    if (prepay) {
+      // Production : le ménage attend le paiement du client. Aucune intervenante n'est sollicitée avant.
+      log(db, `Calendrier « ${home.name} » : départ des voyageurs le ${e.end}, ménage n° ${id} créé (${q.total} €), en attente du paiement du client.`);
+      if (onPrepay) onPrepay(id, home, q.total);
+    } else {
+      log(db, `Calendrier « ${home.name} » : départ des voyageurs le ${e.end}, ménage n° ${id} créé automatiquement (${q.total} €, paiement simulé).`);
+      engine.assign(db, id);
+    }
     created += 1;
   }
   // Séjours absents du calendrier : jamais d'annulation automatique.

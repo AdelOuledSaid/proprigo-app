@@ -1,3 +1,13 @@
+# Données privées : ne jamais les mettre dans Git ni dans une archive de code
 data/
-node_modules/
+*.db
+*.db-wal
+*.db-shm
+*.enc
+backups/
+outbox/
+photos/
 .env
+.env.*
+# Dépendances
+node_modules/
