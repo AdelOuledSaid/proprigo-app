@@ -41,7 +41,7 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
       });
       const old = await r.json();
       if (r.ok && old.status === 'open' && old.url) return { url: old.url };
-      if (r.ok && old.payment_status === 'paid') throw new Error('Payment already completed; awaiting webhook');
+      if (r.ok && (old.payment_status === 'paid' || old.status === 'complete')) throw new Error('Payment already completed; awaiting webhook');
       if (!r.ok) throw new Error(`Stripe session lookup failed (${r.status})`);
     } catch (err) {
       console.error('Stripe Checkout existing session:', { message: err.message });
@@ -53,6 +53,11 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   params.set('customer_email', email);
   params.set('metadata[booking_ids]', JSON.stringify(ids));
   params.set('payment_intent_data[metadata][booking_ids]', JSON.stringify(ids));
+  params.set('payment_intent_data[metadata][client_id]', String(clientId));
+  // Paiement en deux temps : Stripe bloque le montant, PROPRIGO n'encaisse que le premier
+  // paiement autorisé pour une réservation et annule les autres (aucun débit en double).
+  params.set('payment_intent_data[capture_method]', 'manual');
+  params.set('payment_method_types[0]', 'card');
   
   params.set('line_items[0][price_data][currency]', 'eur');
   params.set('line_items[0][price_data][unit_amount]', String(amount));
@@ -172,6 +177,46 @@ async function refund({ db, bookingId, amountCents }) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id: out.id, status: out.status };
 }
+// ---- PaymentIntent : lecture, encaissement, annulation (paiement en deux temps)
+async function stripeCall(method, path, params, idem) {
+  const headers = { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` };
+  if (params) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+  if (idem) headers['Idempotency-Key'] = idem;
+  let resp;
+  try { resp = await fetch(`https://api.stripe.com${path}`, { method, headers, body: params || undefined, signal: AbortSignal.timeout(15000) }); }
+  catch (err) { throw new Error(`Stripe network error (${path.split('/')[2]})`); }
+  const body = await resp.json().catch(() => ({}));
+  return { ok: resp.ok, status: resp.status, body };
+}
+const validPi = (pi) => typeof pi === 'string' && /^pi_[A-Za-z0-9_]+$/.test(pi);
+async function getIntent(pi) {
+  if (!validPi(pi)) throw new Error('Invalid payment intent');
+  const r = await stripeCall('GET', `/v1/payment_intents/${pi}`);
+  if (!r.ok || !r.body.id) throw new Error(`Stripe payment intent lookup failed (${r.status})`);
+  return r.body;
+}
+async function captureIntent(pi) {
+  if (!validPi(pi)) throw new Error('Invalid payment intent');
+  const r = await stripeCall('POST', `/v1/payment_intents/${pi}/capture`, new URLSearchParams(), `proprigo-capture-${pi}`);
+  if (r.ok && r.body.status === 'succeeded') return r.body;
+  const now = await getIntent(pi); // déjà encaissé lors d'un essai précédent ?
+  if (now.status === 'succeeded') return now;
+  throw new Error(`Stripe capture failed: ${r.body.error?.code || now.status}`);
+}
+async function cancelIntent(pi) {
+  if (!validPi(pi)) throw new Error('Invalid payment intent');
+  const r = await stripeCall('POST', `/v1/payment_intents/${pi}/cancel`, new URLSearchParams({ cancellation_reason: 'duplicate' }), `proprigo-cancel-${pi}`);
+  if (r.ok && r.body.status === 'canceled') return 'canceled';
+  const now = await getIntent(pi);
+  if (now.status === 'canceled') return 'canceled';
+  if (now.status === 'succeeded') return 'captured'; // déjà encaissé : il faudra rembourser
+  throw new Error(`Stripe cancel failed: ${r.body.error?.code || now.status}`);
+}
+async function sessionForIntent(pi) {
+  if (!validPi(pi)) return null;
+  const r = await stripeCall('GET', `/v1/checkout/sessions?payment_intent=${pi}&limit=1`);
+  return r.ok && Array.isArray(r.body.data) && r.body.data[0] ? r.body.data[0].id : null;
+}
 /**
  * Remboursement automatique d'un encaissement en trop (deuxième onglet, deuxième session…).
  * Une ligne par PaymentIntent : jamais deux remboursements pour le même encaissement,
@@ -186,7 +231,7 @@ async function refundDuplicate({ db, paymentIntent, amountCents, sessionId, book
   const inserted = db.prepare('INSERT OR IGNORE INTO stripe_duplicate_refunds (payment_intent, session_id, client_id, booking_ids, amount_cents) VALUES (?, ?, ?, ?, ?)')
     .run(paymentIntent, sessionId || null, clientId || null, JSON.stringify(bookingIds), amountCents);
   const row = db.prepare('SELECT * FROM stripe_duplicate_refunds WHERE payment_intent = ?').get(paymentIntent);
-  if (!inserted.changes && row.refund_id) return { id: row.refund_id, status: row.status, already: true };
+  if (!inserted.changes && (row.refund_id || row.status === 'annule')) return { id: row.refund_id, status: row.status, already: true };
   const params = new URLSearchParams({ payment_intent: paymentIntent, amount: String(amountCents), reason: 'duplicate',
     'metadata[booking_ids]': JSON.stringify(bookingIds), 'metadata[proprigo]': 'duplicate_payment' });
   let resp;
@@ -247,4 +292,4 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, checkoutGift };
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, getIntent, captureIntent, cancelIntent, sessionForIntent, checkoutGift };

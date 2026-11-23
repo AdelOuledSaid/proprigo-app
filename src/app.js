@@ -400,12 +400,16 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try {
       const session = await stripePay.checkout({ db, ids: [id], clientId: user.id, email: user.email, appUrl });
       return { checkout_url: session.url };
-    } catch (e) { throw new HttpError(502, 'Paiement indisponible. Réessayez.'); }
+    } catch (e) {
+      if (/already completed/.test(e.message)) throw new HttpError(409, 'Paiement déjà reçu : la confirmation arrive dans quelques secondes.');
+      throw new HttpError(502, 'Paiement indisponible. Réessayez.');
+    }
   });
   // ---- double encaissement Stripe : remboursement automatique de ce qui a été payé en trop
   db.exec(`CREATE TABLE IF NOT EXISTS stripe_intents_seen (payment_intent TEXT PRIMARY KEY, booking_ids TEXT NOT NULL, amount_cents INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
   db.exec(`CREATE TABLE IF NOT EXISTS stripe_duplicate_refunds (payment_intent TEXT PRIMARY KEY, session_id TEXT, client_id INTEGER, booking_ids TEXT NOT NULL,
     amount_cents INTEGER NOT NULL, refund_id TEXT, status TEXT NOT NULL DEFAULT 'a_rembourser', created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  db.exec('CREATE TABLE IF NOT EXISTS stripe_claims (booking_id INTEGER PRIMARY KEY, payment_intent TEXT NOT NULL)');
   const euros = (c) => `${(c / 100).toFixed(2).replace('.', ',')} €`;
   async function refundDuplicateCharge({ paymentIntent, amountCents, sessionId, ids, clientId }) {
     if (!paymentIntent) {
@@ -427,12 +431,106 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db_.log(db, `ALERTE DOUBLE PAIEMENT réservation(s) ${ids.join(', ')} : remboursement automatique de ${euros(amountCents)} impossible (${e.message}). À rembourser dans Stripe.`);
     }
   }
+  // ---- paiement en deux temps : le premier paiement autorisé est encaissé, les autres sont annulés
+  const idsOf = (meta) => {
+    let ids = [];
+    try { ids = JSON.parse(meta?.booking_ids || '[]'); } catch { ids = []; }
+    return Array.isArray(ids) ? [...new Set(ids.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))] : [];
+  };
+  function markBookingsPaid(ids, sessionId, piId) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (sessionId) db.prepare("UPDATE stripe_payments SET status = 'paid', payment_intent = ? WHERE session_id = ? AND status IN ('pending', 'expired', 'failed')").run(piId, sessionId);
+      for (const id of ids) {
+        db.prepare('INSERT OR IGNORE INTO stripe_claims (booking_id, payment_intent) VALUES (?, ?)').run(id, piId);
+        const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+        if (!b || b.paid) continue;
+        if (b.status === 'annulee') db.prepare("UPDATE bookings SET paid = 1, payment_status = 'a_rembourser', refund_amount = total WHERE id = ?").run(id);
+        else db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye' WHERE id = ?").run(id);
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    for (const id of ids) {
+      const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+      if (b && b.payment_status === 'paye' && b.status === 'en_attente') db_.log(db, `Réservation n° ${id} payée : attribution manuelle nécessaire.`);
+    }
+  }
+  async function settleIntent(piId) {
+    const pi = await stripePay.getIntent(piId);
+    if (pi.status !== 'requires_capture' && pi.status !== 'succeeded') return;
+    const ids = idsOf(pi.metadata);
+    if (!ids.length) return; // carte cadeau, pack… : pas concerné
+    const clientId = Number(pi.metadata?.client_id) || null;
+    const amount = pi.status === 'succeeded' ? pi.amount_received : pi.amount_capturable;
+    let verdict;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const bookings = ids.map((id) => db.prepare('SELECT * FROM bookings WHERE id = ?').get(id));
+      const claims = ids.map((id) => db.prepare('SELECT payment_intent FROM stripe_claims WHERE booking_id = ?').get(id));
+      const expected = bookings.reduce((t, b) => t + (b ? Math.round(b.total * 100) : 0), 0);
+      if (claims.every((c) => c && c.payment_intent === pi.id)) verdict = 'retenu';
+      else if (claims.some((c) => c && c.payment_intent !== pi.id) || bookings.some((b) => b && (b.paid || b.payment_status === 'paye'))) verdict = 'doublon';
+      else if (bookings.some((b) => !b || b.status === 'annulee')) verdict = 'annulee';
+      else if (pi.currency !== 'eur' || amount !== expected || (clientId && bookings.some((b) => b.client_id !== clientId))) verdict = 'incoherent';
+      else {
+        for (const id of ids) db.prepare('INSERT OR IGNORE INTO stripe_claims (booking_id, payment_intent) VALUES (?, ?)').run(id, pi.id);
+        verdict = 'retenu';
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+
+    if (verdict === 'retenu') {
+      if (pi.status === 'requires_capture') {
+        try { await stripePay.captureIntent(pi.id); }
+        catch (e) {
+          const now = await stripePay.getIntent(pi.id);
+          if (now.status === 'canceled') { // autorisation expirée : la réservation redevient payable
+            db.prepare('DELETE FROM stripe_claims WHERE payment_intent = ?').run(pi.id);
+            db_.log(db, `Paiement réservation(s) ${ids.join(', ')} : autorisation expirée avant encaissement, aucun débit.`);
+            return;
+          }
+          throw e; // Stripe réessaiera le webhook
+        }
+      }
+      const sessionId = await stripePay.sessionForIntent(pi.id).catch(() => null)
+        || db.prepare("SELECT session_id FROM stripe_payments WHERE booking_ids = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1").get(JSON.stringify(ids))?.session_id || null;
+      markBookingsPaid(ids, sessionId, pi.id);
+      await stripePay.expireOtherSessions(db, ids, sessionId || '');
+      await reconcileDuplicateIntents(ids);
+      return;
+    }
+    // Paiement en trop ou impossible : on annule l'autorisation, la carte n'est pas débitée.
+    const known = db.prepare('SELECT status FROM stripe_duplicate_refunds WHERE payment_intent = ?').get(pi.id);
+    if (known && known.status !== 'echec') return;
+    if (pi.status === 'requires_capture') {
+      const r = await stripePay.cancelIntent(pi.id);
+      if (r === 'canceled') {
+        const sessionId = await stripePay.sessionForIntent(pi.id).catch(() => null);
+        db.prepare(`INSERT INTO stripe_duplicate_refunds (payment_intent, session_id, client_id, booking_ids, amount_cents, status) VALUES (?, ?, ?, ?, ?, 'annule')
+          ON CONFLICT(payment_intent) DO UPDATE SET status = 'annule'`).run(pi.id, sessionId, clientId, JSON.stringify(ids), amount);
+        if (sessionId) db.prepare("UPDATE stripe_payments SET status = 'duplicate_canceled', payment_intent = ? WHERE session_id = ? AND status <> 'paid'").run(pi.id, sessionId);
+        const why = verdict === 'doublon' ? 'déjà payée' : verdict === 'annulee' ? 'annulée' : 'montant incohérent';
+        db_.log(db, `Paiement en double bloqué réservation(s) ${ids.join(', ')} (${why}) : ${euros(amount)} non encaissés, aucun débit.`);
+        const u = clientId ? db.prepare('SELECT name, email FROM users WHERE id = ?').get(clientId) : null;
+        if (u && verdict === 'doublon') mailer.send(u.email, 'Deuxième paiement annulé', 'Deuxième paiement annulé', [
+          `Bonjour ${u.name.split(' ')[0]},`,
+          `Votre réservation n° ${ids.join(', ')} était déjà payée. Le deuxième paiement de ${euros(amount)} a été annulé : votre carte n'est pas débitée.`,
+          'Selon votre banque, une ligne « en attente » peut apparaître quelques heures puis disparaître d\'elle-même.',
+        ], { label: 'Mes réservations', path: '/#/mes-reservations' });
+        return;
+      }
+    }
+    // Déjà encaissé (ancien paiement sans blocage) : remboursement complet.
+    if (verdict === 'doublon') await refundDuplicateCharge({ paymentIntent: pi.id, amountCents: amount, sessionId: null, ids, clientId });
+    else db_.log(db, `ALERTE PAIEMENT réservation(s) ${ids.join(', ')} : ${euros(amount)} encaissés alors que la réservation est ${verdict === 'annulee' ? 'annulée' : 'incohérente'}. À vérifier dans Stripe.`);
+  }
   async function reconcileDuplicateIntents(ids) {
     for (const seen of db.prepare("SELECT * FROM stripe_intents_seen WHERE created_at >= datetime('now', '-60 days')").all()) {
       const seenIds = JSON.parse(seen.booking_ids);
       if (!seenIds.some((id) => ids.includes(id))) continue;
       // Ce PaymentIntent est déjà rattaché à une session connue (retenue, ou doublon déjà traité).
       if (db.prepare('SELECT 1 FROM stripe_payments WHERE payment_intent = ?').get(seen.payment_intent)) continue;
+      if (db.prepare('SELECT 1 FROM stripe_claims WHERE payment_intent = ?').get(seen.payment_intent)) continue;
       if (db.prepare("SELECT 1 FROM stripe_duplicate_refunds WHERE payment_intent = ? AND status <> 'echec'").get(seen.payment_intent)) continue;
       // Seulement si la réservation est déjà payée par un AUTRE encaissement identifié.
       const kept = db.prepare(`SELECT * FROM stripe_payments WHERE status = 'paid' AND payment_intent IS NOT NULL AND payment_intent <> ?
@@ -502,6 +600,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
           return { status: 200, data: { checkout_url: session.url, created: 0, reused: true } };
         } catch (e) {
           console.error('Stripe Checkout retry failed:', { message: e.message });
+          if (/already completed/.test(e.message)) throw new HttpError(409, 'Paiement déjà reçu : la confirmation arrive dans quelques secondes.');
           throw new HttpError(502, 'Impossible de reprendre le paiement Stripe. Reessayez.');
         }
       }
@@ -1565,6 +1664,8 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
                   if (b.status === 'annulee') db.prepare("UPDATE bookings SET paid = 1, payment_status = 'a_rembourser', refund_amount = total WHERE id = ?").run(id);
                   else db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye' WHERE id = ?").run(id);
                 }
+                const legacyPi = typeof sess.payment_intent === 'string' ? sess.payment_intent : sess.payment_intent?.id;
+                if (legacyPi) db.prepare('INSERT OR IGNORE INTO stripe_claims (booking_id, payment_intent) VALUES (?, ?)').run(id, legacyPi);
               }
               db.exec('COMMIT');
             } catch (e) { db.exec('ROLLBACK'); throw e; }
@@ -1578,6 +1679,15 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
             await stripePay.expireOtherSessions(db, ids, sess.id);
             await reconcileDuplicateIntents(ids);
           }
+        }
+        // Paiement en deux temps : montant bloqué, pas encore encaissé.
+        if (event.type === 'payment_intent.amount_capturable_updated' && typeof event.data.object?.id === 'string') {
+          await settleIntent(event.data.object.id);
+        }
+        if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'unpaid') {
+          const sp = event.data.object.payment_intent;
+          const piId = typeof sp === 'string' ? sp : sp?.id;
+          if (piId && db.prepare('SELECT 1 FROM stripe_payments WHERE session_id = ?').get(event.data.object.id)) await settleIntent(piId);
         }
         // Filet de sécurité : le même lien Stripe ouvert dans deux onglets peut produire
         // un deuxième encaissement sans deuxième session. Chaque PaymentIntent réussi est noté,
