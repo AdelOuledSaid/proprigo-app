@@ -1426,6 +1426,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
 
   route('POST', '/api/admin/bookings/:id/refunded', ({ user, id }) => {
     need(user, 'admin');
+    if (stripeReady) throw new HttpError(409, 'Remboursement Stripe : utilisez le bouton de remboursement Stripe et attendez sa confirmation.');
     const r = db.prepare("UPDATE bookings SET payment_status = 'rembourse' WHERE id = ? AND payment_status = 'a_rembourser'").run(id);
     if (!r.changes) throw new HttpError(409, 'Rien à rembourser pour cette réservation.');
     db_.log(db, `Réservation n° ${id} : remboursement effectué.`);
