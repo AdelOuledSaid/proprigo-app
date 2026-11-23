@@ -103,6 +103,9 @@
   }
 
   let CONFIG = {};
+  // Prix en vigueur (envoyés par le serveur, modifiables dans l'admin) ; valeurs de secours si hors ligne.
+  const PRICES = () => CONFIG.prices || { menage: 37, grand: 42, bureau: 42, bureauHT: 35, airbnb: { studio: 95, T2: 119, T3: 145, maison: 195 }, kit: 15, sunday: 0.2, urgent: 0.25, subscription: 0.05 };
+  const pct = (x) => `${Math.round(x * 100)} %`;
   async function loadMe() {
     const r = await api('GET', '/api/me');
     me = r.user;
@@ -189,14 +192,17 @@
       swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
     };
     const ico = (k) => `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICO[k]}</svg>`;
-    const AIR = [['studio', 'Studio', 95], ['T2', '2 pièces', 119], ['T3', '3 pièces', 145], ['maison', 'Maison', 195]];
+    // Prix en vigueur, envoyés par le serveur (modifiables par le responsable dans l'admin).
+    const P = PRICES();
+    const eu = (n) => String(n).replace('.', ',');
+    const AIR = [['studio', 'Studio', P.airbnb.studio], ['T2', '2 pièces', P.airbnb.T2], ['T3', '3 pièces', P.airbnb.T3], ['maison', 'Maison', P.airbnb.maison]];
     $app.innerHTML = `
       <section class="hero2">
         <div class="hero2-text">
           <h1>Chez vous, tout brille.</h1>
           <p class="lead">Ménage à domicile, logements Airbnb, grand nettoyage et bureaux à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
           <form class="card stack choose" id="start">
-            <div class="svc svc4">${['menage', 'airbnb', 'grand', 'bureau'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: '37 € / h', airbnb: 'dès 95 €', grand: '42 € / h', bureau: '35 € HT / h' }[k]}</span></button>`).join('')}</div>
+            <div class="svc svc4">${['menage', 'airbnb', 'grand', 'bureau'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: `${eu(P.menage)} € / h`, airbnb: `dès ${eu(P.airbnb.studio)} €`, grand: `${eu(P.grand)} € / h`, bureau: `${eu(P.bureauHT)} € HT / h` }[k]}</span></button>`).join('')}</div>
             <div class="cp-row">
               <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="Ex. 75011" required></label>
               <button class="btn primary">Voir les créneaux</button>
@@ -228,35 +234,35 @@
           <article class="offer">
             <span class="offer-art">${ART.services.menage}</span>
             <h3>Ménage à domicile</h3>
-            <p class="offer-price"><b>37 €</b> de l'heure</p>
+            <p class="offer-price"><b>${eu(P.menage)} €</b> de l'heure</p>
             <ul><li>Cuisine, salle de bain, sols, poussière</li><li>Même intervenante chaque semaine si vous le souhaitez</li><li>Checklist personnalisée</li></ul>
             <button class="btn ghost full" data-book="menage">Réserver ce ménage</button>
           </article>
           <article class="offer offer-feature">
             <span class="offer-art">${ART.services.airbnb}</span>
             <h3>Ménage Airbnb</h3>
-            <p class="offer-price"><b id="airPrice">119 €</b> le forfait, linge compris</p>
-            <div class="chips" role="group" aria-label="Taille du logement">${AIR.map(([k, t]) => `<button type="button" data-air="${k}" data-price="${k === 'studio' ? 95 : k === 'T2' ? 119 : k === 'T3' ? 145 : 195}" aria-pressed="${k === 'T2'}">${t}</button>`).join('')}</div>
+            <p class="offer-price"><b id="airPrice">${eu(P.airbnb.T2)} €</b> le forfait, linge compris</p>
+            <div class="chips" role="group" aria-label="Taille du logement">${AIR.map(([k, t]) => `<button type="button" data-air="${k}" data-price="${String(P.airbnb[k]).replace('.', ',')}" aria-pressed="${k === 'T2'}">${t}</button>`).join('')}</div>
             <ul><li>Ménage et changement du linge entre deux voyageurs</li><li>Calendrier de l'annonce synchronisé</li><li>Photos avant / après sur demande</li></ul>
             <button class="btn primary full" data-book="airbnb">Réserver pour mon logement</button>
           </article>
           <article class="offer">
             <span class="offer-art">${ART.services.grand}</span>
             <h3>Grand nettoyage</h3>
-            <p class="offer-price"><b>42 €</b> de l'heure</p>
+            <p class="offer-price"><b>${eu(P.grand)} €</b> de l'heure</p>
             <ul><li>Fin de bail, emménagement, remise en état</li><li>Intérieur des placards, plinthes, vitres accessibles</li><li>Matériel apporté sur demande</li></ul>
             <button class="btn ghost full" data-book="grand">Réserver ce ménage</button>
           </article>
           <article class="offer">
             <span class="offer-art">${ART.services.bureau}</span>
             <h3>Nettoyage de bureaux</h3>
-            <p class="offer-price"><b>35 €</b> HT de l'heure</p>
+            <p class="offer-price"><b>${eu(P.bureauHT)} €</b> HT de l'heure</p>
             <ul><li>Postes de travail, sols, sanitaires, coin café</li><li>Avant l'ouverture ou après la fermeture</li><li>Chaque semaine avec la même intervenante, facture avec TVA</li></ul>
             <button class="btn ghost full" data-book="bureau">Demander un passage</button>
             <a class="small" href="#/pro" style="text-align:center">Grands locaux, agences, syndics : devis</a>
           </article>
         </div>
-        <p class="small muted offers-note">Prix TTC en Île-de-France (bureaux : 35 € HT, soit 42 € TTC). Matériel et produits apportés : +15 €. Dimanche et jours fériés : +20 %. Arrivée dans les 3 heures : +25 %.</p>
+        <p class="small muted offers-note">Prix TTC en Île-de-France (bureaux : ${eu(P.bureauHT)} € HT, soit ${eu(P.bureau)} € TTC). Matériel et produits apportés : +${eu(P.kit)} €. Dimanche et jours fériés : +${Math.round(P.sunday * 100)} %. Arrivée dans les 3 heures : +${Math.round(P.urgent * 100)} %.</p>
       </section>
 
       <section class="live">
@@ -559,7 +565,7 @@
           ? `<fieldset class="box"><legend>Taille du logement</legend><div class="chips">${Object.keys(SIZE).map((k) => `<button type="button" data-size="${k}" aria-pressed="${draft.size === k}">${SIZE[k]}</button>`).join('')}</div></fieldset>`
           : `<label>Durée<select id="hours">${[2, 2.5, 3, 3.5, 4, 5, 6, 7, 8].map((h) => `<option value="${h}" ${Number(draft.hours) === h ? 'selected' : ''}>${String(h).replace('.', ',')} h</option>`).join('')}</select></label>
              <p class="small muted" style="margin:0">${draft.service === 'bureau' ? 'Repère : environ 1 h pour 80 m² de bureaux (6 à 8 postes), plus les sanitaires et le coin café.' : 'Repère : 2 h pour un studio, 3 h pour un 2 pièces, 4 h pour un 3 pièces.'}</p>
-             <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : l'intervenante apporte aspirateur et produits (+15 €)</label>
+             <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : l'intervenante apporte aspirateur et produits (+${String(PRICES().kit).replace('.', ',')} €)</label>
              ${draft.service === 'grand' ? `<fieldset class="box"><legend>Fin de bail ?</legend>
                <p class="small muted" style="margin:0 0 8px">Choisissez la taille : la durée et la checklist de l'état des lieux sont réglées pour vous.</p>
                <div class="chips">${Object.entries(LEASE).map(([k, v]) => `<button type="button" data-lease="${k}" aria-pressed="${draft.lease === k}">${v.label} · ${String(v.hours).replace('.', ',')} h</button>`).join('')}</div></fieldset>` : ''}
@@ -980,6 +986,37 @@
   };
 
   // ---------- espace intervenante ----------
+  // Pièces justificatives de l'intervenante : dépôt et suivi de la vérification.
+  const DOC_STATUS = { a_verifier: ['En cours de vérification', ''], valide: ['Validé', 'ok'], refuse: ['À renvoyer', 'warn'] };
+  async function paintDocs() {
+    const box = document.getElementById('docs');
+    if (!box) return;
+    let d;
+    try { d = await api('GET', '/api/worker/documents'); } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+    box.innerHTML = `${box.closest('details') ? '' : '<h2>Mes documents</h2>'}
+      <p class="small muted">${d.complete ? 'Toutes les pièces obligatoires sont validées. Merci !' : 'Déposez chaque pièce en PDF ou en photo bien nette (5 Mo maximum). Seule l\'équipe Proprigo les voit.'}</p>
+      <ul class="plain doc-list">${d.list.map((k) => {
+        const st = k.latest ? DOC_STATUS[k.latest.status] : null;
+        return `<li><span><b>${esc(k.label)}</b>${k.required ? '' : ' <span class="muted small">(facultatif)</span>'}<br>
+          ${st ? `<span class="pill ${st[1]}">${st[0]}</span>${k.latest.status === 'refuse' && k.latest.note ? ` <span class="small">${esc(k.latest.note)}</span>` : ''} <a class="small" href="/api/documents/${k.latest.id}" target="_blank" rel="noopener">Voir</a>` : '<span class="small muted">Pas encore déposé</span>'}</span>
+          ${k.latest && k.latest.status === 'valide' ? '' : `<label class="btn ghost small-btn">${k.latest ? 'Remplacer' : 'Déposer'}<input type="file" accept="application/pdf,image/jpeg,image/png" data-doc="${k.kind}" hidden></label>`}</li>`;
+      }).join('')}</ul>`;
+    box.querySelectorAll('[data-doc]').forEach((inp) => inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      try {
+        let data;
+        if (f.type === 'application/pdf') {
+          if (f.size > 5_000_000) throw new Error('PDF trop lourd (5 Mo maximum).');
+          data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(new Error('Fichier illisible.')); fr.readAsDataURL(f); });
+        } else data = await shrink(f);
+        toast('Envoi en cours…');
+        const r = await api('POST', '/api/worker/documents', { kind: inp.dataset.doc, data });
+        toast(r.message);
+        paintDocs();
+      } catch (e) { toast(e.message); }
+    });
+  }
   views['intervenante'] = async () => {
     if (!me || me.role !== 'intervenante') return go('#/connexion');
     const r = await api('GET', '/api/worker/missions');
@@ -1021,8 +1058,11 @@
           <p class="muted">Vous recevrez des missions une fois toutes les étapes validées par notre équipe.</p>
           <div class="prog"><i style="width:${(p.step / (r.steps.length - 1)) * 100}%"></i></div>
           <ol>${r.steps.map((s, i) => `<li>${i < p.step ? '✓ ' : ''}${i === p.step ? '<b>' : ''}${esc(s)}${i === p.step ? ' (en cours)</b>' : ''}</li>`).join('')}</ol>
-        </section>${calendar}`;
+        </section>
+        ${p.rejected_at ? '<p class="card msg warn">Votre candidature est close. Vos documents seront supprimés dans 30 jours.</p>' : '<section class="card stack" id="docs"><h2>Mes documents</h2><p class="muted small">Chargement…</p></section>'}
+        ${calendar}`;
       bindCalendar();
+      paintDocs();
       return;
     }
     const tday = todayParis();
@@ -1071,7 +1111,10 @@
       ${today.length ? `<h2 style="margin-top:20px">Aujourd'hui</h2>${today.map(card).join('')}` : '<p class="card muted" style="margin-top:20px">Pas de mission aujourd\'hui.</p>'}
       ${later.length ? `<h2 style="margin-top:20px">À venir</h2>${(() => { const one = (b) => `<details class="card later"><summary><b>${dateFr(b.date)} ${esc(b.time)}</b> · ${esc(label(b))} · ${esc(b.cp)} ${pill(b.status)}</summary>${card(b)}</details>`; return later.slice(0, 5).map(one).join('') + (later.length > 5 ? `<details class="more"><summary>Voir les ${later.length - 5} autres missions</summary>${later.slice(5).map(one).join('')}</details>` : ''); })()}` : ''}
       <section class="card" id="gains"><h2>Mes gains</h2><p class="muted small">Chargement…</p></section>
-      ${calendar}`;
+      ${calendar}
+      <details class="card" id="docsBox"><summary><b>Mes documents</b></summary><div class="stack" id="docs"></div></details>`;
+    const db0 = document.getElementById('docsBox');
+    if (db0) db0.addEventListener('toggle', () => { if (db0.open) paintDocs(); }, { once: true });
     $app.querySelectorAll('[data-act]').forEach((btn) => btn.onclick = async () => {
       try { const r = await api('POST', `/api/worker/missions/${btn.dataset.id}/${btn.dataset.act}`, {}); toast(r.message || 'C\'est enregistré.'); route(); } catch (e) { toast(e.message); }
     });
@@ -1163,7 +1206,7 @@
   };
   const eventType = (t) => (Object.entries(EVENT_TYPES).find(([, [, re]]) => re.test(t)) || ['autre'])[0];
 
-  views['admin'] = async () => {
+  views['admin'] = async (params) => {
     if (!me || me.role !== 'admin') return go('#/connexion');
     const r = await api('GET', '/api/admin/overview');
     const owner = r.staff !== 'planning';
@@ -1180,7 +1223,8 @@
       ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
       ...(k.aRembourser.n ? [`<li><span><b>Remboursements</b> · ${k.aRembourser.n} réservation(s), ${eur(k.aRembourser.montant)}</span><button class="btn ghost" data-goto="table">Voir</button></li>`] : []),
-      ...(r.workers.some((w) => !w.active) ? [`<li><span><b>Candidatures</b> · ${r.workers.filter((w) => !w.active).length} intervenante(s) en cours de recrutement</span><button class="btn ghost" data-goto="team">Voir</button></li>`] : []),
+      ...(r.workers.some((w) => w.docs && w.docs.toCheck && !w.rejected) ? [`<li class="urgent"><span><b>Documents à vérifier</b> · ${r.workers.filter((w) => w.docs && w.docs.toCheck && !w.rejected).map((w) => esc(w.name)).join(', ')}</span><button class="btn ghost" data-goto="team">Voir</button></li>`] : []),
+      ...(r.workers.some((w) => !w.active && !w.rejected) ? [`<li><span><b>Candidatures</b> · ${r.workers.filter((w) => !w.active && !w.rejected).length} intervenante(s) en cours de recrutement</span><button class="btn ghost" data-goto="team">Voir</button></li>`] : []),
     ];
     $app.innerHTML = `
       <section class="hello">
@@ -1192,7 +1236,7 @@
         <div class="hello-art" aria-hidden="true">${todo.length ? ART.empty : ART.done}</div>
       </section>
       ${r.paymentsEnabled ? '' : '<p class="card"><span class="pill warn">Paiement simulé</span> Aucun argent n\'est encaissé dans cette version. Le chiffre d\'affaires affiché est théorique.</p>'}
-      <nav class="tabs" role="tablist" aria-label="Administration">${[['todo', `À traiter${todo.length ? ` (${todo.length})` : ''}`], ['planning', 'Planning'], ['resa', 'Réservations'], ['equipe', 'Équipe'], ...(owner ? [['chiffres', 'Chiffres'], ['suivi', 'Suivi']] : [])].map(([k, t]) => `<button type="button" role="tab" data-tab-btn="${k}">${t}</button>`).join('')}</nav>
+      <nav class="tabs" role="tablist" aria-label="Administration">${[['todo', `À traiter${todo.length ? ` (${todo.length})` : ''}`], ['planning', 'Planning'], ['resa', 'Réservations'], ['equipe', 'Équipe'], ...(owner ? [['chiffres', 'Chiffres'], ['paiements', 'Paiements'], ['tarifs', 'Tarifs et zones'], ['suivi', 'Suivi']] : [])].map(([k, t]) => `<button type="button" role="tab" data-tab-btn="${k}">${t}</button>`).join('')}</nav>
       <section class="card todo" data-tab="todo"><h2>À traiter maintenant</h2>${todo.length ? `<ul class="plain">${todo.join('')}</ul>` : '<p class="msg ok">Rien d\'urgent : toutes les missions des 3 prochains jours ont une intervenante.</p>'}</section>
       ${m ? `<section class="card" data-tab="chiffres"><h2>Argent réellement encaissé</h2>
         <p class="small muted">Paiements confirmés par Stripe, remboursements déduits.</p>
@@ -1262,8 +1306,9 @@
             <div class="row"><b>${esc(w.name)}</b><span class="row" style="gap:6px"><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span><button class="btn ghost small-btn" data-wfile="${w.user_id}">Fiche</button></span></div>
             <span class="small muted">${esc(w.cp)}${w.rate ? ' · ' + eur(w.rate) + '/h' : ''} · ${esc(w.email)}</span>
             <div class="prog"><i style="width:${(w.step / (w.steps.length - 1)) * 100}%"></i></div>
-            <div class="row"><span class="small">${w.active ? (w.absent ? '<span class="pill warn">Absente</span>' : '<span class="pill ok">Active</span>') : 'À valider : ' + esc(w.steps[w.step + 1])}</span>
-            ${w.active ? `<button class="btn ghost" data-absent="${w.user_id}">${w.absent ? 'Marquer présente' : 'Marquer absente'}</button>` : `<button class="btn ghost" data-advance="${w.user_id}">Valider l'étape</button>`}</div>
+            ${w.docs && !w.active && !w.rejected ? `<p class="small" style="margin:6px 0 0">Pièces : ${w.docs.valid}/${w.docs.required} validées${w.docs.toCheck ? ` · <span class="pill warn">${w.docs.toCheck} à vérifier</span>` : ''}</p>` : ''}
+            <div class="row"><span class="small">${w.rejected ? '<span class="pill">Candidature refusée</span>' : w.active ? (w.absent ? '<span class="pill warn">Absente</span>' : '<span class="pill ok">Active</span>') : 'À valider : ' + esc(w.steps[w.step + 1])}</span>
+            ${w.rejected ? '' : w.active ? `<button class="btn ghost" data-absent="${w.user_id}">${w.absent ? 'Marquer présente' : 'Marquer absente'}</button>` : `<button class="btn ghost" data-advance="${w.user_id}">Valider l'étape</button>`}</div>
           </div>`).join('')}</div></section>
       <div class="panes">
         <section class="card" data-tab="chiffres"><h2>Liste d'attente</h2><p class="small muted">Demandes hors zone ouverte, par département.</p>
@@ -1339,9 +1384,41 @@
           <p class="muted small">${w.statut === 'S' ? 'Salariée' : `Indépendante · ${eur(w.rate)}/h`} · ${esc(w.cp)}${w.email ? ` · ${esc(w.email)}` : ''}${w.phone ? ` · ${esc(w.phone)}` : ''}${w.languages ? ` · parle ${esc(w.languages)}` : ''}</p>
           <div class="gain-grid"><div class="gain"><span>Missions</span><b>${d.stats.missions}</b><small>${String(d.stats.heures).replace('.', ',')} h</small></div><div class="gain"><span>Note</span><b>${d.stats.note ? String(d.stats.note).replace('.', ',') + ' / 5' : '–'}</b><small>${d.stats.avis} avis</small></div><div class="gain"><span>Refus · problèmes</span><b>${d.stats.refus} · ${d.stats.problemes}</b></div></div>
           ${d.lowRatings.length ? `<h3>Notes basses à suivre</h3><ul class="plain small">${d.lowRatings.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} · ${'★'.repeat(x.rating)}${x.review ? `<br><span class="muted">« ${esc(x.review)} »</span>` : ''}</span></li>`).join('')}</ul>` : ''}
-          <h3>Prochaines missions</h3><ul class="plain small">${d.upcoming.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}</span></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>${notes}`;
+          <h3>Prochaines missions</h3><ul class="plain small">${d.upcoming.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}</span></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>
+          ${d.rejected ? `<p class="msg warn">Candidature refusée le ${new Date(d.rejected.at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${d.rejected.reason ? ` : ${esc(d.rejected.reason)}` : ''}.</p>` : ''}
+          ${d.documents ? `<h3>Pièces justificatives</h3>
+            <p class="small ${d.documents.complete ? '' : 'muted'}">${d.documents.complete ? '<span class="pill ok">Toutes les pièces obligatoires sont validées</span>' : `Manque encore : ${d.documents.missing.map(esc).join(' ; ')}.`}</p>
+            <ul class="plain small doc-list">${d.documents.list.map((k) => `<li><span><b>${esc(k.label)}</b>${k.required ? '' : ' (facultatif)'}<br>${k.latest
+              ? `<span class="pill ${DOC_STATUS[k.latest.status][1]}">${DOC_STATUS[k.latest.status][0]}</span> déposé le ${new Date(k.latest.uploaded_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${k.latest.note ? ` · ${esc(k.latest.note)}` : ''}`
+              : '<span class="muted">Pas encore déposé</span>'}</span>
+              ${k.latest ? `<span class="row" style="gap:6px;flex-wrap:wrap"><a class="btn ghost small-btn" href="/api/documents/${k.latest.id}" target="_blank" rel="noopener">Ouvrir</a>
+                ${k.latest.status !== 'valide' ? `<button class="btn blue small-btn" data-docok="${k.latest.id}">Valider</button>` : ''}${k.latest.status !== 'refuse' ? `<button class="btn ghost small-btn" data-docko="${k.latest.id}">Refuser</button>` : ''}</span>` : ''}</li>`).join('')}</ul>
+            <form class="stack" id="docRefuse" hidden><label>Raison du refus (envoyée à l'intervenante)<input name="note" maxlength="300" placeholder="Ex. photo floue, attestation de plus de 6 mois" required></label>
+              <div class="row" style="justify-content:flex-start"><button class="btn blue">Refuser ce document</button><button type="button" class="btn ghost" data-cancelref>Annuler</button></div></form>` : ''}
+          ${d.documents && !d.rejected && w.step < w.steps.length - 1 ? `<details class="card" style="margin-top:12px;padding:14px"><summary>Refuser la candidature</summary>
+            <form class="stack" id="rejectForm"><label>Raison (interne, non envoyée)<input name="reason" maxlength="300" required placeholder="Ex. entretien non concluant"></label>
+            <p class="small muted">La candidate reçoit un message neutre. Ses documents sont supprimés 30 jours après.</p>
+            <button class="btn ghost">Confirmer le refus</button></form></details>` : ''}
+          ${notes}`;
       }
       dlg.querySelector('[data-close]').onclick = () => dlg.close();
+      dlg.querySelectorAll('[data-docok]').forEach((b) => b.onclick = async () => {
+        try { const r2 = await api('POST', `/api/admin/documents/${b.dataset.docok}/review`, { decision: 'valide' }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
+      });
+      const refForm = dlg.querySelector('#docRefuse');
+      dlg.querySelectorAll('[data-docko]').forEach((b) => b.onclick = () => { refForm.hidden = false; refForm.dataset.doc = b.dataset.docko; refForm.note.focus(); });
+      if (refForm) {
+        refForm.querySelector('[data-cancelref]').onclick = () => { refForm.hidden = true; };
+        refForm.onsubmit = async (e) => {
+          e.preventDefault();
+          try { const r2 = await api('POST', `/api/admin/documents/${refForm.dataset.doc}/review`, { decision: 'refuse', note: refForm.note.value }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
+        };
+      }
+      const rej = dlg.querySelector('#rejectForm');
+      if (rej) rej.onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r2 = await api('POST', `/api/admin/workers/${id}/reject`, { reason: rej.reason.value }); toast(r2.message); dlg.close(); route(); } catch (err) { toast(err.message); }
+      };
       dlg.querySelector('.note-form').onsubmit = async (e) => {
         e.preventDefault();
         try { await api('POST', '/api/admin/notes', { kind: kind === 'client' ? 'client' : 'worker', target_id: id, text: e.target.text.value }); toast('Note enregistrée.'); openFile(kind, id); } catch (err) { toast(err.message); }
@@ -1394,8 +1471,113 @@
       catch (e) { toast(e.message); btn.disabled = false; }
     });
     bind('data-resolve', (id) => `/api/admin/incidents/${id}/resolve`);
+    const cents = (c) => eur(Math.round(c) / 100);
+    const monthName = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    // ---- statistiques par mois ----
+    const paintStats = async () => {
+      const box = document.getElementById('statsBox');
+      if (!box || box.dataset.done) return;
+      let d;
+      try { d = await api('GET', '/api/admin/stats?months=12'); } catch (e) { box.innerHTML = `<h2>Statistiques par mois</h2><p class="err">${esc(e.message)}</p>`; return; }
+      box.dataset.done = '1';
+      const max = Math.max(1, ...d.rows.map((r2) => r2.netTTC));
+      box.innerHTML = `<h2>Statistiques par mois</h2>
+        <p class="small muted">${d.theoretical ? 'Paiement simulé : chiffre d\'affaires théorique, calculé sur les ménages terminés.' : 'Chiffre d\'affaires tiré des factures (paiements encaissés) moins les avoirs (remboursements).'} Taux d'annulation : réservations annulées sur les réservations du mois (paiements abandonnés exclus).</p>
+        <div class="kpis"><div class="kpi"><span>CA net TTC, 12 mois</span><b>${cents(d.total.netTTC)}</b></div><div class="kpi"><span>CA net HT</span><b>${cents(d.total.netHT)}</b></div>
+          <div class="kpi"><span>Ménages réalisés</span><b>${d.total.prestations}</b></div><div class="kpi"><span>Taux d'annulation</span><b>${d.total.tauxAnnulation === null ? '–' : String(d.total.tauxAnnulation).replace('.', ',') + ' %'}</b></div></div>
+        <div class="bars" role="img" aria-label="Chiffre d'affaires net TTC par mois">${d.rows.map((r2) => `<div class="bar"><i style="height:${Math.round((r2.netTTC / max) * 100)}%" title="${esc(monthName(r2.month))} : ${esc(cents(r2.netTTC))}"></i><span>${r2.month.slice(5)}</span></div>`).join('')}</div>
+        <div class="table-wrap"><table class="stats"><thead><tr><th>Mois</th><th class="n">CA net TTC</th><th class="n">Remboursé</th><th class="n">CA net HT</th><th class="n">Ménages</th><th class="n">Heures</th><th class="n">Annulations</th><th class="n">Panier moyen</th><th class="n">Nouveaux clients</th><th class="n">Clients actifs</th></tr></thead>
+        <tbody>${d.rows.slice().reverse().map((r2) => `<tr><td>${esc(monthName(r2.month))}</td><td class="n"><b>${cents(r2.netTTC)}</b></td><td class="n">${r2.rembourse ? cents(r2.rembourse) : '–'}</td><td class="n">${cents(r2.netHT)}</td><td class="n">${r2.prestations}</td><td class="n">${String(r2.heures).replace('.', ',')}</td>
+          <td class="n">${r2.annulees}${r2.tauxAnnulation === null ? '' : ` (${String(r2.tauxAnnulation).replace('.', ',')} %)`}</td><td class="n">${r2.panierMoyen === null ? '–' : cents(r2.panierMoyen)}</td><td class="n">${r2.nouveauxClients}</td><td class="n">${r2.clientsActifs}</td></tr>`).join('')}</tbody></table></div>
+        ${d.services.length ? `<h3>Par prestation, sur 12 mois</h3><ul class="plain small">${d.services.map((x) => `<li><span>${esc(x.label)}</span><b>${cents(x.cents)}</b></li>`).join('')}</ul>` : ''}`;
+    };
+    // ---- paiements, remboursements, contestations ----
+    const paintPayments = async (month) => {
+      const box = document.getElementById('payBox');
+      if (!box) return;
+      let d;
+      try { d = await api('GET', `/api/admin/payments${month ? `?month=${month}` : ''}`); } catch (e) { box.innerHTML = `<h2>Paiements et remboursements</h2><p class="err">${esc(e.message)}</p>`; return; }
+      const open = d.disputes.filter((x) => x.open);
+      box.innerHTML = `<h2>Paiements et remboursements</h2>
+        ${d.disputes.length ? `<div class="card ${open.length ? 'dispute-open' : ''}" style="margin:0 0 14px;padding:14px"><h3>Contestations bancaires${open.length ? ` · <span class="pill warn">${open.length} à traiter</span>` : ''}</h3>
+          <ul class="plain small">${d.disputes.map((x) => `<li><span><b>${cents(x.amount_cents)}</b> · ${esc(x.reason)} · <span class="pill ${x.status === 'won' ? 'ok' : x.open ? 'warn' : ''}">${esc(x.statusLabel)}</span>${x.due_by && x.open ? ` · <b>réponse avant le ${new Date(x.due_by).toLocaleDateString('fr-FR')}</b>` : ''}<br>
+            <span class="muted">${x.client ? esc(x.client) + ' · ' : ''}${x.bookings.length ? `réservation n° ${x.bookings.join(', ')}` : 'réservation non retrouvée'}</span></span>
+            <span class="row" style="gap:6px;flex-wrap:wrap"><a class="btn ghost small-btn" href="/api/admin/disputes/${x.id}/evidence" target="_blank" rel="noopener">Dossier de preuve</a><a class="btn blue small-btn" href="${esc(x.stripeUrl)}" target="_blank" rel="noopener">Répondre dans Stripe</a></span></li>`).join('')}</ul></div>` : ''}
+        <div class="row" style="justify-content:flex-start;align-items:end;gap:10px;flex-wrap:wrap"><label>Mois<input type="month" id="payMonth" value="${esc(d.month)}"></label>
+          <a class="btn ghost" href="/api/admin/payments.csv?month=${esc(d.month)}" download>Exporter pour le comptable (CSV)</a></div>
+        <div class="kpis"><div class="kpi"><span>Encaissé par carte</span><b>${cents(d.totals.encaisse)}</b></div><div class="kpi"><span>Crédit Proprigo utilisé</span><b>${cents(d.totals.credit)}</b></div>
+          <div class="kpi"><span>Remboursé</span><b>${cents(d.totals.rembourse)}</b></div><div class="kpi"><span>Net encaissé</span><b>${cents(d.totals.net)}</b></div><div class="kpi"><span>Dont TVA (factures − avoirs)</span><b>${cents(d.totals.tva)}</b></div></div>
+        ${d.rows.length ? `<div class="table-wrap"><table class="stats"><thead><tr><th>Date</th><th>Type</th><th>Pièce</th><th>Client</th><th class="n">Réserv.</th><th class="n">Montant</th><th>Détail</th></tr></thead><tbody>
+          ${d.rows.map((r2) => `<tr><td>${new Date(r2.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(r2.type)}</td>
+            <td>${r2.ref ? `<a href="/api/bookings/${r2.booking}/receipt${r2.type === 'Remboursement' ? `?doc=${encodeURIComponent(r2.ref)}` : ''}" target="_blank" rel="noopener">${esc(r2.ref)}</a>` : '–'}</td><td>${esc(r2.client)}</td><td class="n">${r2.booking ? `n° ${r2.booking}` : '–'}</td>
+            <td class="n">${r2.amount_cents ? `<b>${cents(r2.amount_cents)}</b>` : '–'}</td><td class="small">${esc(r2.status)}${r2.credit_cents ? ` · dont ${cents(r2.credit_cents)} de crédit` : ''}</td></tr>`).join('')}</tbody></table></div>`
+          : '<p class="muted">Aucun mouvement ce mois-ci.</p>'}
+        <p class="small muted">Chaque paiement a sa facture et chaque remboursement son avoir. Les doublons bloqués n'ont jamais été encaissés. Les contestations arrivent de Stripe si les événements « charge.dispute » sont cochés sur le webhook.</p>`;
+      document.getElementById('payMonth').onchange = (e) => { if (e.target.value) paintPayments(e.target.value); };
+    };
+    // ---- tarifs et zones ----
+    const paintPricing = async () => {
+      const box = document.getElementById('priceBox');
+      if (!box) return;
+      let d;
+      try { d = await api('GET', '/api/admin/pricing'); } catch (e) { box.innerHTML = `<h2>Tarifs et zones</h2><p class="err">${esc(e.message)}</p>`; return; }
+      const fill = (st) => {
+        const num = (name, v, step = '1', min = '0', max = '1000') => `<input type="number" name="${name}" value="${v}" step="${step}" min="${min}" max="${max}" required>`;
+        const zone = (z, title) => `<fieldset class="price-zone"><legend>${title}</legend>
+          <label>Ménage à domicile (€ TTC / h)${num(`${z}.menage`, st.grid[z].menage, '0.5')}</label>
+          <label>Grand nettoyage (€ TTC / h)${num(`${z}.grand`, st.grid[z].grand, '0.5')}</label>
+          <label>Bureaux (€ TTC / h) <span class="muted small" data-ht="${z}"></span>${num(`${z}.bureau`, st.grid[z].bureau, '0.5')}</label>
+          ${['studio', 'T2', 'T3', 'maison'].map((k) => `<label>Airbnb ${k === 'T2' ? '2 pièces' : k === 'T3' ? '3 pièces' : k === 'studio' ? 'studio' : 'maison'} (€ le forfait)${num(`${z}.airbnb.${k}`, st.grid[z].airbnb[k], '1')}</label>`).join('')}</fieldset>`;
+        const others = st.openDepts.filter((x) => !d.idfDepts.includes(x));
+        box.innerHTML = `<h2>Tarifs et zones</h2>
+          <p class="small muted">Les nouvelles réservations suivent la nouvelle grille dès l'enregistrement. Les réservations déjà créées gardent leur prix. Un prix qui ne couvre pas le coût d'une heure (${eur(d.cost.heure)} HT) est refusé.</p>
+          <form id="priceForm" class="stack">
+            <div class="grid2">${zone('IDF', 'Île-de-France')}${zone('FR', 'Hors Île-de-France')}</div>
+            <fieldset class="price-zone"><legend>Suppléments et remises</legend><div class="grid2">
+              <label>Dimanche et jours fériés (%)${num('sunday', Math.round(st.sunday * 100), '1', '0', '100')}</label>
+              <label>Urgence, arrivée dans les 3 h (%)${num('urgent', Math.round(st.urgent * 100), '1', '0', '100')}</label>
+              <label>Remise abonnement (%)${num('subscription', Math.round(st.subscription * 100), '1', '0', '30')}</label>
+              <label>Matériel et produits fournis (€)${num('kit', st.kit, '0.5', '0', '100')}</label></div></fieldset>
+            <fieldset class="price-zone"><legend>Départements ouverts à la réservation</legend>
+              <div class="chips">${d.idfDepts.map((x) => `<label class="check chip-check"><input type="checkbox" name="dept" value="${x}" ${st.openDepts.includes(x) ? 'checked' : ''}> ${x}</label>`).join('')}</div>
+              <label>Autres départements, prix « hors Île-de-France » (séparés par des virgules)<input name="otherDepts" value="${esc(others.join(', '))}" placeholder="ex. 69, 13"></label>
+              <p class="small muted">Ailleurs, les visiteurs peuvent s'inscrire sur la liste d'attente (voir Chiffres › Liste d'attente). Ouvrez un département seulement si des intervenantes y travaillent.</p></fieldset>
+            <p class="err" id="priceErr"></p>
+            <div class="row" style="justify-content:flex-start;gap:10px;flex-wrap:wrap"><button class="btn blue">Enregistrer les tarifs</button><button type="button" class="btn ghost" id="priceDefaults">Revenir aux prix d'origine</button></div>
+          </form>
+          ${d.history.length ? `<h3>Derniers changements</h3><ul class="plain small">${d.history.map((h) => `<li><span>${new Date(h.at.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} · ${esc(h.by_name || '')}<br><span class="muted">${h.changes.map(esc).join(' · ')}</span></span></li>`).join('')}</ul>` : ''}`;
+        const f = document.getElementById('priceForm');
+        const showHT = () => ['IDF', 'FR'].forEach((z) => { const el = box.querySelector(`[data-ht="${z}"]`); const v = Number(f.elements[`${z}.bureau`].value); if (el) el.textContent = v ? `soit ${eur(Math.round((v / (1 + d.cost.tvaPro)) * 100) / 100)} HT` : ''; });
+        showHT();
+        f.elements['IDF.bureau'].oninput = showHT; f.elements['FR.bureau'].oninput = showHT;
+        document.getElementById('priceDefaults').onclick = () => { fill(d.defaults); toast('Prix d\'origine remis dans le formulaire : enregistrez pour les appliquer.'); };
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          const v = (n) => Number(f.elements[n].value);
+          const grid = (z) => ({ menage: v(`${z}.menage`), grand: v(`${z}.grand`), bureau: v(`${z}.bureau`), airbnb: { studio: v(`${z}.airbnb.studio`), T2: v(`${z}.airbnb.T2`), T3: v(`${z}.airbnb.T3`), maison: v(`${z}.airbnb.maison`) } });
+          const depts = [...f.querySelectorAll('[name="dept"]:checked')].map((x) => x.value).concat(f.otherDepts.value.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean));
+          const err = document.getElementById('priceErr'); err.textContent = '';
+          try {
+            const r2 = await api('POST', '/api/admin/pricing', { grid: { IDF: grid('IDF'), FR: grid('FR') }, sunday: v('sunday') / 100, urgent: v('urgent') / 100, subscription: v('subscription') / 100, kit: v('kit'), openDepts: depts });
+            toast(r2.message);
+            CONFIG.loaded = false;
+            paintPricing();
+          } catch (e2) { err.textContent = e2.message; }
+        };
+      };
+      fill(d.current);
+    };
+    if (owner && !document.getElementById('payBox')) {
+      $app.insertAdjacentHTML('beforeend', `
+        <section class="card" data-tab="chiffres" id="statsBox"><h2>Statistiques par mois</h2><p class="muted small">Chargement…</p></section>
+        <section class="card" data-tab="paiements" id="payBox"><h2>Paiements et remboursements</h2><p class="muted small">Chargement…</p></section>
+        <section class="card" data-tab="tarifs" id="priceBox"><h2>Tarifs et zones</h2><p class="muted small">Chargement…</p></section>`);
+    }
     const showTab = (k) => {
       sessionStorage.setItem('adminTab', k);
+      if (k === 'chiffres' && owner) paintStats();
+      if (k === 'paiements' && owner) paintPayments();
+      if (k === 'tarifs' && owner) paintPricing();
       $app.querySelectorAll('[data-tab]').forEach((el) => { el.hidden = el.dataset.tab !== k; });
       $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.setAttribute('aria-selected', t.dataset.tabBtn === k));
       if (k === 'planning') loadPlanning(planStart);
@@ -1462,7 +1644,7 @@
       });
     }
     $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.onclick = () => { showTab(t.dataset.tabBtn); window.scrollTo(0, 0); });
-    showTab(sessionStorage.getItem('adminTab') || 'todo');
+    showTab((params && params.get('tab')) || sessionStorage.getItem('adminTab') || 'todo');
     const paintJournal = () => {
       const type = document.getElementById('jType').value;
       const bk = document.getElementById('jBk').value.trim();
@@ -1545,7 +1727,7 @@
       <div class="pro-grid">
         <article class="card"><span class="offer-art">${ART.services.bureau}</span><h3>Bureaux</h3><p>Avant l'ouverture ou après la fermeture, de 6 h à 22 h. Postes de travail, sanitaires, coin café, salles de réunion.</p><p class="offer-price"><b>35 €</b> HT de l'heure</p></article>
         <article class="card"><span class="offer-art">${ART.services.grand}</span><h3>Agences et syndics</h3><p>Fins de bail prêtes pour l'état des lieux, remises en état avant relocation, entretien des parties communes.</p><p class="offer-price"><b>Sur devis</b></p></article>
-        <article class="card"><span class="offer-art">${ART.services.airbnb}</span><h3>Conciergeries</h3><p>Ménage et linge après chaque départ, calendriers synchronisés, la même intervenante par logement, photos avant / après.</p><p class="offer-price"><b>dès 95 €</b> le logement</p></article>
+        <article class="card"><span class="offer-art">${ART.services.airbnb}</span><h3>Conciergeries</h3><p>Ménage et linge après chaque départ, calendriers synchronisés, la même intervenante par logement, photos avant / après.</p><p class="offer-price"><b>dès ${String(PRICES().airbnb.studio).replace('.', ',')} €</b> le logement</p></article>
       </div>
       <section class="card">
         <h2>Plus vous commandez, moins vous payez</h2>
@@ -1835,7 +2017,7 @@
       ['Puis-je changer la date ou l\'heure ?', 'Oui, avec « Modifier », jusqu\'à 24 h avant. Le prix est recalculé (par exemple un dimanche) et nous vérifions qu\'une intervenante est libre. Moins de 24 h avant, écrivez-nous dans la messagerie de la réservation.'],
       ['Qui vient chez moi ?', "Une intervenante sélectionnée et vérifiée par Proprigo (identité, entretien, formation). Vous voyez son prénom avant le ménage. Après un ménage, vous pouvez la garder comme intervenante préférée."],
       ['Et si elle est absente ?', 'Nous cherchons automatiquement une remplaçante vérifiée et vous prévenons par e-mail et dans la messagerie. Si vous préférez garder votre intervenante, vous pouvez choisir un autre créneau où elle est libre.'],
-      ['Faut-il fournir le matériel ?', "Pour un ménage à domicile, vous pouvez fournir aspirateur et produits, ou choisir l'option « matériel fourni » (+15 €). Pour un logement Airbnb, le matériel reste dans le logement."],
+      ['Faut-il fournir le matériel ?', `Pour un ménage à domicile, vous pouvez fournir aspirateur et produits, ou choisir l'option « matériel fourni » (+${String(PRICES().kit).replace('.', ',')} €). Pour un logement Airbnb, le matériel reste dans le logement.`],
       ['Les photos sont-elles obligatoires ?', "Non. Les photos avant / après ne sont prises que si vous l'acceptez. Seuls vous et l'équipe Proprigo pouvez les voir, et elles sont supprimées après 90 jours."],
       ['Comment payer ?', "Par carte, au moment de la réservation. Paiement sécurisé via Stripe avant chaque intervention. Le reçu est disponible dans « Mes réservations » une fois le ménage terminé."],
       ['Le ménage ne me convient pas, que faire ?', 'Dans « Mes réservations », cliquez sur « Signaler un problème » sous le ménage concerné. Notre équipe qualité vous répond rapidement et vous propose une solution (repassage, geste commercial selon le cas).'],
@@ -1858,7 +2040,7 @@
   views['cgv'] = () => page('Conditions générales de vente', `${DRAFT_NOTE}
     <h2>1. Objet</h2><p>Les présentes conditions encadrent les prestations de ménage réservées sur Proprigo par des particuliers et des professionnels (hôtes et conciergeries), exploité par [RAISON SOCIALE], [FORME JURIDIQUE] au capital de [MONTANT], immatriculée sous le numéro [SIREN], siège : [ADRESSE].</p>
     <h2>2. Prestations</h2><p>Ménage à domicile à l'heure, grand nettoyage, ménage de logement de location courte durée au forfait (ménage et linge). Les tâches prévues figurent dans la checklist de la réservation. Les prestations sont réalisées par des intervenantes salariées de Proprigo ou des intervenantes indépendantes sélectionnées.</p>
-    <h2>3. Prix</h2><p>Les prix sont indiqués en euros toutes taxes comprises avant la réservation. Suppléments : dimanche et jours fériés +20 %, intervention urgente (arrivée dans les 3 heures) +25 %, matériel et produits fournis +15 €. [Le crédit d'impôt de 50 % s'applique aux services à la personne selon les conditions légales, une fois la déclaration de l'entreprise effectuée.]</p>
+    <h2>3. Prix</h2><p>Les prix sont indiqués en euros toutes taxes comprises avant la réservation. Suppléments : dimanche et jours fériés +${pct(PRICES().sunday)}, intervention urgente (arrivée dans les 3 heures) +${pct(PRICES().urgent)}, matériel et produits fournis +${String(PRICES().kit).replace('.', ',')} €. [Le crédit d'impôt de 50 % s'applique aux services à la personne selon les conditions légales, une fois la déclaration de l'entreprise effectuée.]</p>
     <h2>4. Réservation et paiement</h2><p>Le client paie via Stripe avant l'intervention. Le créneau demandé reste soumis à l'attribution d'une intervenante par PROPRIGO. Le client est informé après attribution. Si aucune intervenante ne peut être trouvée, PROPRIGO annule la prestation et rembourse intégralement le paiement. Le client s'engage à donner une adresse exacte et l'accès au logement à l'heure prévue.</p>
     <h2>5. Modification et annulation</h2><p>La date, l'heure, la durée et l'adresse peuvent être modifiées jusqu'à 24 heures avant le début de la prestation, sous réserve de disponibilité ; le prix est recalculé. L'annulation est gratuite jusqu'à 24 heures avant ; ensuite, 50 % du prix reste dû. Si l'intervenante ne peut pas accéder au logement du fait du client, la prestation est due.</p>
     <h2>6. Droit de rétractation</h2><p>Pour une réservation faite à distance par un consommateur, le droit de rétractation de 14 jours s'applique. Si le client demande que la prestation commence avant la fin de ce délai, il le reconnaît expressément et reste redevable du montant correspondant au service fourni. [Rédaction à valider.]</p>
@@ -1912,6 +2094,11 @@
     if (refreshInProgress || document.hidden || !me) return;
     const page = location.hash.replace(/^#\/?/, '').split('?')[0];
     if (!['mes-reservations', 'admin', 'intervenante'].includes(page)) return;
+    // Ne jamais effacer une saisie en cours (tarifs, mois choisi, formulaire, fenêtre ouverte).
+    const a = document.activeElement;
+    if (a && $app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    if (document.querySelector('dialog[open]')) return;
+    if (page === 'admin' && ['tarifs', 'paiements', 'chiffres'].includes(sessionStorage.getItem('adminTab'))) return;
     refreshInProgress = true;
     try { await route(); } finally { refreshInProgress = false; }
   }

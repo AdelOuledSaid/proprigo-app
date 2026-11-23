@@ -1010,7 +1010,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const safeOffers = offers.map(({ address, ...rest }) => ({ ...rest, earn: w.statut === 'I' ? Math.round(w.rate * rest.hours * 100) / 100 : null }));
     const cal = db.prepare('SELECT weekday, start, end FROM availability WHERE worker_id = ? ORDER BY weekday').all(user.id);
     const off = db.prepare('SELECT * FROM timeoff WHERE worker_id = ? AND end_date >= ? ORDER BY start_date').all(user.id, pricing.todayParis(now()));
-    return { profile: w, steps: db_.STEPS[w.statut], active: engine.isActive(w), offers: safeOffers, missions: missions.map((m) => { const h = m.home_id ? db.prepare('SELECT name, instructions FROM homes WHERE id = ?').get(m.home_id) : null; return { ...bookingView(m), client_name: m.client_name, home_name: h ? h.name : null, instructions: h ? h.instructions : null }; }), done, availability: cal, timeoff: off };
+    return { profile: { ...w, reject_reason: undefined }, steps: db_.STEPS[w.statut], active: engine.isActive(w), offers: safeOffers, missions: missions.map((m) => { const h = m.home_id ? db.prepare('SELECT name, instructions FROM homes WHERE id = ?').get(m.home_id) : null; return { ...bookingView(m), client_name: m.client_name, home_name: h ? h.name : null, instructions: h ? h.instructions : null }; }), done, availability: cal, timeoff: off };
   });
 
   const workerAction = (action) => ({ user, id }) => {
@@ -1151,7 +1151,61 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
 
   // ----- réglages publics : lien d'avis Google -----
   const reviewUrl = /^https:\/\/[^\s"<>]+$/.test(googleReviewUrl || '') ? googleReviewUrl : '';
-  route('GET', '/api/config', () => ({ googleReviewUrl: reviewUrl }));
+  route('GET', '/api/config', () => ({ googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
+
+  // ----- tarifs et zones, modifiables par le responsable -----
+  // Les réservations déjà créées gardent leur prix : seules les nouvelles suivent la nouvelle grille.
+  db.exec(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')), updated_by INTEGER);
+    CREATE TABLE IF NOT EXISTS pricing_history (id INTEGER PRIMARY KEY, at TEXT NOT NULL DEFAULT (datetime('now')), by_name TEXT, changes TEXT NOT NULL)`);
+  {
+    let saved = null;
+    try { saved = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'pricing'").get()?.value || 'null'); } catch { saved = null; }
+    if (saved && pricing.validateSettings(saved).length) { db_.log(db, 'Tarifs enregistrés invalides : grille par défaut utilisée.'); saved = null; }
+    pricing.applySettings(saved || pricing.DEFAULTS);
+  }
+  const describeChanges = (a, b) => {
+    const out = [];
+    const pct = (x) => `${Math.round(x * 1000) / 10} %`;
+    const zoneName = { IDF: 'Île-de-France', FR: 'hors IDF' };
+    for (const z of ['IDF', 'FR']) {
+      for (const k of ['menage', 'grand', 'bureau']) if (a.grid[z][k] !== b.grid[z][k]) out.push(`${SERVICE_NAME[k]} ${zoneName[z]} : ${a.grid[z][k]} → ${b.grid[z][k]} €`);
+      for (const k of Object.keys(b.grid[z].airbnb)) if (a.grid[z].airbnb[k] !== b.grid[z].airbnb[k]) out.push(`Airbnb ${pricing.SIZE_LABEL[k]} ${zoneName[z]} : ${a.grid[z].airbnb[k]} → ${b.grid[z].airbnb[k]} €`);
+    }
+    if (a.sunday !== b.sunday) out.push(`Dimanche et férié : ${pct(a.sunday)} → ${pct(b.sunday)}`);
+    if (a.urgent !== b.urgent) out.push(`Urgence : ${pct(a.urgent)} → ${pct(b.urgent)}`);
+    if (a.subscription !== b.subscription) out.push(`Abonnement : −${pct(a.subscription)} → −${pct(b.subscription)}`);
+    if (a.kit !== b.kit) out.push(`Matériel : ${a.kit} → ${b.kit} €`);
+    const added = b.openDepts.filter((d) => !a.openDepts.includes(d));
+    const removed = a.openDepts.filter((d) => !b.openDepts.includes(d));
+    if (added.length) out.push(`Départements ouverts : ${added.join(', ')}`);
+    if (removed.length) out.push(`Départements fermés : ${removed.join(', ')}`);
+    return out;
+  };
+  route('GET', '/api/admin/pricing', ({ user }) => {
+    need(user, 'admin');
+    return { current: pricing.settings(), defaults: pricing.DEFAULTS, idfDepts: pricing.IDF_DEPTS,
+      cost: { heure: pricing.COSTS.salarieeParHeureFacturee, tvaParticulier: pricing.COSTS.tvaParticulier, tvaPro: pricing.COSTS.tvaPro },
+      history: db.prepare('SELECT at, by_name, changes FROM pricing_history ORDER BY id DESC LIMIT 15').all().map((h) => ({ ...h, changes: JSON.parse(h.changes) })) };
+  });
+  route('POST', '/api/admin/pricing', ({ user, body }) => {
+    need(user, 'admin');
+    const r = (x) => Math.round(Number(x) * 100) / 100;
+    const g = (z) => ({ menage: r(body?.grid?.[z]?.menage), grand: r(body?.grid?.[z]?.grand), bureau: r(body?.grid?.[z]?.bureau),
+      airbnb: Object.fromEntries(Object.keys(pricing.AIRBNB_HOURS).map((k) => [k, r(body?.grid?.[z]?.airbnb?.[k])])) });
+    const next = { grid: { IDF: g('IDF'), FR: g('FR') }, sunday: r(body.sunday), urgent: r(body.urgent), subscription: r(body.subscription), kit: r(body.kit),
+      openDepts: Array.isArray(body.openDepts) ? [...new Set(body.openDepts.map((d) => String(d).trim()))].filter(Boolean).sort() : [] };
+    const errors = pricing.validateSettings(next);
+    if (errors.length) throw new HttpError(400, errors.join(' '));
+    const before = pricing.settings();
+    const changes = describeChanges(before, next);
+    if (!changes.length) return { ok: true, message: 'Aucun changement.' };
+    pricing.applySettings(next);
+    db.prepare("INSERT INTO settings (key, value, updated_by) VALUES ('pricing', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), updated_by = excluded.updated_by")
+      .run(JSON.stringify(pricing.settings()), user.id);
+    db.prepare('INSERT INTO pricing_history (by_name, changes) VALUES (?, ?)').run(user.name, JSON.stringify(changes));
+    db_.log(db, `Tarifs modifiés par ${user.name} : ${changes.join(' ; ')}. Les réservations existantes gardent leur prix.`);
+    return { ok: true, message: `Enregistré : ${changes.length} changement(s). Les réservations existantes gardent leur prix.` };
+  });
 
   // ----- versements aux indépendantes, chaque semaine, avec bonus qualité -----
   const BONUS_PER_HOUR = 1; // 1 € de plus par heure pour une note moyenne d'au moins 4,8 sur les 10 derniers avis (5 au moins)
@@ -1292,6 +1346,9 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
       lowRatings: low,
       upcoming: db.prepare("SELECT id, date, time, cp, hours FROM bookings WHERE worker_id = ? AND status IN ('attribuee','en_cours') ORDER BY date, time LIMIT 10").all(id),
       notes: db.prepare("SELECT n.id, n.text, n.created_at, u.name AS author FROM admin_notes n JOIN users u ON u.id = n.author_id WHERE kind = 'worker' AND target_id = ? ORDER BY n.id DESC").all(id),
+      // Pièces justificatives : visibles du responsable seulement.
+      documents: isOwner(user) ? docsOf(id) : null,
+      rejected: w.rejected_at ? { at: w.rejected_at, reason: isOwner(user) ? w.reject_reason : null } : null,
     };
   });
   route('POST', '/api/admin/notes', ({ user, body }) => {
@@ -1552,6 +1609,125 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     return { ok: true };
   });
 
+  // ----- documents des intervenantes : déposés par elles, vérifiés par le responsable -----
+  // Fichiers privés, hors du dossier public, jamais servis à un client. Lisibles par l'intervenante et le responsable seulement.
+  const DOCS = dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-docs-')) : path.join(path.dirname(dbFile), 'documents');
+  fs.mkdirSync(DOCS, { recursive: true });
+  db.exec(`CREATE TABLE IF NOT EXISTS worker_docs (id INTEGER PRIMARY KEY, worker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL,
+    file TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'a_verifier' CHECK (status IN ('a_verifier','valide','refuse')),
+    note TEXT, uploaded_at TEXT NOT NULL DEFAULT (datetime('now')), reviewed_by INTEGER, reviewed_at TEXT)`);
+  for (const [c, t] of [['rejected_at', 'TEXT'], ['reject_reason', 'TEXT']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  // Pièces demandées selon le statut. required : nécessaire pour activer l'intervenante.
+  const DOC_KINDS = {
+    identite: { label: "Pièce d'identité ou titre de séjour en cours de validité", for: ['S', 'I'], required: true },
+    secu: { label: 'Attestation de sécurité sociale (ou carte Vitale)', for: ['S'], required: true },
+    rib: { label: 'RIB à votre nom', for: ['S', 'I'], required: true },
+    siret: { label: 'Avis de situation SIRENE (INSEE) ou extrait Kbis', for: ['I'], required: true },
+    urssaf: { label: "Attestation de vigilance URSSAF de moins de 6 mois", for: ['I'], required: true },
+    assurance: { label: 'Attestation d\'assurance responsabilité civile professionnelle', for: ['I'], required: true },
+    casier: { label: 'Extrait de casier judiciaire (bulletin n° 3)', for: ['S', 'I'], required: false },
+  };
+  const kindsFor = (statut) => Object.entries(DOC_KINDS).filter(([, v]) => v.for.includes(statut)).map(([k, v]) => ({ kind: k, label: v.label, required: v.required }));
+  function docsOf(workerId) {
+    const w = db.prepare('SELECT statut FROM workers WHERE user_id = ?').get(workerId);
+    if (!w) return null;
+    const rows = db.prepare('SELECT id, kind, mime, size, status, note, uploaded_at, reviewed_at FROM worker_docs WHERE worker_id = ? ORDER BY id DESC').all(workerId);
+    const list = kindsFor(w.statut).map((k) => ({ ...k, latest: rows.find((r) => r.kind === k.kind) || null }));
+    const missing = list.filter((k) => k.required && (!k.latest || k.latest.status !== 'valide')).map((k) => k.label);
+    return { list, missing, complete: missing.length === 0 };
+  }
+  route('GET', '/api/worker/documents', ({ user }) => {
+    need(user, 'intervenante');
+    return docsOf(user.id);
+  });
+  route('POST', '/api/worker/documents', ({ user, body }) => {
+    need(user, 'intervenante');
+    const w = db.prepare('SELECT statut, rejected_at FROM workers WHERE user_id = ?').get(user.id);
+    if (!w) throw new HttpError(404, 'Profil introuvable.');
+    if (w.rejected_at) throw new HttpError(409, 'Votre candidature est close.');
+    const kind = String(body.kind || '');
+    if (!DOC_KINDS[kind] || !DOC_KINDS[kind].for.includes(w.statut)) throw new HttpError(400, 'Type de document inconnu.');
+    const m = /^data:(application\/pdf|image\/jpeg|image\/png);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.data || ''));
+    if (!m) throw new HttpError(400, 'Envoyez un PDF, une photo JPEG ou PNG.');
+    const buf = Buffer.from(m[2], 'base64');
+    const sig = buf.subarray(0, 8);
+    const mime = sig.subarray(0, 4).toString() === '%PDF' ? 'application/pdf' : sig[0] === 0xff && sig[1] === 0xd8 ? 'image/jpeg'
+      : sig.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? 'image/png' : null;
+    if (!mime) throw new HttpError(400, 'Fichier illisible : envoyez un PDF, une photo JPEG ou PNG.');
+    if (buf.length > 5_000_000) throw new HttpError(400, 'Fichier trop lourd (5 Mo maximum).');
+    if (db.prepare("SELECT COUNT(*) AS n FROM worker_docs WHERE worker_id = ? AND uploaded_at >= datetime('now', '-1 day')").get(user.id).n >= 30) throw new HttpError(429, 'Trop d\'envois aujourd\'hui. Réessayez demain.');
+    const file = `${user.id}-${kind}-${crypto.randomBytes(12).toString('hex')}.${mime === 'application/pdf' ? 'pdf' : mime === 'image/png' ? 'png' : 'jpg'}`;
+    fs.writeFileSync(path.join(DOCS, file), buf, { mode: 0o600 });
+    // Un nouveau dépôt remplace le précédent du même type, s'il n'était pas encore validé.
+    for (const old of db.prepare("SELECT id, file FROM worker_docs WHERE worker_id = ? AND kind = ? AND status <> 'valide'").all(user.id, kind)) {
+      try { fs.unlinkSync(path.join(DOCS, path.basename(old.file))); } catch { /* déjà supprimé */ }
+      db.prepare('DELETE FROM worker_docs WHERE id = ?').run(old.id);
+    }
+    db.prepare('INSERT INTO worker_docs (worker_id, kind, file, mime, size) VALUES (?, ?, ?, ?, ?)').run(user.id, kind, file, mime, buf.length);
+    db_.log(db, `${user.name} a déposé : ${DOC_KINDS[kind].label}. À vérifier.`);
+    return { ok: true, message: 'Document reçu. L\'équipe le vérifie rapidement.', ...docsOf(user.id) };
+  });
+  route('GET', '/api/documents/:id', ({ user, id, res }) => {
+    const d = db.prepare('SELECT * FROM worker_docs WHERE id = ?').get(id);
+    if (!d || !user || !(d.worker_id === user.id || isOwner(user))) throw new HttpError(404, 'Document introuvable.');
+    const f = path.join(DOCS, path.basename(d.file));
+    if (!fs.existsSync(f)) throw new HttpError(404, 'Fichier introuvable.');
+    if (isOwner(user) && d.worker_id !== user.id) db_.log(db, `Document n° ${d.id} (${DOC_KINDS[d.kind]?.label || d.kind}) consulté par ${user.name}.`);
+    res.writeHead(200, { 'Content-Type': d.mime, 'Content-Disposition': `inline; filename="document-${d.id}.${d.mime === 'application/pdf' ? 'pdf' : d.mime === 'image/png' ? 'png' : 'jpg'}"`,
+      'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox" });
+    fs.createReadStream(f).pipe(res);
+    return { streamed: true };
+  });
+  route('POST', '/api/admin/documents/:id/review', ({ user, id, body }) => {
+    need(user, 'admin');
+    const d = db.prepare('SELECT * FROM worker_docs WHERE id = ?').get(id);
+    if (!d) throw new HttpError(404, 'Document introuvable.');
+    const decision = body.decision === 'valide' ? 'valide' : body.decision === 'refuse' ? 'refuse' : null;
+    if (!decision) throw new HttpError(400, 'Choisissez : valider ou refuser.');
+    const note = str(body.note, 300);
+    if (decision === 'refuse' && note.length < 5) throw new HttpError(400, 'Indiquez la raison du refus : l\'intervenante la recevra (ex. « photo floue », « attestation de plus de 6 mois »).');
+    db.prepare("UPDATE worker_docs SET status = ?, note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(decision, note || null, user.id, id);
+    const w = workerProfile(d.worker_id);
+    const label = DOC_KINDS[d.kind]?.label || d.kind;
+    db_.log(db, `Document de ${w.name} (${label}) ${decision === 'valide' ? 'validé' : `refusé : ${note}`} par ${user.name}.`);
+    if (decision === 'refuse') mailer.send(w.email, 'Un document est à renvoyer', 'Un document est à renvoyer', [
+      `Bonjour ${w.name.split(' ')[0]},`, `Nous n'avons pas pu valider : ${label}.`, `Raison : ${note}`, 'Déposez une nouvelle version depuis votre espace, rubrique « Mes documents ».',
+    ], { label: 'Mes documents', path: '/#/intervenante' });
+    const st = docsOf(d.worker_id);
+    if (decision === 'valide' && st.complete) db_.log(db, `${w.name} : toutes les pièces obligatoires sont validées.`);
+    return { ok: true, message: decision === 'valide' ? 'Document validé.' : 'Document refusé : l\'intervenante est prévenue par e-mail.', ...st };
+  });
+  // Refuser une candidature (pas une intervenante déjà active : pour elle, « Marquer absente »).
+  route('POST', '/api/admin/workers/:id/reject', ({ user, id, body }) => {
+    need(user, 'admin');
+    const w = workerProfile(id);
+    if (!w) throw new HttpError(404, 'Intervenante introuvable.');
+    if (engine.isActive(w)) throw new HttpError(409, 'Elle est déjà active : marquez-la absente plutôt que de refuser la candidature.');
+    if (w.rejected_at) throw new HttpError(409, 'Candidature déjà refusée.');
+    const reason = str(body.reason, 300);
+    if (reason.length < 5) throw new HttpError(400, 'Indiquez la raison (elle reste interne, le message envoyé à la candidate est neutre).');
+    db.prepare("UPDATE workers SET rejected_at = datetime('now'), reject_reason = ?, absent = 1 WHERE user_id = ?").run(reason, id);
+    db.prepare("DELETE FROM offers WHERE worker_id = ? AND state = 'offered'").run(id);
+    db_.log(db, `Candidature de ${w.name} refusée par ${user.name} : ${reason}. Documents supprimés dans 30 jours.`);
+    mailer.send(w.email, 'Votre candidature Proprigo', 'Votre candidature', [
+      `Bonjour ${w.name.split(' ')[0]},`, 'Merci pour l\'intérêt que vous portez à Proprigo. Après étude, nous ne donnons pas suite à votre candidature pour le moment.',
+      'Vos documents seront supprimés dans 30 jours. Vous pouvez nous écrire si vous avez une question.',
+    ], null);
+    return { ok: true, message: `Candidature de ${w.name} refusée. Elle est prévenue par e-mail.` };
+  });
+  // RGPD : documents d'une candidature refusée supprimés 30 jours après le refus.
+  const purgeRejectedDocs = () => {
+    let n = 0;
+    for (const d of db.prepare("SELECT d.id, d.file FROM worker_docs d JOIN workers w ON w.user_id = d.worker_id WHERE w.rejected_at IS NOT NULL AND w.rejected_at < datetime('now', '-30 days')").all()) {
+      try { fs.unlinkSync(path.join(DOCS, path.basename(d.file))); } catch { /* déjà supprimé */ }
+      db.prepare('DELETE FROM worker_docs WHERE id = ?').run(d.id);
+      n += 1;
+    }
+    if (n) db_.log(db, `Documents de candidatures refusées supprimés : ${n}.`);
+    return n;
+  };
+  purgeRejectedDocs();
+
   route('GET', '/api/photos/:id', ({ user, id, res }) => {
     const ph = db.prepare('SELECT * FROM photos WHERE id = ?').get(id);
     const b = ph && db.prepare('SELECT * FROM bookings WHERE id = ?').get(ph.booking_id);
@@ -1594,6 +1770,213 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
   });
 
   // ----- reçu imprimable -----
+  // ----- contestations bancaires (litiges Stripe) -----
+  // Le client conteste un paiement auprès de sa banque : Stripe retire la somme et ouvre un litige.
+  // On a une date limite pour répondre (dans le tableau de bord Stripe) avec des preuves.
+  db.exec(`CREATE TABLE IF NOT EXISTS stripe_disputes (id INTEGER PRIMARY KEY, dispute_id TEXT NOT NULL UNIQUE, payment_intent TEXT, charge TEXT,
+    amount_cents INTEGER NOT NULL, reason TEXT, status TEXT NOT NULL, due_by INTEGER, booking_ids TEXT NOT NULL DEFAULT '[]', client_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  const DISPUTE_REASON = { fraudulent: 'paiement non reconnu (fraude)', duplicate: 'paiement en double', product_not_received: 'prestation non reçue',
+    product_unacceptable: 'prestation jugée insatisfaisante', subscription_canceled: 'abonnement annulé', unrecognized: 'paiement non reconnu',
+    credit_not_processed: 'remboursement non reçu', general: 'autre motif', customer_initiated: 'demande du client' };
+  const DISPUTE_STATUS = { warning_needs_response: 'à traiter (alerte)', needs_response: 'réponse à envoyer', under_review: 'en cours d\'examen par la banque',
+    warning_under_review: 'en cours d\'examen', won: 'gagné', lost: 'perdu', warning_closed: 'clos', charge_refunded: 'remboursé' };
+  const bookingsOfIntent = (pi) => {
+    if (!pi) return [];
+    const ids = new Set(db.prepare('SELECT booking_id FROM stripe_claims WHERE payment_intent = ?').all(pi).map((r) => r.booking_id));
+    for (const p2 of db.prepare('SELECT booking_ids FROM stripe_payments WHERE payment_intent = ?').all(pi)) for (const id of JSON.parse(p2.booking_ids)) ids.add(id);
+    return [...ids].sort((a, b) => a - b);
+  };
+  function onDispute(type, dp) {
+    if (!dp || typeof dp.id !== 'string' || !/^d[up]_[A-Za-z0-9]+$/.test(dp.id)) return;
+    const pi = typeof dp.payment_intent === 'string' ? dp.payment_intent : dp.payment_intent?.id || null;
+    const ids = bookingsOfIntent(pi);
+    const clientId = ids.length ? db.prepare('SELECT client_id FROM bookings WHERE id = ?').get(ids[0])?.client_id || null : null;
+    const due = Number(dp.evidence_details?.due_by) || null;
+    const amount = Number.isSafeInteger(dp.amount) ? dp.amount : 0;
+    const known = db.prepare('SELECT * FROM stripe_disputes WHERE dispute_id = ?').get(dp.id);
+    if (!known) {
+      db.prepare('INSERT INTO stripe_disputes (dispute_id, payment_intent, charge, amount_cents, reason, status, due_by, booking_ids, client_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(dp.id, pi, typeof dp.charge === 'string' ? dp.charge : null, amount, String(dp.reason || 'general'), String(dp.status || 'needs_response'), due, JSON.stringify(ids), clientId);
+    } else {
+      db.prepare("UPDATE stripe_disputes SET status = ?, due_by = COALESCE(?, due_by), amount_cents = ?, updated_at = datetime('now') WHERE dispute_id = ?").run(String(dp.status || known.status), due, amount || known.amount_cents, dp.id);
+    }
+    const row = db.prepare('SELECT * FROM stripe_disputes WHERE dispute_id = ?').get(dp.id);
+    const money = `${(row.amount_cents / 100).toFixed(2).replace('.', ',')} €`;
+    const dueTxt = row.due_by ? new Date(row.due_by * 1000).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', day: 'numeric', month: 'long', year: 'numeric' }) : null;
+    const what = ids.length ? `réservation(s) n° ${ids.join(', ')}` : 'paiement sans réservation retrouvée';
+    if (!known) {
+      db_.log(db, `ALERTE CONTESTATION : ${money} contestés par la banque du client (${DISPUTE_REASON[row.reason] || row.reason}), ${what}.${dueTxt ? ` Réponse avant le ${dueTxt}.` : ''}`);
+      for (const id of ids) db.prepare("INSERT INTO incidents (booking_id, text, source) VALUES (?, ?, 'litige')").run(id, `Contestation bancaire de ${money} : ${DISPUTE_REASON[row.reason] || row.reason}.`);
+      for (const to of ownerEmails()) mailer.send(to, `Contestation bancaire : ${money}${dueTxt ? `, réponse avant le ${dueTxt}` : ''}`, 'Un paiement est contesté', [
+        `La banque du client conteste ${money} (${DISPUTE_REASON[row.reason] || row.reason}) : ${what}.`,
+        'Stripe a retiré la somme de votre solde en attendant la décision de la banque, avec des frais de litige.',
+        `${dueTxt ? `Vous avez jusqu'au ${dueTxt} pour répondre` : 'Répondez rapidement'} dans le tableau de bord Stripe, avec le dossier de preuve préparé dans l'admin (Paiements › Contestations).`,
+      ], { label: 'Voir la contestation', path: '/#/admin?tab=paiements' }, { key: `dispute-new-${dp.id}` });
+    }
+    if (type === 'charge.dispute.closed' && ['won', 'lost', 'warning_closed', 'charge_refunded'].includes(row.status)) {
+      db_.log(db, `Contestation ${what} close : ${DISPUTE_STATUS[row.status] || row.status} (${money}).`);
+      for (const to of ownerEmails()) mailer.send(to, `Contestation ${row.status === 'won' ? 'gagnée' : row.status === 'lost' ? 'perdue' : 'close'} : ${money}`,
+        row.status === 'won' ? 'Contestation gagnée' : row.status === 'lost' ? 'Contestation perdue' : 'Contestation close', [
+          row.status === 'won' ? `La banque vous a donné raison : ${money} sont reversés sur votre solde Stripe.` : row.status === 'lost' ? `La banque a donné raison au client : ${money} ne vous seront pas reversés.` : `La contestation de ${money} est close.`,
+          `Concerne : ${what}.`,
+        ], { label: 'Ouvrir l\'admin', path: '/#/admin?tab=paiements' }, { key: `dispute-closed-${dp.id}` });
+    }
+  }
+
+  // ----- tous les paiements et remboursements (pour vous et pour le comptable) -----
+  const monthOk = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || '');
+  function movements(month) {
+    const [y, mo] = month.split('-').map(Number);
+    const from = new Date(Date.UTC(y, mo - 1, 1) - 2 * 3600e3).toISOString(); // marge fuseau Paris
+    const to = new Date(Date.UTC(y, mo, 1) + 2 * 3600e3).toISOString();
+    const inMonth = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit' }).format(new Date(iso)).slice(0, 7) === month;
+    const name = (cid) => { const u = db.prepare('SELECT name, company FROM users WHERE id = ?').get(cid); return u ? (u.company ? `${u.company} (${u.name})` : u.name) : '?'; };
+    const piOf = (bid) => db.prepare('SELECT payment_intent FROM stripe_claims WHERE booking_id = ?').get(bid)?.payment_intent || null;
+    const rows = [];
+    for (const i of db.prepare('SELECT * FROM invoices WHERE issued_at >= ? AND issued_at < ? ORDER BY issued_at, id').all(from, to)) {
+      if (!inMonth(i.issued_at)) continue;
+      const b = db.prepare('SELECT discount, total, service FROM bookings WHERE id = ?').get(i.booking_id) || {};
+      const credit = i.kind === 'facture' ? Math.round((b.discount || 0) * 100) : 0;
+      rows.push({ at: i.issued_at, type: i.kind === 'facture' ? 'Paiement' : 'Remboursement', client: name(i.client_id), booking: i.booking_id,
+        amount_cents: i.kind === 'facture' ? i.amount_cents : -i.amount_cents, card_cents: i.kind === 'facture' ? i.amount_cents - credit : -i.amount_cents, credit_cents: credit,
+        tva_rate: i.tva_rate, ref: i.number, stripe: piOf(i.booking_id), status: i.kind === 'facture' ? 'encaissé' : 'remboursé' });
+    }
+    for (const d of db.prepare('SELECT * FROM stripe_duplicate_refunds WHERE created_at >= ? AND created_at < ?').all(from.slice(0, 19).replace('T', ' '), to.slice(0, 19).replace('T', ' '))) {
+      rows.push({ at: d.created_at.replace(' ', 'T') + 'Z', type: d.status === 'annule' ? 'Doublon bloqué' : 'Doublon remboursé', client: d.client_id ? name(d.client_id) : '?', booking: JSON.parse(d.booking_ids)[0] || null,
+        amount_cents: 0, card_cents: 0, credit_cents: 0, tva_rate: null, ref: null, stripe: d.payment_intent,
+        status: d.status === 'annule' ? `${(d.amount_cents / 100).toFixed(2).replace('.', ',')} € non encaissés` : `${(d.amount_cents / 100).toFixed(2).replace('.', ',')} € rendus` });
+    }
+    for (const d of db.prepare('SELECT * FROM stripe_disputes WHERE created_at >= ? AND created_at < ?').all(from.slice(0, 19).replace('T', ' '), to.slice(0, 19).replace('T', ' '))) {
+      rows.push({ at: d.created_at.replace(' ', 'T') + 'Z', type: 'Contestation', client: d.client_id ? name(d.client_id) : '?', booking: JSON.parse(d.booking_ids)[0] || null,
+        amount_cents: 0, card_cents: 0, credit_cents: 0, tva_rate: null, ref: null, stripe: d.payment_intent, status: `${(d.amount_cents / 100).toFixed(2).replace('.', ',')} € · ${DISPUTE_STATUS[d.status] || d.status}` });
+    }
+    rows.sort((a, b) => a.at.localeCompare(b.at));
+    const sum = (f) => rows.reduce((t, r) => t + f(r), 0);
+    const encaisse = sum((r) => (r.type === 'Paiement' ? r.card_cents : 0));
+    const credit = sum((r) => (r.type === 'Paiement' ? r.credit_cents : 0));
+    const rembourse = -sum((r) => (r.type === 'Remboursement' ? r.amount_cents : 0));
+    const tvaNet = sum((r) => (r.tva_rate ? r.amount_cents - r.amount_cents / (1 + r.tva_rate) : 0));
+    return { month, rows, totals: { encaisse, credit, rembourse, net: encaisse - rembourse, chiffreTTC: sum((r) => (r.tva_rate ? r.amount_cents : 0)), tva: Math.round(tvaNet) } };
+  }
+  // ----- statistiques par mois (heure de Paris) -----
+  route('GET', '/api/admin/stats', ({ user, query }) => {
+    need(user, 'admin');
+    const n = Math.min(24, Math.max(3, Number(query.get('months')) || 12));
+    const ym = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit' }).format(d).slice(0, 7);
+    const cur = ym(now());
+    const months = [];
+    { let [y, m] = cur.split('-').map(Number); for (let i = 0; i < n; i++) { months.unshift(`${y}-${String(m).padStart(2, '0')}`); m -= 1; if (!m) { m = 12; y -= 1; } } }
+    const blank = () => ({ caTTC: 0, rembourse: 0, netHT: 0, factures: 0, prestations: 0, heures: 0, annulees: 0, reservations: 0, nouveauxClients: 0, clientsActifs: new Set() });
+    const by = Object.fromEntries(months.map((m) => [m, blank()]));
+    const hasInvoices = db.prepare('SELECT COUNT(*) AS n FROM invoices').get().n > 0;
+    const theoretical = !hasInvoices && !stripeReady;
+    const services = {};
+    if (!theoretical) {
+      for (const i of db.prepare('SELECT i.*, b.service FROM invoices i JOIN bookings b ON b.id = i.booking_id').all()) {
+        const m = by[ym(new Date(i.issued_at))];
+        if (!m) continue;
+        const ht = i.amount_cents / (1 + i.tva_rate);
+        if (i.kind === 'facture') { m.caTTC += i.amount_cents; m.netHT += ht; m.factures += 1; services[i.service] = (services[i.service] || 0) + i.amount_cents; }
+        else { m.rembourse += i.amount_cents; m.netHT -= ht; services[i.service] = (services[i.service] || 0) - i.amount_cents; }
+      }
+    }
+    for (const b of db.prepare("SELECT * FROM bookings WHERE NOT (status = 'annulee' AND paid = 0 AND payment_status IN ('paiement_echoue', 'en_attente_paiement'))").all()) {
+      const m = by[b.date.slice(0, 7)];
+      if (!m) continue;
+      m.reservations += 1;
+      if (b.status === 'annulee') m.annulees += 1;
+      else m.clientsActifs.add(b.client_id);
+      if (b.status === 'terminee') {
+        m.prestations += 1; m.heures += b.hours;
+        if (theoretical) {
+          const cents = Math.round(b.total * 100);
+          m.caTTC += cents; m.factures += 1; m.netHT += cents / (1 + tvaOf(b)); services[b.service] = (services[b.service] || 0) + cents;
+        }
+      }
+    }
+    for (const u of db.prepare("SELECT created_at FROM users WHERE role = 'client'").all()) {
+      const m = by[ym(new Date(u.created_at.replace(' ', 'T') + 'Z'))];
+      if (m) m.nouveauxClients += 1;
+    }
+    const rows = months.map((m) => {
+      const x = by[m];
+      return { month: m, caTTC: x.caTTC, rembourse: x.rembourse, netTTC: x.caTTC - x.rembourse, netHT: Math.round(x.netHT), panierMoyen: x.factures ? Math.round(x.caTTC / x.factures) : null,
+        prestations: x.prestations, heures: x.heures, reservations: x.reservations, annulees: x.annulees,
+        tauxAnnulation: x.reservations ? Math.round((x.annulees / x.reservations) * 1000) / 10 : null, nouveauxClients: x.nouveauxClients, clientsActifs: x.clientsActifs.size };
+    });
+    const total = rows.reduce((t, r) => ({ netTTC: t.netTTC + r.netTTC, netHT: t.netHT + r.netHT, prestations: t.prestations + r.prestations, reservations: t.reservations + r.reservations, annulees: t.annulees + r.annulees }),
+      { netTTC: 0, netHT: 0, prestations: 0, reservations: 0, annulees: 0 });
+    total.tauxAnnulation = total.reservations ? Math.round((total.annulees / total.reservations) * 1000) / 10 : null;
+    return { theoretical, rows, total, services: Object.entries(services).map(([k, v]) => ({ service: k, label: SERVICE_NAME[k] || k, cents: v })).sort((a, b) => b.cents - a.cents) };
+  });
+
+  route('GET', '/api/admin/payments', ({ user, query }) => {
+    need(user, 'admin');
+    const month = monthOk(query.get('month')) ? query.get('month') : new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit' }).format(now()).slice(0, 7);
+    const disputes = db.prepare("SELECT * FROM stripe_disputes ORDER BY CASE WHEN status IN ('needs_response','warning_needs_response') THEN 0 ELSE 1 END, created_at DESC LIMIT 30").all()
+      .map((d) => ({ id: d.id, dispute_id: d.dispute_id, amount_cents: d.amount_cents, reason: DISPUTE_REASON[d.reason] || d.reason, status: d.status, statusLabel: DISPUTE_STATUS[d.status] || d.status,
+        open: ['needs_response', 'warning_needs_response'].includes(d.status), due_by: d.due_by ? new Date(d.due_by * 1000).toISOString() : null,
+        bookings: JSON.parse(d.booking_ids), client: d.client_id ? db.prepare('SELECT name FROM users WHERE id = ?').get(d.client_id)?.name : null,
+        stripeUrl: `https://dashboard.stripe.com/${String(process.env.STRIPE_SECRET_KEY || '').startsWith('sk_test_') ? 'test/' : ''}disputes/${d.dispute_id}` }));
+    return { ...movements(month), disputes };
+  });
+  route('GET', '/api/admin/payments.csv', ({ user, query, res }) => {
+    need(user, 'admin');
+    if (!monthOk(query.get('month'))) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
+    const m = movements(query.get('month'));
+    const cell = (v) => { const t = String(v ?? ''); return /[;"\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? "'" : '') + t.replace(/"/g, '""')}"` : t; };
+    const eurx = (c) => (c / 100).toFixed(2).replace('.', ',');
+    const lines = [['Date', 'Type', 'Pièce', 'Client', 'Réservation', 'Montant TTC', 'Dont carte', 'Dont crédit Proprigo', 'Taux TVA', 'Statut', 'Référence Stripe'].join(';')];
+    for (const r of m.rows) lines.push([new Date(r.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' }), r.type, r.ref, r.client, r.booking, eurx(r.amount_cents), eurx(r.card_cents), eurx(r.credit_cents),
+      r.tva_rate === null ? '' : `${Math.round(r.tva_rate * 1000) / 10} %`, r.status, r.stripe].map(cell).join(';'));
+    db_.log(db, `Export des paiements de ${m.month} par ${user.name}.`);
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="proprigo-paiements-${m.month}.csv"`, 'Cache-Control': 'no-store' });
+    res.end('﻿' + lines.join('\r\n'));
+    return { streamed: true };
+  });
+  // Dossier de preuve d'une contestation : tout ce qui montre que la prestation a eu lieu.
+  route('GET', '/api/admin/disputes/:id/evidence', ({ user, id, res }) => {
+    need(user, 'admin');
+    const d = db.prepare('SELECT * FROM stripe_disputes WHERE id = ?').get(id);
+    if (!d) throw new HttpError(404, 'Contestation introuvable.');
+    const e = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    const when = (iso) => (iso ? new Date(String(iso).includes('T') ? iso : String(iso).replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { timeZone: 'Europe/Paris' }) : '—');
+    const parts = JSON.parse(d.booking_ids).map((bid) => {
+      const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bid);
+      if (!b) return '';
+      const c = db.prepare('SELECT name, email, phone, created_at FROM users WHERE id = ?').get(b.client_id) || {};
+      const w = b.worker_id ? db.prepare('SELECT name FROM users WHERE id = ?').get(b.worker_id) : null;
+      const inv = db.prepare("SELECT number, issued_at, amount_cents FROM invoices WHERE kind = 'facture' AND booking_id = ?").get(bid);
+      let list = []; try { list = JSON.parse(b.checklist || '[]'); } catch { list = []; }
+      const photos = db.prepare('SELECT kind, COUNT(*) AS n FROM photos WHERE booking_id = ? GROUP BY kind').all(bid);
+      const msgs = db.prepare('SELECT m.text, m.created_at, u.role FROM messages m JOIN users u ON u.id = m.sender_id WHERE booking_id = ? ORDER BY m.id').all(bid);
+      const log = db.prepare("SELECT at, text FROM events WHERE text LIKE ? ORDER BY id").all(`%n° ${bid}%`);
+      return `<h2>Réservation n° ${b.id}</h2>
+<table><tr><th>Prestation</th><td>${e(SERVICE_NAME[b.service] || b.service)} ${String(b.hours).replace('.', ',')} h, le ${e(fr(b.date))} à ${e(b.time)}</td></tr>
+<tr><th>Adresse</th><td>${e(b.address)}, ${e(b.cp)}</td></tr>
+<tr><th>Client</th><td>${e(c.name)} · ${e(c.email)}${c.phone ? ` · ${e(c.phone)}` : ''} · compte créé le ${e(when(c.created_at))}</td></tr>
+<tr><th>Réservation passée le</th><td>${e(when(b.created_at))}, conditions générales de vente acceptées à la réservation</td></tr>
+<tr><th>Paiement</th><td>${inv ? `${(inv.amount_cents / 100).toFixed(2).replace('.', ',')} € TTC, facture ${e(inv.number)} du ${e(when(inv.issued_at))}` : 'aucune facture'}</td></tr>
+<tr><th>Intervenante</th><td>${w ? e(w.name) : 'non attribuée'}</td></tr>
+<tr><th>En route / arrivée</th><td>${e(when(b.on_way_at))} / ${e(when(b.arrived_at))}</td></tr>
+<tr><th>Statut</th><td>${e(b.status)}${b.rating ? ` · note du client ${b.rating}/5${b.review ? ` : « ${e(b.review)} »` : ''}` : ''}</td></tr>
+<tr><th>Liste des tâches</th><td>${list.length ? `${list.filter((t) => t.done).length}/${list.length} cochées : ${list.map((t) => `${t.done ? '✓' : '✗'} ${e(t.task)}`).join(' · ')}` : '—'}</td></tr>
+<tr><th>Photos</th><td>${photos.length ? photos.map((p2) => `${p2.n} ${p2.kind === 'avant' ? 'avant' : 'après'}`).join(', ') : 'aucune'} (consultables dans l'admin)</td></tr></table>
+${msgs.length ? `<h3>Messages</h3><ul>${msgs.map((m2) => `<li>${e(when(m2.created_at))} · ${m2.role === 'client' ? 'client' : m2.role === 'admin' ? 'équipe' : 'intervenante'} : ${e(m2.text)}</li>`).join('')}</ul>` : ''}
+${log.length ? `<h3>Historique</h3><ul>${log.map((l) => `<li>${e(when(l.at))} · ${e(l.text)}</li>`).join('')}</ul>` : ''}`;
+    }).join('');
+    db_.log(db, `Dossier de preuve de la contestation ${d.dispute_id} ouvert par ${user.name}.`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dossier de preuve ${e(d.dispute_id)}</title>
+<style>body{font:15px/1.5 Arial,sans-serif;color:#0f1430;max-width:820px;margin:24px auto;padding:0 16px}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid #dce3f7}th{width:190px;color:#596181;font-weight:600}.muted{color:#596181}@media print{.noprint{display:none}}</style></head><body>
+<h1>Dossier de preuve</h1><p class="muted">Contestation ${e(d.dispute_id)} · ${(d.amount_cents / 100).toFixed(2).replace('.', ',')} € · motif : ${e(DISPUTE_REASON[d.reason] || d.reason)} · ${e(DISPUTE_STATUS[d.status] || d.status)}${d.due_by ? ` · réponse avant le ${e(new Date(d.due_by * 1000).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' }))}` : ''}</p>
+<p class="noprint muted">Enregistrez cette page en PDF (Ctrl + P) et joignez-la à votre réponse dans Stripe, avec la facture et, si possible, les photos après le ménage. Ajoutez une phrase simple : la prestation a eu lieu, à telle date, et le client l'a acceptée.</p>
+${parts || '<p>Aucune réservation retrouvée pour ce paiement : vérifiez dans Stripe.</p>'}
+</body></html>`);
+    return { streamed: true };
+  });
+
   route('GET', '/api/bookings/:id/receipt', ({ user, id, res, query }) => {
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
     if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
@@ -1681,7 +2064,12 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
     const totals = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS note, COUNT(rating) AS avis FROM bookings").get();
     const refund = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(refund_amount, total)), 0) AS montant FROM bookings WHERE payment_status = 'a_rembourser'").get();
     const workers = db.prepare('SELECT w.*, u.name, u.email, u.phone FROM workers w JOIN users u ON u.id = w.user_id ORDER BY u.name').all()
-      .map((w) => ({ ...w, steps: db_.STEPS[w.statut], active: engine.isActive(w) }));
+      .map((w) => {
+        const d = docsOf(w.user_id);
+        const toCheck = db.prepare("SELECT COUNT(*) AS n FROM worker_docs WHERE worker_id = ? AND status = 'a_verifier'").get(w.user_id).n;
+        return { ...w, steps: db_.STEPS[w.statut], active: engine.isActive(w), rejected: Boolean(w.rejected_at),
+          docs: d ? { required: d.list.filter((k) => k.required).length, valid: d.list.filter((k) => k.required && k.latest?.status === 'valide').length, toCheck } : null };
+      });
     let ca = 0; let marge = 0;
     for (const b of done) {
       const m = pricing.estimateMargin(b, workers.find((w) => w.user_id === b.worker_id));
@@ -1767,7 +2155,10 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
     if (!w) throw new HttpError(404, 'Intervenante introuvable.');
     if (w.email.endsWith('@proprigo.test') && w.name.includes('(TEST)')) throw new HttpError(403, 'Profil fictif : activation interdite.');
     if (production && !db.prepare('SELECT email_verified_at FROM users WHERE id = ?').get(id)?.email_verified_at) throw new HttpError(409, "Cette personne doit d'abord confirmer son adresse e-mail (lien reçu à l'inscription).");
+    if (w.rejected_at) throw new HttpError(409, 'Candidature refusée.');
     const steps = db_.STEPS[w.statut];
+    const docState = docsOf(id);
+    if (production && w.step === steps.length - 2 && !docState.complete) throw new HttpError(409, `Activation impossible : pièces non validées (${docState.missing.join(' ; ')}).`);
     if (w.step >= steps.length - 1) throw new HttpError(409, 'Déjà active.');
     db.prepare('UPDATE workers SET step = step + 1 WHERE user_id = ?').run(id);
     db_.log(db, `${w.name} : étape « ${steps[w.step + 1]} » validée.${w.step + 1 === steps.length - 1 ? ' Compte activé.' : ''}`);
@@ -1984,6 +2375,9 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
             if (['failed', 'canceled'].includes(refund.status)) db.prepare("UPDATE bookings SET payment_status = 'a_rembourser' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
           }
         }
+        if (['charge.dispute.created', 'charge.dispute.updated', 'charge.dispute.closed', 'charge.dispute.funds_withdrawn', 'charge.dispute.funds_reinstated'].includes(event.type)) {
+          onDispute(event.type, event.data.object);
+        }
         if (event.type === 'checkout.session.async_payment_failed') {
           db.prepare("UPDATE stripe_payments SET status = 'failed' WHERE session_id = ? AND status = 'pending'").run(event.data.object.id);
         }
@@ -2000,7 +2394,7 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
         const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
         if (!r) throw new HttpError(404, 'Introuvable.');
         const id = Number((url.pathname.match(r.re) || [])[1]);
-        const body = req.method === 'POST' ? await readBody(req, /\/photos$/.test(url.pathname) ? 4_000_000 : 100_000) : {};
+        const body = req.method === 'POST' ? await readBody(req, /\/photos$/.test(url.pathname) ? 4_000_000 : url.pathname === '/api/worker/documents' ? 7_000_000 : 100_000) : {};
         const out = await r.handler({ req, res, body, id, query: url.searchParams, user: currentUser(req), ip: clientIp(req) });
         if (out && out.streamed) return;
         if (out && out.data !== undefined && (out.status || out.headers)) return send(res, out.status || 200, out.data, out.headers);
@@ -2087,7 +2481,7 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
     return list.length;
   };
   if (autoSync) {
-    setInterval(() => { try { purgePhotos(); purgeAttempts(); } catch (e) { console.error('Nettoyage quotidien :', e.message); } }, 24 * 3600e3).unref();
+    setInterval(() => { try { purgePhotos(); purgeAttempts(); purgeRejectedDocs(); } catch (e) { console.error('Nettoyage quotidien :', e.message); } }, 24 * 3600e3).unref();
     setInterval(() => { mailer.processQueue().catch((e) => console.error('File des e-mails :', e.message)); }, 5 * 60e3).unref();
     setTimeout(runReminders, 60_000).unref();
     setInterval(runReminders, 3600e3).unref();

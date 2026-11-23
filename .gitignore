@@ -11,3 +11,4 @@ photos/
 .env.*
 # Dépendances
 node_modules/
+documents/
