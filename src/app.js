@@ -196,7 +196,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
     const backupOk = !backupDir || (lastBackup && Date.now() - lastBackup < 48 * 3600e3) || Date.now() - started < 3600e3;
     const ok = dbOk && backupOk;
-    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', erreurs24h: db.prepare("SELECT COUNT(*) AS n FROM server_errors WHERE at >= datetime('now', '-1 day')").get().n, factures: companyMissing.length ? `à compléter (config/entreprise.json : ${companyMissing.join(', ')})` : 'ok', backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
+    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', emails: mailer.cfg.provider ? `${mailer.cfg.provider} (${String(mailer.cfg.from).replace(/^.*<|>.*$/g, '')})` : 'mode local : aucun e-mail ne part', paiements: stripeReady ? (String(process.env.STRIPE_SECRET_KEY).startsWith('sk_live_') ? 'Stripe réel' : 'Stripe test') : 'simulés', erreurs24h: db.prepare("SELECT COUNT(*) AS n FROM server_errors WHERE at >= datetime('now', '-1 day')").get().n, factures: companyMissing.length ? `à compléter (config/entreprise.json : ${companyMissing.join(', ')})` : 'ok', backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
     return ok ? data : { status: 503, data };
   });
   // Copie hors de Render : état du dernier envoi (affiché dans l'admin et /api/health)
@@ -1627,7 +1627,17 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     assurance: { label: 'Attestation d\'assurance responsabilité civile professionnelle', for: ['I'], required: true },
     casier: { label: 'Extrait de casier judiciaire (bulletin n° 3)', for: ['S', 'I'], required: false },
   };
-  const kindsFor = (statut) => Object.entries(DOC_KINDS).filter(([, v]) => v.for.includes(statut)).map(([k, v]) => ({ kind: k, label: v.label, required: v.required }));
+  // La liste des pièces se modifie dans l'admin (Équipe › Pièces demandées). DOC_KINDS = liste d'origine.
+  const DOC_DEFAULTS = Object.entries(DOC_KINDS).map(([kind, v]) => ({ kind, label: v.label, for: [...v.for], required: v.required }));
+  const docList = () => {
+    try {
+      const saved = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'worker_docs'").get()?.value || 'null');
+      if (Array.isArray(saved) && saved.length) return saved;
+    } catch { /* liste d'origine */ }
+    return DOC_DEFAULTS;
+  };
+  const docLabel = (kind) => (docList().find((d) => d.kind === kind) || DOC_DEFAULTS.find((d) => d.kind === kind) || { label: kind }).label;
+  const kindsFor = (statut) => docList().filter((d) => d.for.includes(statut)).map((d) => ({ kind: d.kind, label: d.label, required: d.required }));
   function docsOf(workerId) {
     const w = db.prepare('SELECT statut FROM workers WHERE user_id = ?').get(workerId);
     if (!w) return null;
@@ -1636,6 +1646,33 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     const missing = list.filter((k) => k.required && (!k.latest || k.latest.status !== 'valide')).map((k) => k.label);
     return { list, missing, complete: missing.length === 0 };
   }
+  route('GET', '/api/admin/worker-docs', ({ user }) => {
+    need(user, 'admin');
+    return { list: docList(), defaults: DOC_DEFAULTS };
+  });
+  route('POST', '/api/admin/worker-docs', ({ user, body }) => {
+    need(user, 'admin');
+    const items = Array.isArray(body.list) ? body.list : [];
+    if (!items.length || items.length > 20) throw new HttpError(400, 'Entre 1 et 20 pièces.');
+    const used = new Set();
+    const slug = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 30) || 'piece';
+    const list = items.map((it, i) => {
+      const label = str(it && it.label, 140);
+      if (label.length < 3) throw new HttpError(400, `Pièce n° ${i + 1} : indiquez son nom.`);
+      const forr = ['S', 'I'].filter((x) => Array.isArray(it.for) && it.for.includes(x));
+      if (!forr.length) throw new HttpError(400, `« ${label} » : cochez salariée, indépendante ou les deux.`);
+      let kind = typeof it.kind === 'string' && /^[a-z0-9_]{2,30}$/.test(it.kind) ? it.kind : slug(label);
+      while (used.has(kind)) kind = `${kind.slice(0, 27)}_${used.size}`;
+      used.add(kind);
+      return { kind, label, for: forr, required: Boolean(it.required) };
+    });
+    if (!list.some((d) => d.required && d.for.includes('S')) || !list.some((d) => d.required && d.for.includes('I'))) {
+      throw new HttpError(400, 'Gardez au moins une pièce obligatoire pour les salariées et une pour les indépendantes (la pièce d\'identité, au minimum).');
+    }
+    db.prepare("INSERT INTO settings (key, value, updated_by) VALUES ('worker_docs', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), updated_by = excluded.updated_by").run(JSON.stringify(list), user.id);
+    db_.log(db, `Liste des pièces demandées aux intervenantes modifiée par ${user.name} : ${list.map((d) => `${d.label}${d.required ? '' : ' (facultatif)'} [${d.for.map((x) => (x === 'S' ? 'salariée' : 'indépendante')).join(', ')}]`).join(' ; ')}.`);
+    return { ok: true, message: 'Liste des pièces enregistrée. Les pièces déjà validées restent valables.', list };
+  });
   route('GET', '/api/worker/documents', ({ user }) => {
     need(user, 'intervenante');
     return docsOf(user.id);
@@ -1646,7 +1683,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     if (!w) throw new HttpError(404, 'Profil introuvable.');
     if (w.rejected_at) throw new HttpError(409, 'Votre candidature est close.');
     const kind = String(body.kind || '');
-    if (!DOC_KINDS[kind] || !DOC_KINDS[kind].for.includes(w.statut)) throw new HttpError(400, 'Type de document inconnu.');
+    if (!kindsFor(w.statut).some((d) => d.kind === kind)) throw new HttpError(400, 'Type de document inconnu.');
     const m = /^data:(application\/pdf|image\/jpeg|image\/png);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.data || ''));
     if (!m) throw new HttpError(400, 'Envoyez un PDF, une photo JPEG ou PNG.');
     const buf = Buffer.from(m[2], 'base64');
@@ -1664,7 +1701,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
       db.prepare('DELETE FROM worker_docs WHERE id = ?').run(old.id);
     }
     db.prepare('INSERT INTO worker_docs (worker_id, kind, file, mime, size) VALUES (?, ?, ?, ?, ?)').run(user.id, kind, file, mime, buf.length);
-    db_.log(db, `${user.name} a déposé : ${DOC_KINDS[kind].label}. À vérifier.`);
+    db_.log(db, `${user.name} a déposé : ${docLabel(kind)}. À vérifier.`);
     return { ok: true, message: 'Document reçu. L\'équipe le vérifie rapidement.', ...docsOf(user.id) };
   });
   route('GET', '/api/documents/:id', ({ user, id, res }) => {
@@ -1672,7 +1709,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     if (!d || !user || !(d.worker_id === user.id || isOwner(user))) throw new HttpError(404, 'Document introuvable.');
     const f = path.join(DOCS, path.basename(d.file));
     if (!fs.existsSync(f)) throw new HttpError(404, 'Fichier introuvable.');
-    if (isOwner(user) && d.worker_id !== user.id) db_.log(db, `Document n° ${d.id} (${DOC_KINDS[d.kind]?.label || d.kind}) consulté par ${user.name}.`);
+    if (isOwner(user) && d.worker_id !== user.id) db_.log(db, `Document n° ${d.id} (${docLabel(d.kind)}) consulté par ${user.name}.`);
     res.writeHead(200, { 'Content-Type': d.mime, 'Content-Disposition': `inline; filename="document-${d.id}.${d.mime === 'application/pdf' ? 'pdf' : d.mime === 'image/png' ? 'png' : 'jpg'}"`,
       'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox" });
     fs.createReadStream(f).pipe(res);
@@ -1688,7 +1725,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     if (decision === 'refuse' && note.length < 5) throw new HttpError(400, 'Indiquez la raison du refus : l\'intervenante la recevra (ex. « photo floue », « attestation de plus de 6 mois »).');
     db.prepare("UPDATE worker_docs SET status = ?, note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(decision, note || null, user.id, id);
     const w = workerProfile(d.worker_id);
-    const label = DOC_KINDS[d.kind]?.label || d.kind;
+    const label = docLabel(d.kind);
     db_.log(db, `Document de ${w.name} (${label}) ${decision === 'valide' ? 'validé' : `refusé : ${note}`} par ${user.name}.`);
     if (decision === 'refuse') mailer.send(w.email, 'Un document est à renvoyer', 'Un document est à renvoyer', [
       `Bonjour ${w.name.split(' ')[0]},`, `Nous n'avons pas pu valider : ${label}.`, `Raison : ${note}`, 'Déposez une nouvelle version depuis votre espace, rubrique « Mes documents ».',
@@ -2162,7 +2199,13 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
     if (w.step >= steps.length - 1) throw new HttpError(409, 'Déjà active.');
     db.prepare('UPDATE workers SET step = step + 1 WHERE user_id = ?').run(id);
     db_.log(db, `${w.name} : étape « ${steps[w.step + 1]} » validée.${w.step + 1 === steps.length - 1 ? ' Compte activé.' : ''}`);
-    if (w.step + 1 === steps.length - 1) engine.retryPending(db);
+    if (w.step + 1 === steps.length - 1) {
+      engine.retryPending(db);
+      mailer.send(w.email, 'Votre candidature est acceptée', `Bienvenue dans l'équipe, ${w.name.split(' ')[0]}`, [
+        'Votre candidature est acceptée : vous pouvez maintenant recevoir des missions.',
+        'Première chose à faire : indiquez vos disponibilités et vos congés dans votre espace. Vous ne recevez des missions que pendant ces horaires.',
+      ], { label: 'Régler mes disponibilités', path: '/#/intervenante' }, { key: `worker-active-${id}` });
+    }
     return { ok: true };
   });
 

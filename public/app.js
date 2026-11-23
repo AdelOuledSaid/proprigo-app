@@ -1060,8 +1060,7 @@
           <ol>${r.steps.map((s, i) => `<li>${i < p.step ? '✓ ' : ''}${i === p.step ? '<b>' : ''}${esc(s)}${i === p.step ? ' (en cours)</b>' : ''}</li>`).join('')}</ol>
         </section>
         ${p.rejected_at ? '<p class="card msg warn">Votre candidature est close. Vos documents seront supprimés dans 30 jours.</p>' : '<section class="card stack" id="docs"><h2>Mes documents</h2><p class="muted small">Chargement…</p></section>'}
-        ${calendar}`;
-      bindCalendar();
+        ${p.rejected_at ? '' : '<p class="small muted">Vos disponibilités et vos congés se règlent ici dès que votre candidature est acceptée.</p>'}`;
       paintDocs();
       return;
     }
@@ -1291,6 +1290,7 @@
           <p class="small muted">Cinq profils fictifs marqués TEST, inactifs et absents. Ils ne doivent jamais être attribués à une mission réelle. Sur Render, autorisation temporaire ALLOW_DEMO_WORKERS=true nécessaire.</p>
           <button type="button" class="btn ghost" id="admin-demo-workers">Créer les 5 profils fictifs</button>
         </div>
+        <details class="card" style="margin:12px 0;padding:16px" id="docsCfg"><summary>Pièces demandées aux intervenantes</summary><div id="docsCfgBody" class="stack"><p class="muted small">Chargement…</p></div></details>
         <details class="card" style="margin:12px 0;padding:16px" id="staffBox"><summary>Comptes de l'équipe</summary>
           <p class="small muted">Un compte « planning » voit le planning, les réservations, l'équipe et les messages. Il ne voit ni les chiffres, ni les coordonnées complètes, et ne peut pas rembourser.</p>
           <ul class="plain small" id="staffList"><li class="muted">Chargement…</li></ul>
@@ -1452,6 +1452,34 @@
       });
     };
     if (pb) paintPayouts();
+    // ---- liste des pièces demandées, modifiable ----
+    const docsCfg = document.getElementById('docsCfg');
+    const paintDocsCfg = async (list) => {
+      const body = document.getElementById('docsCfgBody');
+      let d;
+      try { d = await api('GET', '/api/admin/worker-docs'); } catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+      const rows = list || d.list;
+      const row = (x, i) => `<li class="doc-cfg" data-i="${i}" data-kind="${esc(x.kind || '')}">
+          <input name="label" value="${esc(x.label)}" maxlength="140" aria-label="Nom de la pièce" placeholder="Ex. justificatif de domicile">
+          <span class="row" style="gap:12px;flex-wrap:wrap;justify-content:flex-start">
+            <label class="check"><input type="checkbox" name="S" ${x.for.includes('S') ? 'checked' : ''}> Salariée</label>
+            <label class="check"><input type="checkbox" name="I" ${x.for.includes('I') ? 'checked' : ''}> Indépendante</label>
+            <label class="check"><input type="checkbox" name="required" ${x.required ? 'checked' : ''}> Obligatoire</label>
+            <button type="button" class="btn ghost small-btn" data-delrow="${i}">Retirer</button></span></li>`;
+      body.innerHTML = `<p class="small muted">Ce que chaque candidate doit déposer avant d'être activée. Une pièce obligatoire non validée bloque l'activation. Les pièces déjà validées restent valables.</p>
+        <ul class="plain" id="docsCfgList">${rows.map(row).join('')}</ul>
+        <div class="row" style="justify-content:flex-start;gap:10px;flex-wrap:wrap"><button type="button" class="btn ghost" id="docsCfgAdd">Ajouter une pièce</button>
+          <button type="button" class="btn blue" id="docsCfgSave">Enregistrer la liste</button><button type="button" class="btn ghost" id="docsCfgReset">Revenir à la liste d'origine</button></div>`;
+      const read = () => [...body.querySelectorAll('.doc-cfg')].map((li) => ({ kind: li.dataset.kind || undefined, label: li.querySelector('[name="label"]').value.trim(),
+        for: ['S', 'I'].filter((x) => li.querySelector(`[name="${x}"]`).checked), required: li.querySelector('[name="required"]').checked }));
+      body.querySelectorAll('[data-delrow]').forEach((b) => b.onclick = () => { const cur = read(); cur.splice(Number(b.dataset.delrow), 1); paintDocsCfg(cur); });
+      document.getElementById('docsCfgAdd').onclick = () => { paintDocsCfg([...read(), { label: '', for: ['S', 'I'], required: true }]); };
+      document.getElementById('docsCfgReset').onclick = () => { paintDocsCfg(d.defaults); toast('Liste d\'origine remise : enregistrez pour l\'appliquer.'); };
+      document.getElementById('docsCfgSave').onclick = async () => {
+        try { const r2 = await api('POST', '/api/admin/worker-docs', { list: read().filter((x) => x.label) }); toast(r2.message); paintDocsCfg(); } catch (e) { toast(e.message); }
+      };
+    };
+    if (docsCfg) docsCfg.addEventListener('toggle', () => { if (docsCfg.open && !docsCfg.dataset.done) { docsCfg.dataset.done = '1'; paintDocsCfg(); } });
     const staffBox = document.getElementById('staffBox');
     if (staffBox) {
       staffBox.addEventListener('toggle', async () => {
@@ -2097,7 +2125,7 @@
     // Ne jamais effacer une saisie en cours (tarifs, mois choisi, formulaire, fenêtre ouverte).
     const a = document.activeElement;
     if (a && $app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
-    if (document.querySelector('dialog[open]')) return;
+    if (document.querySelector('dialog[open]') || $app.querySelector('details[open]')) return;
     if (page === 'admin' && ['tarifs', 'paiements', 'chiffres'].includes(sessionStorage.getItem('adminTab'))) return;
     refreshInProgress = true;
     try { await route(); } finally { refreshInProgress = false; }

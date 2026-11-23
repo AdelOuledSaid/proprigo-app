@@ -249,3 +249,31 @@ test('tarifs et zones : vérifiés, appliqués aux nouvelles réservations seule
   const b = await start();
   try { assert.equal(pricing.GRID.IDF.menage, 37); assert.equal(pricing.RATES.kit, 15); } finally { b.close(); }
 });
+
+test('pièces demandées : liste modifiable par le responsable, appliquée aux candidates', async () => {
+  const a = await start();
+  try {
+    const id = db_.createUser(a.db, { role: 'intervenante', email: 'cand@test.fr', password: 'motdepasse-cand', name: 'Cand' });
+    a.db.prepare("INSERT INTO workers (user_id, statut, cp) VALUES (?, 'S', '75011')").run(id);
+    const admin = await a.session('admin@proprigo.test', 'admin-test-123');
+    const cand = await a.session('cand@test.fr', 'motdepasse-cand');
+    const cur = (await admin('GET', '/api/admin/worker-docs')).data;
+    assert.ok(cur.list.length >= 5);
+    // sans pièce obligatoire pour les indépendantes : refusé
+    assert.equal((await admin('POST', '/api/admin/worker-docs', { list: [{ label: 'Pièce d\'identité', for: ['S'], required: true }] })).status, 400);
+    const next = [
+      { kind: 'identite', label: 'Pièce d\'identité ou titre de séjour', for: ['S', 'I'], required: true },
+      { label: 'Justificatif de domicile de moins de 3 mois', for: ['S'], required: true },
+      { label: 'Permis de conduire', for: ['S', 'I'], required: false },
+    ];
+    const r = await admin('POST', '/api/admin/worker-docs', { list: next });
+    assert.equal(r.status, 200);
+    const mine = (await cand('GET', '/api/worker/documents')).data;
+    assert.deepEqual(mine.list.map((k) => k.label), ['Pièce d\'identité ou titre de séjour', 'Justificatif de domicile de moins de 3 mois', 'Permis de conduire']);
+    const dom = mine.list[1].kind;
+    assert.equal((await cand('POST', '/api/worker/documents', { kind: dom, data: PDF })).status, 200);
+    assert.equal((await cand('POST', '/api/worker/documents', { kind: 'secu', data: PDF })).status, 400, 'pièce retirée de la liste : plus demandée');
+    assert.deepEqual((await cand('GET', '/api/worker/documents')).data.missing.sort(), ['Justificatif de domicile de moins de 3 mois', 'Pièce d\'identité ou titre de séjour'].sort());
+    assert.equal((await cand('POST', '/api/admin/worker-docs', { list: next })).status, 403);
+  } finally { a.close(); }
+});

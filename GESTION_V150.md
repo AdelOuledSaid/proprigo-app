@@ -56,3 +56,9 @@ Webhook `/api/stripe/webhook` › ajouter les événements `charge.dispute.creat
 ## Tests
 `npm test` : 83/83, dont `test/gestion-v150.test.js` (4). L'audit des accès couvre les nouveaux écrans, réservés au responsable.
 Vérifié dans un navigateur : espace intervenante (mobile), fiche de la candidate, statistiques, paiements, tarifs.
+
+## v1.5.1 — retours
+- Candidate : le calendrier des disponibilités et les congés ne s'affichent plus avant l'acceptation. Elle voit seulement sa candidature et « Mes documents ».
+- Acceptation : e-mail « Votre candidature est acceptée » avec le bouton « Régler mes disponibilités ».
+- Liste des pièces demandées modifiable : Admin › Équipe › « Pièces demandées aux intervenantes ». On peut ajouter, renommer et retirer une pièce, la demander aux salariées, aux indépendantes ou aux deux, et la rendre obligatoire ou facultative. Les pièces déjà validées restent valables.
+- Champs sans type (Nom, Code postal, Téléphone…) : même style partout.

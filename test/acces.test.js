@@ -15,7 +15,7 @@ const PUBLIC = new Set(['GET /api/health', 'GET /api/me', 'POST /api/email/verif
 const OWNER_ONLY = ['GET /api/admin/backups', 'POST /api/admin/backups', 'GET /api/admin/backups/latest', 'GET /api/admin/outbox', 'GET /api/admin/staff', 'POST /api/admin/staff',
   'GET /api/admin/payouts', 'POST /api/admin/payouts', 'POST /api/admin/bookings/:id/refund', 'POST /api/admin/bookings/:id/refunded', 'POST /api/admin/workers/:id/advance',
   'POST /api/admin/workers', 'POST /api/admin/bookings/:id/cancel', 'GET /api/admin/payments', 'GET /api/admin/payments.csv', 'GET /api/admin/stats',
-  'GET /api/admin/pricing', 'POST /api/admin/pricing', 'GET /api/admin/disputes/:id/evidence', 'POST /api/admin/documents/:id/review', 'POST /api/admin/workers/:id/reject'];
+  'GET /api/admin/pricing', 'POST /api/admin/pricing', 'GET /api/admin/disputes/:id/evidence', 'POST /api/admin/documents/:id/review', 'POST /api/admin/workers/:id/reject', 'GET /api/admin/worker-docs', 'POST /api/admin/worker-docs'];
 // Routes d'un client sur SES données : un autre client doit recevoir un refus.
 const CLIENT_OWNED = ['POST /api/bookings/:id/pay', 'GET /api/bookings/:id/preferred-slots', 'POST /api/bookings/:id/update', 'POST /api/bookings/:id/cancel',
   'POST /api/bookings/:id/rate', 'POST /api/bookings/:id/photos', 'POST /api/bookings/:id/report', 'GET /api/bookings/:id/messages', 'POST /api/bookings/:id/messages',
