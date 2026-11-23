@@ -813,7 +813,7 @@
           <div class="row" style="justify-content:flex-start;margin-top:10px">
             ${active && hoursLeft(b) >= 24 ? `<button class="btn ghost" data-edit="${b.id}">Modifier</button>` : ''}
             ${active ? `<button class="btn ghost" data-cancel="${b.id}">${hoursLeft(b) >= 24 ? 'Annuler' : 'Annuler (50 % retenus)'}</button>` : ''}
-            ${b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">Reçu</a>` : ''}
+            ${b.paid || b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">Facture</a>` : ''}
             ${showStop ? `<button class="btn ghost" data-stop="${b.series_id}">Arrêter la récurrence</button>` : ''}
             ${b.status !== 'annulee' ? `<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button>` : ''}
             ${['en_cours', 'terminee'].includes(b.status) ? `<button class="btn ghost" data-report="${b.id}">Signaler un problème</button>` : ''}
@@ -1269,6 +1269,8 @@
         <section class="card" data-tab="chiffres"><h2>Liste d'attente</h2><p class="small muted">Demandes hors zone ouverte, par département.</p>
           <div class="chips">${r.waitlist.map((x) => `<span class="pill">${esc(x.dept)} · ${x.n}</span>`).join('') || '<span class="muted">Aucune demande.</span>'}</div></section>
         <section class="card" data-tab="suivi"><h2>E-mails envoyés</h2><p class="small muted">${ob.provider ? `Envoi réel via ${esc(ob.provider)}.` : 'Mode local : les e-mails ne partent pas, ils sont enregistrés ici pour vérification.'}</p>
+          ${ob.queue && ob.queue.attente ? `<p class="msg warn">${ob.queue.attente} e-mail(s) en attente : nouvel essai automatique toutes les 5 minutes.</p>` : ''}
+          ${ob.queue && ob.queue.abandon ? `<p class="msg warn">${ob.queue.abandon} e-mail(s) abandonné(s) après plusieurs essais : détails dans le journal.</p>` : ''}
           <ul class="plain small">${ob.list.slice(0, 12).map((m) => `<li><span>${esc(m.subject)}<br><span class="muted">${esc(m.to)}</span></span><a href="/api/admin/outbox/${encodeURIComponent(m.file)}" target="_blank" rel="noopener">Ouvrir</a></li>`).join('') || '<li class="muted">Aucun e-mail.</li>'}</ul></section>
         <section class="card" data-tab="suivi"><h2>Sauvegardes</h2>
           ${bk.enabled ? `<p class="small muted">Une sauvegarde automatique par jour ; les 14 dernières sont gardées sur le serveur.</p>
@@ -1653,6 +1655,31 @@
     };
   };
 
+  // Adresse e-mail pas encore confirmée : bandeau discret avec « Renvoyer le lien ».
+  function verifyBanner(name) {
+    if (!me || me.role === 'admin' || me.email_verified !== 0 || name === 'confirmer-email') return;
+    $app.insertAdjacentHTML('afterbegin', `<div class="msg warn verify-banner" role="status">
+      <span>Confirmez votre adresse <b>${esc(me.email)}</b> avec le lien reçu par e-mail : vos confirmations, rappels et factures y arrivent.</span>
+      <button class="btn ghost small-btn" id="verifyResend">Renvoyer le lien</button></div>`);
+    document.getElementById('verifyResend').onclick = async (e) => {
+      e.target.disabled = true;
+      try { const r = await api('POST', '/api/email/resend', {}); toast(r.message); } catch (err) { toast(err.message); e.target.disabled = false; }
+    };
+  }
+  views['confirmer-email'] = async (params) => {
+    $app.innerHTML = '<section class="card stack" style="max-width:460px;margin:auto"><h1>Confirmation de votre adresse</h1><p class="muted" id="vmsg">Vérification en cours…</p></section>';
+    const msg = document.getElementById('vmsg');
+    try {
+      const r = await api('POST', '/api/email/verify', { token: params.get('t') || '' });
+      await loadMe().catch(() => {});
+      msg.className = 'msg ok';
+      msg.textContent = r.message;
+      msg.insertAdjacentHTML('afterend', me ? `<a class="btn primary" href="#/${me.role === 'intervenante' ? 'intervenante' : 'reserver'}">${me.role === 'intervenante' ? 'Mon espace' : 'Réserver un ménage'}</a>` : '<a class="btn primary" href="#/connexion">Se connecter</a>');
+    } catch (e) {
+      msg.className = 'msg warn';
+      msg.textContent = e.message;
+    }
+  };
   views['nouveau-mot-de-passe'] = (params) => {
     const token = params.get('t') || '';
     $app.innerHTML = `
@@ -1874,6 +1901,7 @@
     const [name, qs] = location.hash.replace(/^#\/?/, '').split('?');
     const view = views[name] || views[''];
     try { await view(new URLSearchParams(qs || '')); } catch (e) { $app.innerHTML = `<p class="card err">${esc(e.message)}</p>`; }
+    verifyBanner(name);
     $app.focus({ preventScroll: true });
   }
   window.addEventListener('hashchange', route);

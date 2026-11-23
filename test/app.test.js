@@ -520,7 +520,7 @@ test('e-mails, règle d\'annulation, rappel la veille et reçu', async () => {
     await fatima('POST', `/api/worker/missions/${id}/finish`);
     const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'claire@proprigo.test', password: 'demo-proprigo' }) });
     const html = await (await fetch(`${base}/api/bookings/${id}/receipt`, { headers: { Cookie: login.headers.get('set-cookie').split(';')[0] } })).text();
-    assert.match(html, /Reçu PG-2026-0+\d+/);
+    assert.match(html, /Facture TEST-\d+/); // démo : document de test, sans numéro comptable
     assert.match(html, /DOCUMENT DE TEST/);
     assert.match(html, /74,00/);
     await wait();

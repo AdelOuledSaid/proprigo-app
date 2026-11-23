@@ -21,7 +21,7 @@ if (PROD && !process.env.ADMIN_PASSWORD) {
 }
 fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 
-const { server } = createApp({
+const { server, reportError } = createApp({
   dbFile: DB_FILE, adminPassword: ADMIN_PASSWORD, seed: !PROD || process.env.SEED === '1', secureCookies: PROD,
   production: PROD, paymentsEnabled: process.env.PAYMENTS_ENABLED === 'true', // activer uniquement après configuration Stripe et tests
   autoSync: true, // calendriers Airbnb relus toutes les 6 heures, rappels envoyés la veille
@@ -33,4 +33,12 @@ const { server } = createApp({
 server.listen(PORT, () => {
   console.log(`Proprigo tourne sur http://localhost:${PORT}`);
   if (!PROD) console.log('Comptes de démonstration : voir README.md');
+});
+
+// Erreur non rattrapée : gardée en base et signalée au responsable par e-mail.
+// Pour une exception, le processus s'arrête ensuite proprement : Render le relance tout seul.
+process.on('unhandledRejection', (err) => reportError('tâche de fond', err));
+process.on('uncaughtException', (err) => {
+  reportError('arrêt imprévu du serveur', err);
+  setTimeout(() => process.exit(1), 3000).unref();
 });

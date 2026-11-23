@@ -46,7 +46,7 @@ test('société : facture à son nom, SIRET et TVA vérifiés', async () => {
     const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'claire@proprigo.test', password: 'demo-proprigo' }) });
     const cookie = login.headers.get('set-cookie').split(';')[0];
     const html = await (await fetch(base + `/api/bookings/${id}/receipt`, { headers: { Cookie: cookie } })).text();
-    assert.match(html, /Facturé à :<\/b> Conciergerie Test/);
+    assert.match(html, /Facturé à<\/b><br>Conciergerie Test/);
     assert.match(html, /SIRET : 12345678900012/);
   } finally { server.close(); }
 });

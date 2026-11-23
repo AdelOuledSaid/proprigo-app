@@ -1,3 +1,9 @@
+/* Polices hébergées sur le site (licence SIL OFL, voir /fonts) : aucune requête vers Google. */
+@font-face { font-family: Inter; font-style: normal; font-weight: 400; font-display: swap; src: url(/fonts/inter-regular.woff) format('woff'); }
+@font-face { font-family: Inter; font-style: normal; font-weight: 500; font-display: swap; src: url(/fonts/inter-medium.woff) format('woff'); }
+@font-face { font-family: Inter; font-style: normal; font-weight: 600; font-display: swap; src: url(/fonts/inter-semibold.woff) format('woff'); }
+@font-face { font-family: Inter; font-style: normal; font-weight: 700 900; font-display: swap; src: url(/fonts/inter-bold.woff) format('woff'); }
+@font-face { font-family: Outfit; font-style: normal; font-weight: 600 900; font-display: swap; src: url(/fonts/outfit-bold.woff) format('woff'); }
 /* Proprigo — couleurs et typographie de la charte (design system « Proprigo ») */
 :root {
   color-scheme: light dark;
@@ -675,3 +681,6 @@ input:not([type]):focus { outline: none; border-color: var(--blue); box-shadow: 
 .seo-nav a { color: var(--night); font-weight: 600; text-decoration: none; }
 .seo-nav a.cta { background: var(--coral); color: var(--on-coral); padding: 10px 16px; border-radius: 14px; }
 @media (max-width: 560px) { .seo-nav a:not(.cta) { display: none; } .top .in:has(.seo-nav) { flex-wrap: nowrap; } }
+
+/* bandeau : adresse e-mail à confirmer */
+.verify-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
