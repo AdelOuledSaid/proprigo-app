@@ -4,6 +4,8 @@
   const $app = document.getElementById('app');
   const $nav = document.getElementById('nav');
   let me = null;
+  let adminRevisionSeen = null;
+  let adminRefreshing = false;
 
   // ---------- outils ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1167,6 +1169,7 @@
   views['admin'] = async () => {
     if (!me || me.role !== 'admin') return go('#/connexion');
     const r = await api('GET', '/api/admin/overview');
+    adminRevisionSeen = r.revision;
     const owner = r.staff !== 'planning';
     const m = r.metrics;
     const k = r.kpis;
@@ -1174,7 +1177,7 @@
     const bk = await api('GET', '/api/admin/backups').catch(() => ({ enabled: false, list: [] }));
     const in3 = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
     const todo = [
-      ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+      ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => b.id - a.id)
         .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
       ...(r.quoteRequests ? [`<li class="urgent"><span><b>Demandes de devis</b> · ${r.quoteRequests} nouvelle${r.quoteRequests > 1 ? 's' : ''}</span><button class="btn ghost" id="openDevis">Voir</button></li>`] : []),
@@ -1218,7 +1221,7 @@
         <div class="kpi"><span class="small muted">Note moyenne</span><b>${k.noteMoyenne ? String(k.noteMoyenne).replace('.', ',') + ' / 5' : '–'}</b><span class="small muted">${k.clients} client${k.clients > 1 ? 's' : ''}</span></div>
       </div>
       <section class="card plan-card" data-tab="planning"><div id="plan"><p class="muted">Chargement du planning…</p></div><div id="planPick"></div></section>
-      <section class="card" id="sec-table" data-tab="resa"><h2>Réservations</h2><div class="scroll"><table class="bk">
+      <section class="card" id="sec-table" data-tab="resa"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap"><h2>Réservations</h2><button class="btn ghost" type="button" id="admin-refresh">Actualiser</button></div><p class="small muted">Dernières réservations en premier (numéro décroissant). Actualisation automatique toutes les 20 secondes.</p><div class="scroll"><table class="bk">
         <thead><tr><th>N°</th><th>Prestation</th><th>Date</th><th>Code postal</th><th>Intervenante</th><th>État</th><th class="n">Prix TTC</th><th>Paiement</th><th></th></tr></thead>
         <tbody>${r.bookings.map((b) => `<tr class="bkrow"><td data-l="N°"><b>n° ${b.id}</b></td><td data-l="Prestation">${esc(label(b))}${b.kit ? ' <span class="pill">matériel</span>' : ''}</td><td data-l="Date">${dateFr(b.date)} ${esc(b.time)}</td><td data-l="Code postal">${esc(b.cp)}</td>
           <td data-l="Intervenante">${b.worker_name ? esc(b.worker_name) : '<span class="muted">–</span>'}</td><td data-l="État">${pill(b.status)}${b.rating ? ' ' + '★'.repeat(b.rating) : ''}</td><td class="n" data-l="Prix TTC">${eur(b.total)}</td><td class="small" data-l="Paiement">${PAY[b.payment_status] || ''}</td>
@@ -1455,6 +1458,8 @@
         };
       });
     }
+    const refreshButton = document.getElementById('admin-refresh');
+    if (refreshButton) refreshButton.onclick = () => route();
     $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.onclick = () => { showTab(t.dataset.tabBtn); window.scrollTo(0, 0); });
     showTab(sessionStorage.getItem('adminTab') || 'todo');
     const paintJournal = () => {
@@ -1872,6 +1877,28 @@
     try { await view(new URLSearchParams(qs || '')); } catch (e) { $app.innerHTML = `<p class="card err">${esc(e.message)}</p>`; }
     $app.focus({ preventScroll: true });
   }
+  // Ne rafraîchir que si le serveur a changé. Ne pas interrompre une saisie,
+  // un formulaire ouvert ou une action en cours dans l'administration.
+  async function refreshAdminIfChanged() {
+    if (adminRefreshing || !me || me.role !== 'admin' || location.hash.split('?')[0] !== '#/admin' || document.hidden) return;
+    const active = document.activeElement;
+    if (active && active.closest && active.closest('#app') &&
+        (active.matches('input, textarea, select') || active.isContentEditable)) return;
+    adminRefreshing = true;
+    try {
+      const next = await api('GET', '/api/admin/revision');
+      if (adminRevisionSeen !== null && next.revision !== adminRevisionSeen &&
+          location.hash.split('?')[0] === '#/admin') {
+        const scrollY = window.scrollY;
+        await route();
+        window.scrollTo(0, scrollY);
+      }
+    } catch (_) { /* une erreur réseau temporaire ne doit pas déconnecter l'admin */ }
+    finally { adminRefreshing = false; }
+  }
+  setInterval(refreshAdminIfChanged, 20000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAdminIfChanged(); });
+  window.addEventListener('focus', refreshAdminIfChanged);
   window.addEventListener('hashchange', route);
   loadMe().catch(() => {}).finally(route);
 })();

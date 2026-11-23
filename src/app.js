@@ -1265,9 +1265,20 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
       parrainages: db.prepare('SELECT COUNT(*) AS n FROM users WHERE referred_by IS NOT NULL').get().n,
     };
   };
+  // Empreinte légère pour détecter les nouvelles réservations sans reconnecter l'administrateur.
+  // Le journal couvre également les changements de statut, attribution et paiement.
+  const adminRevision = () => {
+    const b = db.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS last FROM bookings').get();
+    const e = db.prepare('SELECT COALESCE(MAX(id), 0) AS last FROM events').get();
+    return `${b.n}:${b.last}:${e.last}`;
+  };
+  route('GET', '/api/admin/revision', ({ user }) => {
+    needStaff(user);
+    return { revision: adminRevision() };
+  });
   route('GET', '/api/admin/overview', ({ user }) => {
     needStaff(user);
-    const bookings = db.prepare('SELECT * FROM bookings ORDER BY date DESC, time DESC LIMIT 200').all().map(bookingView);
+    const bookings = db.prepare('SELECT * FROM bookings ORDER BY id DESC').all().map(bookingView);
     const icalFlagged = db.prepare("SELECT b.id, b.date, b.time, b.cp, h.name AS home_name FROM bookings b LEFT JOIN homes h ON h.id = b.home_id WHERE b.ical_flagged = 1 AND b.status IN ('en_attente','proposee','attribuee') ORDER BY b.date").all();
     const done = db.prepare("SELECT * FROM bookings WHERE status = 'terminee'").all(); // toutes, pas seulement les 200 dernières
     const totals = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS note, COUNT(rating) AS avis FROM bookings").get();
@@ -1285,7 +1296,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
     const clients = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client'").get().n;
     if (!isOwner(user)) {
       return { kpis: { reservations: totals.n, noteMoyenne: totals.avis ? Math.round(totals.note * 10) / 10 : null, clients, terminees: done.length, caHT: 0, marge: 0, aRembourser: { n: 0, montant: 0 } },
-        couts: null, paymentsEnabled, bookings: bookings.map((b) => ({ ...b, total: null })), icalFlagged, workers: workers.map((w) => ({ ...w, email: '', phone: '' })), waitlist: [], events: [], incidents, metrics: null, staff: 'planning' };
+        revision: adminRevision(), couts: null, paymentsEnabled, bookings: bookings.map((b) => ({ ...b, total: null })), icalFlagged, workers: workers.map((w) => ({ ...w, email: '', phone: '' })), waitlist: [], events: [], incidents, metrics: null, staff: 'planning' };
     }
     return {
       kpis: {
@@ -1293,7 +1304,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
         noteMoyenne: totals.avis ? Math.round(totals.note * 10) / 10 : null, clients,
         aRembourser: { n: refund.n, montant: refund.montant },
       },
-      couts: pricing.COSTS, paymentsEnabled,
+      revision: adminRevision(), couts: pricing.COSTS, paymentsEnabled,
       bookings, icalFlagged, workers, waitlist: wl, events, incidents,
       metrics: metrics(),
       quoteRequests: db.prepare("SELECT COUNT(*) AS n FROM quote_requests WHERE status = 'nouveau'").get().n,
