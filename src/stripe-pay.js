@@ -1,5 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
+// Serialize checkout creation for the same booking within one Node process.
+const checkoutLocks = new Map();
 const configured = () => Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
 const validBaseUrl = (url) => /^https:\/\/[^/]+/i.test(url);
 function verifyEvent(raw, signature) {
@@ -13,6 +15,15 @@ function verifyEvent(raw, signature) {
   return JSON.parse(raw.toString('utf8'));
 }
 async function checkout({ db, ids, clientId, email, appUrl }) {
+  const key = `${clientId}:${[...ids].sort((a,b) => a-b).join(',')}`;
+  const previous = checkoutLocks.get(key);
+  if (previous) return previous;
+  const pending = checkoutUnlocked({ db, ids, clientId, email, appUrl });
+  checkoutLocks.set(key, pending);
+  try { return await pending; }
+  finally { if (checkoutLocks.get(key) === pending) checkoutLocks.delete(key); }
+}
+async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   if (!configured()) throw new Error('Stripe not configured');
   if (!validBaseUrl(appUrl)) throw new Error('Invalid public URL');
   const bookings = ids.map((id) => db.prepare('SELECT * FROM bookings WHERE id = ? AND client_id = ?').get(id, clientId));
@@ -40,6 +51,8 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   const params = new URLSearchParams();
   params.set('mode', 'payment');
   params.set('customer_email', email);
+  params.set('metadata[booking_ids]', JSON.stringify(ids));
+  params.set('payment_intent_data[metadata][booking_ids]', JSON.stringify(ids));
   
   params.set('line_items[0][price_data][currency]', 'eur');
   params.set('line_items[0][price_data][unit_amount]', String(amount));
@@ -81,6 +94,11 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
     throw new Error('Stripe session failed');
   }
   try {
+    // Recheck after Stripe API call: the webhook might have marked it paid meanwhile.
+    if (ids.some((id) => { const b = db.prepare('SELECT paid FROM bookings WHERE id = ?').get(id); return !b || b.paid; })) {
+      await expireCheckout(session.id);
+      throw new Error('Booking already paid during checkout creation');
+    }
     db.prepare('INSERT INTO stripe_payments (session_id, client_id, booking_ids, amount_cents, status) VALUES (?, ?, ?, ?, ?)').run(session.id, clientId, JSON.stringify(ids), amount, 'pending');
   } catch (err) {
     console.error('Stripe Checkout database error:', { code: err.code, message: err.message });
@@ -88,6 +106,28 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   }
   return { url: session.url };
 }
+
+async function expireCheckout(sessionId) {
+  const resp = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}/expire`, {
+    method: 'POST', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!resp.ok) { const body = await resp.json().catch(() => ({}));
+    if (body.error?.code !== 'checkout_succeeded_session' && body.error?.code !== 'checkout_expired_session')
+      throw new Error(`Stripe expire failed (${resp.status}): ${body.error?.code || 'unknown'}`);
+  }
+}
+async function expireOtherSessions(db, ids, completedSessionId) {
+  const rows = db.prepare("SELECT session_id, booking_ids FROM stripe_payments WHERE status = 'pending' AND session_id <> ?").all(completedSessionId);
+  for (const row of rows) {
+    if (!JSON.parse(row.booking_ids).some((id) => ids.includes(id))) continue;
+    try {
+      await expireCheckout(row.session_id);
+      db.prepare("UPDATE stripe_payments SET status = 'expired' WHERE session_id = ? AND status = 'pending'").run(row.session_id);
+    } catch (err) { console.error('Stripe stale session expiry failed:', row.session_id, err.message); }
+  }
+}
+
 /**
  * Remboursement réel dans Stripe. La clé d'idempotence est fixe pour une réservation et un montant :
  * deux clics ou deux essais ne peuvent jamais rembourser deux fois.
@@ -165,4 +205,4 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund, checkoutGift };
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, checkoutGift };

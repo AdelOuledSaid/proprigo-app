@@ -8,7 +8,7 @@ const server = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf
 const stripe = fs.readFileSync(path.join(__dirname, '..', 'src', 'stripe-pay.js'), 'utf8');
 test('les réservations annulées et terminées sont dans l historique', () => {
   assert.match(ui, /const isHistory = \(b\) => \['annulee', 'terminee'\]\.includes\(b\.status\)/);
-  assert.match(ui, /visibleBookings\.map\(\(b\) =>/);
+  assert.match(ui, /visibleBookings\.filter\(isHistory\)\.map\(\(b\) => renderBooking\(b\)\)/);
 });
 test('une réservation annulée ne propose pas de paiement dans le client ou le serveur', () => {
   assert.match(ui, /active && b\.payment_status === 'en_attente_paiement'/);

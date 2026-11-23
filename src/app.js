@@ -1506,6 +1506,16 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
           const payment = db.prepare('SELECT * FROM stripe_payments WHERE session_id = ?').get(sess.id);
           if (payment && payment.status !== 'paid' && sess.currency === 'eur' && sess.amount_total === payment.amount_cents) {
             const ids = JSON.parse(payment.booking_ids);
+            const alreadyPaid = ids.some((id) => {
+              const b = db.prepare('SELECT paid FROM bookings WHERE id = ?').get(id);
+              return b && b.paid;
+            });
+            if (alreadyPaid) {
+              // Never hide an actual second charge. Record it for manual refund/reconciliation.
+              db.prepare("UPDATE stripe_payments SET status = 'duplicate_paid', payment_intent = ? WHERE session_id = ?")
+                .run(typeof sess.payment_intent === 'string' ? sess.payment_intent : null, sess.id);
+              db_.log(db, `ALERTE DOUBLE PAIEMENT Stripe session ${sess.id} pour réservation(s) ${ids.join(', ')} : remboursement à vérifier.`);
+            } else {
             db.exec('BEGIN IMMEDIATE');
             try {
               db.prepare("UPDATE stripe_payments SET status = 'paid', payment_intent = ? WHERE session_id = ?").run(typeof sess.payment_intent === 'string' ? sess.payment_intent : null, sess.id);
@@ -1518,12 +1528,14 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
               }
               db.exec('COMMIT');
             } catch (e) { db.exec('ROLLBACK'); throw e; }
+            }
             for (const id of ids) {
               const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
               if (b && b.payment_status === 'paye' && b.status === 'en_attente') {
                 db_.log(db, `Réservation n° ${id} payée : attribution manuelle nécessaire.`);
               }
             }
+            await stripePay.expireOtherSessions(db, ids, sess.id);
           }
         }
         if (event.type === 'refund.updated') {

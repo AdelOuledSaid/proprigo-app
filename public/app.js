@@ -18,6 +18,15 @@
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
   };
   const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé' };
+  const paymentLabel = (b) => {
+    if (b.status === 'annulee' && !b.paid) return 'Annulée — non payée';
+    if (['rembourse', 'rembourse'].includes(b.payment_status)) {
+      const amount = Number(b.refund_amount || 0);
+      if (amount > 0 && amount < Number(b.total)) return `Remboursement partiel : ${eur(amount)}`;
+      return 'Remboursé';
+    }
+    return PAY[b.payment_status] || '';
+  };
   const pill = (s) => `<span class="pill ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
   const label = (b) => b.service === 'airbnb' ? `Airbnb ${SIZE[b.size]}` : `${SERVICE[b.service]} ${String(b.hours).replace('.', ',')} h`;
 
@@ -783,12 +792,10 @@
     const list = await api('GET', '/api/bookings/mine');
     const mw = await api('GET', '/api/my-workers');
     const series = {};
+    const isHistory = (b) => ['annulee', 'terminee'].includes(b.status);
+    const visibleBookings = [...list].sort((a, b) => Number(b.id) - Number(a.id));
     const hoursLeft = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.now()) / 36e5;
-    $app.innerHTML = `
-      <div class="row"><h1>Mes réservations</h1><a class="btn primary" href="#/reserver">Nouvelle réservation</a></div>
-      <p class="small muted">${FREE_CANCEL}</p>
-      ${list.length ? '' : '<p class="card muted">Aucune réservation pour le moment.</p>'}
-      ${list.map((b) => {
+    const renderBooking = (b) => {
         const active = ['en_attente', 'proposee', 'attribuee'].includes(b.status);
         const showStop = b.series_id && active && !series[b.series_id];
         if (b.series_id) series[b.series_id] = true;
@@ -799,7 +806,7 @@
           ${b.worker_name ? `<p style="margin:8px 0 0">Intervenante vérifiée : <b>${esc(b.worker_name)}</b>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
           ${b.source === 'ical' ? '<p class="small muted" style="margin:6px 0 0">Créé automatiquement depuis le calendrier de votre annonce.</p>' : ''}
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
-          <p class="small muted" style="margin:6px 0 0">${PAY[b.payment_status] || ''}</p>
+          <p class="small muted" style="margin:6px 0 0">${esc(paymentLabel(b))}</p>
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
           ${b.checklist.length && ['en_cours', 'terminee'].includes(b.status) ? shine(b) : ''}${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
@@ -817,9 +824,18 @@
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
           ${b.status === 'terminee' && !b.rating ? `<p style="margin:10px 0 0"><b>Comment s'est passé le ménage ?</b></p><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div>` : ''}
           ${b.rating ? `<p class="small muted" style="margin:8px 0 0">Votre note : ${'★'.repeat(b.rating)}</p>` : ''}
-          ${b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
+          ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
         </article>`;
-      }).join('')}`;
+    };
+    $app.innerHTML = `
+      <div class="row"><h1>Mes réservations</h1><a class="btn primary" href="#/reserver">Nouvelle réservation</a></div>
+      <p class="small muted">${FREE_CANCEL}</p>
+      ${list.length ? '' : '<p class="card muted">Aucune réservation pour le moment.</p>'}
+      ${visibleBookings.some((b) => !isHistory(b)) ? '<h2>Réservations en cours</h2>' : ''}
+      ${visibleBookings.filter((b) => !isHistory(b)).map((b) => renderBooking(b)).join('')}
+      ${visibleBookings.some(isHistory) ? '<h2>Historique</h2>' : ''}
+      ${visibleBookings.filter(isHistory).map((b) => renderBooking(b)).join('')}`;
+
     const act = (sel, fn) => $app.querySelectorAll(sel).forEach((btn) => btn.onclick = () => fn(btn));
     act('[data-prefslots]', async (btn) => {
       const id = btn.dataset.prefslots;
@@ -838,7 +854,12 @@
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     act('[data-pay-booking]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.payBooking}/pay`, {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); } });
-    act('[data-cancel]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
+    act('[data-cancel]', async (btn) => {
+      const b = list.find((x) => String(x.id) === btn.dataset.cancel);
+      const retained = b && hoursLeft(b) < 24 ? Number(b.total) * 0.5 : 0;
+      const refund = b && b.paid ? Math.max(0, Number(b.total) - retained) : 0;
+      if (!confirm(`Annuler ma réservation n° ${btn.dataset.cancel} ?\nMontant retenu : ${eur(retained)}\nRemboursement prévu : ${eur(refund)}\nLe montant définitif est confirmé par le serveur.`)) return;
+      try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
     act('[data-stop]', async (btn) => { try { const r = await api('POST', `/api/series/${btn.dataset.stop}/stop`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
     act('[data-edit]', (btn) => {
@@ -1851,5 +1872,18 @@
     $app.focus({ preventScroll: true });
   }
   window.addEventListener('hashchange', route);
+  // Re-fetch server state on return from Stripe, focus, and while a dashboard is visible.
+  // A refresh must not require logging out and back in.
+  let refreshInProgress = false;
+  async function refreshDashboard() {
+    if (refreshInProgress || document.hidden || !me) return;
+    const page = location.hash.replace(/^#\/?/, '').split('?')[0];
+    if (!['mes-reservations', 'admin', 'intervenante'].includes(page)) return;
+    refreshInProgress = true;
+    try { await route(); } finally { refreshInProgress = false; }
+  }
+  window.addEventListener('focus', refreshDashboard);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshDashboard(); });
+  setInterval(refreshDashboard, 15000);
   loadMe().catch(() => {}).finally(route);
 })();
