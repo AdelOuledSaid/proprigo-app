@@ -239,10 +239,12 @@ function slotsFor(db, workerId, { id = -1, date, cp, hours }) {
 }
 
 /** Créneaux proposés à la demande : l'équipe confirme l'intervenante après paiement. */
-function requestSlots({ hours }) {
-  if (!Number.isFinite(hours) || hours < 1 || hours > 8) return [];
+// Bureaux : avant l'ouverture ou après la fermeture, de 6 h à 22 h. Autres ménages : de 7 h à 20 h.
+function requestSlots({ hours, service }) {
+  if (!Number.isFinite(hours) || hours < 1 || hours > 12) return [];
   const out = [];
-  for (let m = 7 * 60; m + hours * 60 <= 20 * 60; m += 30) {
+  const [from, to] = service === 'bureau' ? [6, 22] : [7, 20];
+  for (let m = from * 60; m + hours * 60 <= to * 60; m += 30) {
     out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${m % 60 ? '30' : '00'}`);
   }
   return out;

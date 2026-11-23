@@ -15,6 +15,15 @@ const SUNDAY_RATE = 0.20;
 const URGENT_RATE = 0.25;
 const KIT_PRICE = 15;
 const SERVICES = ['menage', 'grand', 'airbnb', 'bureau'];
+// Options d'un ménage à domicile ou d'un grand nettoyage : du temps en plus, au tarif de l'heure.
+const EXTRAS = {
+  repassage: { label: 'Repassage', hours: 1, task: 'Repassage du linge propre (environ 1 h)' },
+  vitres: { label: 'Vitres intérieures', hours: 1, task: 'Vitres intérieures accessibles' },
+  four: { label: 'Intérieur du four', hours: 0.5, task: 'Intérieur du four' },
+  frigo: { label: 'Intérieur du réfrigérateur', hours: 0.5, task: 'Intérieur du réfrigérateur (vidé avant le passage)' },
+  draps: { label: 'Changement des draps', hours: 0.5, task: 'Changer les draps et faire les lits' },
+};
+const SUBSCRIPTION_RATE = 0.05; // ménage chaque semaine ou toutes les 2 semaines : −5 %
 const PRO_SERVICES = ['airbnb', 'bureau']; // facturés à des professionnels : TVA à 20 %, pas de crédit d'impôt
 const MIN_HOURS = 2;
 const MAX_HOURS = 8;
@@ -107,6 +116,8 @@ function quote(input, now = new Date()) {
   let hours = 0;
   let base = 0;
   let label = '';
+  const extras = [];
+  const extraLines = [];
   const g = GRID[zone || 'IDF'];
   if (service === 'airbnb') {
     if (!AIRBNB_HOURS[input.size]) errors.push('Taille de logement inconnue.');
@@ -123,13 +134,22 @@ function quote(input, now = new Date()) {
       const rate = g[service];
       base = hours * rate;
       label = `${{ grand: 'Grand nettoyage', bureau: 'Nettoyage de bureaux' }[service] || 'Ménage'} ${String(hours).replace('.', ',')} h × ${rate} €`;
+      if (service !== 'bureau') {
+        for (const k of [...new Set(Array.isArray(input.extras) ? input.extras : [])]) {
+          if (!EXTRAS[k]) continue;
+          extras.push(k);
+          extraLines.push({ label: `Option : ${EXTRAS[k].label} (+${String(EXTRAS[k].hours).replace('.', ',')} h)`, amount: round2(EXTRAS[k].hours * rate) });
+          hours += EXTRAS[k].hours;
+          base += EXTRAS[k].hours * rate;
+        }
+      }
     }
   }
 
   const lines = [];
   let total = 0;
   if (!errors.length) {
-    lines.push({ label, amount: round2(base) });
+    lines.push({ label, amount: round2(base - extraLines.reduce((t, l) => t + l.amount, 0)) }, ...extraLines);
     let rate = 0;
     if (isSundayOrHoliday(input.date)) {
       rate += SUNDAY_RATE;
@@ -145,6 +165,17 @@ function quote(input, now = new Date()) {
         rate += URGENT_RATE;
         lines.push({ label: 'Urgence (moins de 3 h)', amount: round2(base * URGENT_RATE) });
       }
+    }
+    const subscription = (input.repeat === '7' || input.repeat === '14') && !input.urgent;
+    // remise selon le volume, pour les comptes société et les prestations aux professionnels seulement ;
+    // jamais cumulée avec l'abonnement (on garde la plus avantageuse), pour ne jamais travailler à perte
+    const volume = PRO_SERVICES.includes(service) && [0.05, 0.1].includes(input.volume) ? input.volume : 0;
+    if (volume && (!subscription || volume > SUBSCRIPTION_RATE)) {
+      rate -= volume;
+      lines.push({ label: `Remise volume entreprise (−${Math.round(volume * 100)} %)`, amount: -round2(base * volume) });
+    } else if (subscription) {
+      rate -= SUBSCRIPTION_RATE;
+      lines.push({ label: `Abonnement ${input.repeat === '7' ? 'chaque semaine' : 'toutes les 2 semaines'} (−5 %)`, amount: -round2(base * SUBSCRIPTION_RATE) });
     }
     total = Math.round(base * (1 + rate));
     if (input.kit) {
@@ -164,6 +195,7 @@ function quote(input, now = new Date()) {
     service,
     size: service === 'airbnb' ? input.size : null,
     hours,
+    extras,
     lines,
     total,
     pro: PRO_SERVICES.includes(service),
@@ -181,7 +213,7 @@ function estimateMargin(b, worker) {
 }
 
 module.exports = {
-  SERVICES, PRO_SERVICES,
+  SERVICES, PRO_SERVICES, EXTRAS, SUBSCRIPTION_RATE,
   GRID, AIRBNB_HOURS, SIZE_LABEL, IDF_DEPTS, OPEN_ZONES, KIT_PRICE, COSTS,
   zoneOf, isOpen, quote, estimateMargin, todayParis, isValidDate, holidays, nowParisMinutes,
 };

@@ -173,15 +173,18 @@ function open(file) {
   if (!spCols.includes('payment_intent')) db.exec('ALTER TABLE stripe_payments ADD COLUMN payment_intent TEXT');
   if (!spCols.includes('refunded_cents')) db.exec('ALTER TABLE stripe_payments ADD COLUMN refunded_cents INTEGER NOT NULL DEFAULT 0');
   const usCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
-  for (const [c, t] of [['staff_level', 'TEXT'], ['ref_code', 'TEXT'], ['referred_by', 'INTEGER']]) if (!usCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${t}`);
+  for (const [c, t] of [['staff_level', 'TEXT'], ['ref_code', 'TEXT'], ['referred_by', 'INTEGER'], ['company', 'TEXT'], ['siret', 'TEXT'], ['vat_number', 'TEXT'], ['billing_address', 'TEXT']]) if (!usCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${t}`);
   db.exec(`CREATE TABLE IF NOT EXISTS credits (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), amount REAL NOT NULL, reason TEXT NOT NULL, ref_user INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS admin_notes (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, target_id INTEGER NOT NULL, author_id INTEGER NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));`);
   if (!db.prepare('PRAGMA table_info(incidents)').all().some((c) => c.name === 'source')) db.exec("ALTER TABLE incidents ADD COLUMN source TEXT NOT NULL DEFAULT 'client'");
+  db.exec(`CREATE TABLE IF NOT EXISTS gift_cards (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, code TEXT UNIQUE, amount REAL NOT NULL, price REAL NOT NULL, hours REAL, amount_cents INTEGER, buyer_id INTEGER NOT NULL REFERENCES users(id), recipient_name TEXT, recipient_email TEXT, message TEXT, session_id TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'pending', redeemed_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), paid_at TEXT);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS quote_requests (id INTEGER PRIMARY KEY, company TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, cp TEXT NOT NULL, kind TEXT NOT NULL, surface INTEGER, frequency TEXT, message TEXT, status TEXT NOT NULL DEFAULT 'nouveau', created_at TEXT NOT NULL DEFAULT (datetime('now')));`);
+  db.exec(`CREATE TABLE IF NOT EXISTS payouts (id INTEGER PRIMARY KEY, worker_id INTEGER NOT NULL REFERENCES users(id), week_start TEXT NOT NULL, hours REAL NOT NULL, rate REAL NOT NULL, bonus_rate REAL NOT NULL DEFAULT 0, amount REAL NOT NULL, booking_ids TEXT NOT NULL, reference TEXT, created_by INTEGER, paid_at TEXT NOT NULL DEFAULT (datetime('now')));`);
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_ref_code ON users(ref_code) WHERE ref_code IS NOT NULL');
   const wkCols = db.prepare('PRAGMA table_info(workers)').all().map((c) => c.name);
   for (const [c, t] of [['bio', 'TEXT'], ['languages', 'TEXT']]) if (!wkCols.includes(c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
   const bkCols = db.prepare('PRAGMA table_info(bookings)').all().map((c) => c.name);
-  for (const [c, t] of [['refund_id', 'TEXT'], ['on_way_at', 'TEXT'], ['arrived_at', 'TEXT'], ['review', 'TEXT'], ['problem', 'TEXT'], ['problem_at', 'TEXT'], ['discount', 'REAL NOT NULL DEFAULT 0']]) if (!bkCols.includes(c)) db.exec(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`);
+  for (const [c, t] of [['refund_id', 'TEXT'], ['on_way_at', 'TEXT'], ['arrived_at', 'TEXT'], ['review', 'TEXT'], ['problem', 'TEXT'], ['problem_at', 'TEXT'], ['discount', 'REAL NOT NULL DEFAULT 0'], ['extras', 'TEXT']]) if (!bkCols.includes(c)) db.exec(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`);
   // mise à jour des bases créées par une version précédente
   const cols = db.prepare('PRAGMA table_info(bookings)').all().map((c) => c.name);
   if (!cols.includes('payment_status')) {

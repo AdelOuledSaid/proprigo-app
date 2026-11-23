@@ -9,6 +9,7 @@ const pricing = require('./pricing');
 const checklist = require('./checklist');
 const ical = require('./ical');
 const mailer = require('./mailer');
+const seo = require('./seo');
 const backups = require('./backup');
 const VERSION = require('../package.json').version;
 const os = require('node:os');
@@ -25,7 +26,7 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed = true, secureCookies = false, production = false, paymentsEnabled = false, photosDir = null, icalAllowAny = false, icalFetch = undefined, autoSync = false, mail = {}, appUrl = 'http://localhost:3000', now = () => new Date(), backupDir = null } = {}) {
+function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed = true, secureCookies = false, production = false, paymentsEnabled = false, photosDir = null, icalAllowAny = false, icalFetch = undefined, autoSync = false, mail = {}, appUrl = 'http://localhost:3000', now = () => new Date(), backupDir = null, googleReviewUrl = '' } = {}) {
   const PHOTOS = photosDir || (dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-photos-')) : path.join(path.dirname(dbFile), 'photos'));
   fs.mkdirSync(PHOTOS, { recursive: true });
   const db = db_.open(dbFile);
@@ -261,6 +262,57 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db.prepare('UPDATE users SET name = ?, phone = ? WHERE id = ?').run(name, phone || null, user.id);
     return { ok: true, message: 'Informations enregistrées.' };
   });
+  route('POST', '/api/account/company', ({ user, body }) => {
+    need(user, 'client');
+    const company = str(body.company, 120);
+    const siret = str(body.siret, 20).replace(/\s+/g, '');
+    const vat = str(body.vat_number, 20).replace(/\s+/g, '').toUpperCase();
+    const billing = str(body.billing_address, 200);
+    if (siret && !/^\d{14}$/.test(siret)) throw new HttpError(400, 'Le SIRET compte 14 chiffres.');
+    if (vat && !/^[A-Z]{2}[0-9A-Z]{8,12}$/.test(vat)) throw new HttpError(400, 'Numéro de TVA invalide (ex. FR12345678901).');
+    if (!company && (siret || vat)) throw new HttpError(400, 'Indiquez la raison sociale.');
+    db.prepare('UPDATE users SET company = ?, siret = ?, vat_number = ?, billing_address = ? WHERE id = ?').run(company || null, siret || null, vat || null, billing || null, user.id);
+    return { ok: true, message: company ? 'Société enregistrée : vos prochaines factures seront à son nom.' : 'Société retirée.' };
+  });
+  route('GET', '/api/account/company', ({ user }) => {
+    need(user, 'client');
+    const c = db.prepare('SELECT company, siret, vat_number, billing_address FROM users WHERE id = ?').get(user.id);
+    const n = db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE client_id = ? AND status <> 'annulee' AND substr(date, 1, 7) = ?").get(user.id, pricing.todayParis(now()).slice(0, 7)).n;
+    return { ...c, monthCount: n, volume: volumeRate(user) };
+  });
+
+  // ----- demande de devis (entreprises, agences, syndics, conciergeries) -----
+  const QUOTE_KINDS = { bureaux: 'Bureaux', agence: 'Agence immobilière / fins de bail', syndic: 'Syndic / parties communes', conciergerie: 'Conciergerie / logements Airbnb', autre: 'Autre' };
+  const devisAsks = new Map();
+  route('POST', '/api/quote-requests', ({ body, ip }) => {
+    const recent = (devisAsks.get(ip) || []).filter((t) => t > Date.now() - 3600e3);
+    if (recent.length >= 5) throw new HttpError(429, 'Trop de demandes. Réessayez dans une heure.');
+    const company = str(body.company, 120); const name = str(body.name, 80);
+    const email = str(body.email, 120).toLowerCase(); const phone = str(body.phone, 20);
+    const cp = str(body.cp, 5); const kind = Object.hasOwn(QUOTE_KINDS, body.kind) ? body.kind : null;
+    const surface = Math.min(100000, Math.max(0, Math.round(Number(body.surface) || 0))) || null;
+    const frequency = str(body.frequency, 60); const message = str(body.message, 1000);
+    if (!company || !name) throw new HttpError(400, 'Indiquez la société et votre nom.');
+    if (!EMAIL_RE.test(email)) throw new HttpError(400, 'Adresse e-mail invalide.');
+    if (!/^\d{5}$/.test(cp)) throw new HttpError(400, 'Code postal à 5 chiffres.');
+    if (!kind) throw new HttpError(400, 'Choisissez le type de besoin.');
+    devisAsks.set(ip, [...recent, Date.now()]);
+    const id = Number(db.prepare('INSERT INTO quote_requests (company, name, email, phone, cp, kind, surface, frequency, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(company, name, email, phone || null, cp, kind, surface, frequency || null, message || null).lastInsertRowid);
+    db_.log(db, `Demande de devis n° ${id} : ${company} (${QUOTE_KINDS[kind]}, ${cp}).`);
+    for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").all()) mailer.send(a.email, `Demande de devis : ${company}`, 'Nouvelle demande de devis', [`${company} · ${QUOTE_KINDS[kind]} · ${cp}${surface ? ` · ${surface} m²` : ''}${frequency ? ` · ${frequency}` : ''}`, `${name} · ${email}${phone ? ` · ${phone}` : ''}`, ...(message ? [message] : [])], { label: 'Voir les demandes', path: '/#/admin' });
+    mailer.send(email, 'Votre demande de devis Proprigo', 'Demande bien reçue', [`Bonjour ${name.split(' ')[0]},`, 'Nous avons bien reçu votre demande. Nous vous recontactons sous 24 h ouvrées avec une proposition.'], null);
+    return { ok: true, message: 'Demande envoyée. Nous vous recontactons sous 24 h ouvrées.' };
+  });
+  route('GET', '/api/admin/quote-requests', ({ user }) => {
+    needStaff(user);
+    return db.prepare("SELECT * FROM quote_requests ORDER BY CASE status WHEN 'nouveau' THEN 0 ELSE 1 END, id DESC LIMIT 50").all().map((q) => ({ ...q, kindLabel: QUOTE_KINDS[q.kind] }));
+  });
+  route('POST', '/api/admin/quote-requests/:id/done', ({ user, id }) => {
+    needStaff(user);
+    db.prepare("UPDATE quote_requests SET status = 'traite' WHERE id = ?").run(id);
+    return { ok: true, message: 'Demande marquée comme traitée.' };
+  });
+
   route('POST', '/api/account/password', ({ user, body, req }) => {
     need(user);
     const u = db.prepare('SELECT pass_hash FROM users WHERE id = ?').get(user.id);
@@ -302,10 +354,10 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   });
 
   route('POST', '/api/quote', ({ body, user }) => {
-    const q = pricing.quote(body, now());
+    const q = pricing.quote({ ...body, volume: volumeRate(user) }, now());
     if (q.ok && user && user.role === 'client') {
-      const d = Math.min(creditOf(user.id), Math.floor(q.total / 2));
-      if (d > 0) { q.discount = d; q.lines = [...q.lines, { label: 'Crédit parrainage', amount: -d }]; q.total = Math.round((q.total - d) * 100) / 100; }
+      const d = Math.min(creditOf(user.id), q.total);
+      if (d > 0) { q.discount = d; q.lines = [...q.lines, { label: 'Crédit Proprigo (parrainage, carte cadeau ou pack)', amount: -d }]; q.total = Math.round((q.total - d) * 100) / 100; }
     }
     return q;
   });
@@ -323,9 +375,10 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   // ----- client -----
   route('GET', '/api/slots', ({ query, user }) => {
     const date = query.get('date'); const cp = query.get('cp'); const hours = Number(query.get('hours'));
-    if (!pricing.isValidDate(date) || !pricing.zoneOf(cp) || !(hours >= 1 && hours <= 8)) return { slots: [] };
+    const service = pricing.SERVICES.includes(query.get('service')) ? query.get('service') : 'menage';
+    if (!pricing.isValidDate(date) || !pricing.zoneOf(cp) || !(hours >= 1 && hours <= 12)) return { slots: [] };
     const later = (t) => date !== pricing.todayParis(now()) || engine.toMin(t) >= engine.toMin(nowParisHM()) + MIN_LEAD_MIN;
-    const slots = engine.requestSlots({ hours }).filter(later); // créneaux demandables, sous réserve d'attribution par l'équipe
+    const slots = engine.requestSlots({ hours, service }).filter(later); // créneaux demandables, sous réserve d'attribution par l'équipe
     // client connecté avec une intervenante préférée : ses heures libres ce jour-là
     let preferred = null;
     if (user && user.role === 'client') {
@@ -357,6 +410,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return b;
   });
 
+  // remise selon le volume du mois (comptes société) : 10 ménages → −5 %, 30 → −10 %
+  const volumeRate = (u) => {
+    if (!u || u.role !== 'client') return 0;
+    const c = db.prepare('SELECT company FROM users WHERE id = ?').get(u.id);
+    if (!c || !c.company) return 0;
+    const n = db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE client_id = ? AND status <> 'annulee' AND substr(date, 1, 7) = ?").get(u.id, pricing.todayParis(now()).slice(0, 7)).n;
+    return n >= 30 ? 0.1 : n >= 10 ? 0.05 : 0;
+  };
   const creditOf = (clientId) => {
     const got = db.prepare('SELECT COALESCE(SUM(amount), 0) AS t FROM credits WHERE user_id = ?').get(clientId).t;
     const used = db.prepare("SELECT COALESCE(SUM(discount), 0) AS t FROM bookings WHERE client_id = ? AND status <> 'annulee'").get(clientId).t;
@@ -366,6 +427,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     need(user, 'client');
     // Sécurité : en production, aucune réservation sans vrai paiement en ligne.
     if (production && !stripeReady) throw new HttpError(503, "Le paiement en ligne n'est pas encore activé : les réservations ouvriront bientôt.");
+    body = { ...body, volume: volumeRate(user) }; // jamais la valeur envoyée par le navigateur
     const q = pricing.quote(body, now());
     if (!q.ok) throw new HttpError(400, q.errors.join(' '));
     if (!q.open) throw new HttpError(409, "Proprigo n'est pas encore ouvert à ce code postal. Inscrivez-vous sur la liste d'attente.");
@@ -374,7 +436,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const time = str(body.time, 5);
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new HttpError(400, 'Heure invalide.');
     if (body.date === pricing.todayParis(now()) && engine.toMin(time) < engine.toMin(nowParisHM()) + MIN_LEAD_MIN) throw new HttpError(400, 'Pour aujourd\'hui, choisissez une heure au moins 1 h à l\'avance.');
-    if (!engine.requestSlots({ hours: q.hours }).includes(time)) throw new HttpError(400, 'Choisissez un créneau proposé.');
+    if (!engine.requestSlots({ hours: q.hours, service: q.service }).includes(time)) throw new HttpError(400, 'Choisissez un créneau proposé.');
     const every = body.repeat === '7' || body.repeat === '14' ? Number(body.repeat) : 0;
     const count = every ? Math.min(12, Math.max(2, Number(body.occurrences) || 8)) : 1;
     if (every && q.urgent) throw new HttpError(400, "L'urgence ne s'applique pas à une réservation récurrente.");
@@ -404,7 +466,9 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
         }
       }
     }
-    const tasks = JSON.stringify(checklist.clean(body.checklist, q.service));
+    const list = checklist.clean(body.checklist, q.service);
+    for (const k of q.extras || []) if (!list.some((t) => t.task === pricing.EXTRAS[k].task)) list.push({ task: pricing.EXTRAS[k].task, done: false });
+    const tasks = JSON.stringify(list.slice(0, 24));
     const consent = body.photoConsent ? 1 : 0;
     let seriesId = null;
     if (every) seriesId = Number(db.prepare('INSERT INTO series (client_id, every_days) VALUES (?, ?)').run(user.id, every).lastInsertRowid);
@@ -412,14 +476,17 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     for (let k = 0; k < count; k++) {
       const date = addDays(body.date, k * every);
       const qk0 = k === 0 ? q : pricing.quote({ ...body, date, urgent: false }, now());
-      // crédit (parrainage) appliqué au premier ménage ; le prix ne descend jamais sous 50 % du tarif
-      const discount = k === 0 ? Math.min(creditOf(user.id), Math.floor(qk0.total / 2)) : 0;
+      // crédit (parrainage, carte cadeau, pack d'heures) : déduit ménage après ménage, jusqu'à épuisement
+      const discount = Math.min(creditOf(user.id), qk0.total);
       const qk = { ...qk0, total: Math.round((qk0.total - discount) * 100) / 100 };
       const r = db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, series_id, checklist, photo_consent, home_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
         user.id, q.service, q.size, q.hours, body.cp, address, date, time, k === 0 && body.urgent ? 1 : 0, body.kit ? 1 : 0, qk.total, q.zone, seriesId, tasks, consent, home ? home.id : null);
       const id = Number(r.lastInsertRowid);
       if (discount) db.prepare('UPDATE bookings SET discount = ? WHERE id = ?').run(discount, id);
+      if (q.extras && q.extras.length) db.prepare('UPDATE bookings SET extras = ? WHERE id = ?').run(JSON.stringify(q.extras), id);
+      // entièrement réglé par le crédit : rien à payer
+      if (stripeReady && qk.total === 0) db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye' WHERE id = ?").run(id);
       ids.push(id);
       db_.log(db, `Réservation n° ${id} créée, paiement ${stripeReady ? 'en attente' : 'simulé'} : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
       if (!stripeReady && !production) engine.assign(db, id); // mode démonstration seulement
@@ -427,7 +494,13 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (stripeReady) {
       // Chaque intervention est enregistrée sans affectation jusqu'à confirmation Stripe.
       // En mode per_visit, seule la première intervention est encaissée maintenant.
-      const chargeIds = payMode === 'all' ? ids : [ids[0]];
+      const chargeIds = (payMode === 'all' ? ids : [ids[0]]).filter((id) => db.prepare('SELECT total FROM bookings WHERE id = ?').get(id).total > 0);
+      if (!chargeIds.length) {
+        db_.log(db, `Réservation n° ${ids[0]} réglée entièrement avec le crédit du client : attribution manuelle nécessaire.`);
+        const f = bookingView(db.prepare('SELECT * FROM bookings WHERE id = ?').get(ids[0]));
+        mailer.send(user.email, `Réservation confirmée : ${fr(f.date)} à ${f.time}`, 'Votre ménage est réservé', [`${fr(f.date)} à ${f.time}, ${f.address} (${f.cp}).`, 'Réglé avec votre crédit Proprigo : rien à payer.'], { label: 'Suivre ma réservation', path: '/#/' });
+        return { status: 201, data: { ...f, created: ids.length, paidByCredit: true } };
+      }
       try {
         const session = await stripePay.checkout({ db, ids: chargeIds, clientId: user.id, email: user.email, appUrl });
         return { status: 201, data: { checkout_url: session.url, created: ids.length, payment_mode: payMode } };
@@ -484,7 +557,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (hoursBefore({ date: next.date, time: next.time }) < 24) throw new HttpError(409, 'Le nouveau créneau doit être au moins 24 h à l\'avance.');
     const probe = { id: b.id, date: next.date, cp: b.cp, time: next.time, hours: q.hours };
     const list = engine.candidates(db, probe);
-    if (!engine.requestSlots({ hours: q.hours }).includes(next.time)) throw new HttpError(400, 'Choisissez un créneau proposé.');
+    if (!engine.requestSlots({ hours: q.hours, service: q.service }).includes(next.time)) throw new HttpError(400, 'Choisissez un créneau proposé.');
     // on garde l'intervenante actuelle, sauf si la préférée du client est libre sur le nouveau créneau
     const pid = engine.preferredIds(db, b)[0];
     const preferredFree = pid && pid !== b.worker_id && list.some((w) => w.user_id === pid);
@@ -607,6 +680,83 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   }
   for (const a of ['accept', 'refuse', 'start', 'finish']) route('POST', `/api/worker/missions/:id/${a}`, workerAction(a));
 
+  // ----- cartes cadeaux et packs d'heures prépayés -----
+  const GIFT_AMOUNTS = [50, 100, 150, 200];
+  const PACKS = { 10: { pay: 10, get: 11 }, 20: { pay: 20, get: 23 } }; // heures payées → heures créditées
+  const PACK_RATE = () => pricing.GRID.IDF.menage;
+  const giftCode = () => {
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (;;) {
+      const c = 'PG-' + Array.from({ length: 8 }, (_, i) => (i === 4 ? '-' : '') + A[crypto.randomInt(A.length)]).join('');
+      if (!db.prepare('SELECT 1 FROM gift_cards WHERE code = ?').get(c)) return c;
+    }
+  };
+  // carte payée : code créé et envoyé ; pack payé : crédit ajouté tout de suite à l'acheteur
+  function fulfillGift(id) {
+    const g = db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
+    if (!g || g.status !== 'pending') return;
+    const buyer = db.prepare('SELECT email, name FROM users WHERE id = ?').get(g.buyer_id);
+    if (g.kind === 'pack') {
+      db.prepare("UPDATE gift_cards SET status = 'redeemed', redeemed_by = buyer_id, paid_at = datetime('now') WHERE id = ?").run(id);
+      db.prepare('INSERT INTO credits (user_id, amount, reason) VALUES (?, ?, ?)').run(g.buyer_id, g.amount, `Pack ${g.hours} h`);
+      mailer.send(buyer.email, `Votre pack de ${g.hours} h est actif`, 'Pack activé', [`${g.amount.toFixed(2).replace('.', ',')} € de crédit sont disponibles sur votre compte.`, 'Ils sont déduits automatiquement de vos prochaines réservations.'], { label: 'Réserver', path: '/#/reserver' });
+      db_.log(db, `Pack ${g.hours} h payé par le client n° ${g.buyer_id} : ${g.amount} € de crédit.`);
+      return;
+    }
+    const code = giftCode();
+    db.prepare("UPDATE gift_cards SET status = 'paid', code = ?, paid_at = datetime('now') WHERE id = ?").run(code, id);
+    const to = g.recipient_email || buyer.email;
+    mailer.send(to, `${buyer.name.split(' ')[0]} vous offre un ménage Proprigo`, `Une carte cadeau de ${g.amount} €`,
+      [g.recipient_name ? `Bonjour ${g.recipient_name},` : 'Bonjour,', `${buyer.name.split(' ')[0]} vous offre ${g.amount} € de ménage avec Proprigo.`, ...(g.message ? [`« ${g.message} »`] : []), `Votre code : ${code}`, 'Créez votre compte, puis saisissez ce code dans « Mon compte ». Valable 1 an.'],
+      { label: 'Utiliser ma carte cadeau', path: `/#/inscription?cadeau=${code}` });
+    if (g.recipient_email) mailer.send(buyer.email, 'Votre carte cadeau est envoyée', 'Merci pour votre cadeau', [`La carte de ${g.amount} € a été envoyée à ${g.recipient_email}.`, `Code, au cas où : ${code}`], null);
+    db_.log(db, `Carte cadeau de ${g.amount} € payée par le client n° ${g.buyer_id}.`);
+  }
+  route('GET', '/api/gifts/offer', () => ({ amounts: GIFT_AMOUNTS, packs: Object.entries(PACKS).map(([h, p]) => ({ hours: Number(h), price: p.pay * PACK_RATE(), credit: p.get * PACK_RATE(), free: p.get - p.pay })) }));
+  route('POST', '/api/gifts', async ({ user, body }) => {
+    need(user, 'client');
+    let g;
+    if (body.kind === 'pack') {
+      const p = PACKS[Number(body.hours)];
+      if (!p) throw new HttpError(400, 'Pack inconnu.');
+      g = { kind: 'pack', hours: Number(body.hours), price: p.pay * PACK_RATE(), amount: p.get * PACK_RATE() };
+    } else {
+      const amount = Number(body.amount);
+      if (!GIFT_AMOUNTS.includes(amount)) throw new HttpError(400, 'Montant de carte cadeau inconnu.');
+      const email = str(body.recipient_email, 120).toLowerCase();
+      if (email && !EMAIL_RE.test(email)) throw new HttpError(400, 'E-mail du destinataire invalide.');
+      g = { kind: 'gift', hours: null, price: amount, amount, recipient_name: str(body.recipient_name, 60) || null, recipient_email: email || null, message: str(body.message, 300) || null };
+    }
+    const id = Number(db.prepare('INSERT INTO gift_cards (kind, amount, price, hours, buyer_id, recipient_name, recipient_email, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(g.kind, g.amount, g.price, g.hours, user.id, g.recipient_name || null, g.recipient_email || null, g.message || null).lastInsertRowid);
+    if (!stripeReady) {
+      if (production) throw new HttpError(503, 'Paiement indisponible.');
+      fulfillGift(id); // démonstration : payé tout de suite
+      return { ok: true, simulated: true, message: g.kind === 'pack' ? 'Pack activé (paiement simulé).' : 'Carte cadeau envoyée (paiement simulé).' };
+    }
+    try {
+      const session = await stripePay.checkoutGift({ db, gift: { ...g, id }, email: user.email, appUrl });
+      return { checkout_url: session.url };
+    } catch { throw new HttpError(502, 'Paiement indisponible. Réessayez.'); }
+  });
+  route('POST', '/api/gifts/redeem', ({ user, body }) => {
+    need(user, 'client');
+    const code = str(body.code, 20).toUpperCase().replace(/\s+/g, '');
+    const g = db.prepare('SELECT * FROM gift_cards WHERE code = ?').get(code);
+    if (!g || g.kind !== 'gift') throw new HttpError(404, 'Code inconnu. Vérifiez les lettres et les chiffres.');
+    if (g.status === 'redeemed') throw new HttpError(409, 'Cette carte cadeau a déjà été utilisée.');
+    if (g.status !== 'paid') throw new HttpError(409, "Cette carte cadeau n'est pas encore payée.");
+    if (Date.parse(g.paid_at.replace(' ', 'T') + 'Z') < now().getTime() - 365 * 864e5) throw new HttpError(409, 'Cette carte cadeau a expiré (valable 1 an).');
+    const r = db.prepare("UPDATE gift_cards SET status = 'redeemed', redeemed_by = ? WHERE id = ? AND status = 'paid'").run(user.id, g.id);
+    if (!r.changes) throw new HttpError(409, 'Cette carte cadeau a déjà été utilisée.');
+    db.prepare("INSERT INTO credits (user_id, amount, reason) VALUES (?, ?, 'Carte cadeau')").run(user.id, g.amount);
+    db_.log(db, `Carte cadeau de ${g.amount} € utilisée par le client n° ${user.id}.`);
+    return { ok: true, credit: creditOf(user.id), message: `${g.amount} € ajoutés à votre crédit. Ils seront déduits de vos prochains ménages.` };
+  });
+  route('GET', '/api/gifts/mine', ({ user }) => {
+    need(user, 'client');
+    return { credit: creditOf(user.id), gifts: db.prepare("SELECT id, kind, amount, hours, recipient_name, recipient_email, status, code, created_at FROM gift_cards WHERE buyer_id = ? AND status <> 'pending' ORDER BY id DESC LIMIT 20").all(user.id).map((g) => ({ ...g, code: g.kind === 'gift' && g.status === 'paid' ? g.code : null })) };
+  });
+
   // ----- parrainage : code personnel et crédit disponible -----
   route('GET', '/api/referral', ({ user }) => {
     need(user, 'client');
@@ -621,6 +771,57 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     }
     const friends = db.prepare('SELECT COUNT(*) AS n FROM users WHERE referred_by = ?').get(user.id).n;
     return { code, credit: creditOf(user.id), amount: REFERRAL_EUR, friends, link: `${appUrl.replace(/\/$/, '')}/#/inscription?ref=${code}` };
+  });
+
+  // ----- réglages publics : lien d'avis Google -----
+  const reviewUrl = /^https:\/\/[^\s"<>]+$/.test(googleReviewUrl || '') ? googleReviewUrl : '';
+  route('GET', '/api/config', () => ({ googleReviewUrl: reviewUrl }));
+
+  // ----- versements aux indépendantes, chaque semaine, avec bonus qualité -----
+  const BONUS_PER_HOUR = 1; // 1 € de plus par heure pour une note moyenne d'au moins 4,8 sur les 10 derniers avis (5 au moins)
+  const mondayOf = (d) => { const t = new Date(d + 'T12:00:00Z'); const wd = (t.getUTCDay() + 6) % 7; return new Date(t.getTime() - wd * 864e5).toISOString().slice(0, 10); };
+  const bonusOf = (wid) => {
+    const r = db.prepare("SELECT rating FROM bookings WHERE worker_id = ? AND status = 'terminee' AND rating IS NOT NULL ORDER BY date DESC, id DESC LIMIT 10").all(wid);
+    const avg = r.length ? r.reduce((t, x) => t + x.rating, 0) / r.length : 0;
+    return { eligible: r.length >= 5 && avg >= 4.8, avg: r.length ? Math.round(avg * 10) / 10 : null, count: r.length, perHour: BONUS_PER_HOUR };
+  };
+  const paidIds = () => new Set(db.prepare('SELECT booking_ids FROM payouts').all().flatMap((p) => JSON.parse(p.booking_ids)));
+  const owedFor = (wid) => {
+    const w = workerProfile(wid);
+    if (!w || w.statut !== 'I') return [];
+    const done = paidIds();
+    const bonus = bonusOf(wid);
+    const rows = db.prepare("SELECT id, date, hours FROM bookings WHERE worker_id = ? AND status = 'terminee' ORDER BY date").all(wid).filter((b) => !done.has(b.id));
+    const weeks = new Map();
+    for (const b of rows) {
+      const k = mondayOf(b.date);
+      if (!weeks.has(k)) weeks.set(k, { week_start: k, hours: 0, ids: [] });
+      const x = weeks.get(k); x.hours += b.hours; x.ids.push(b.id);
+    }
+    return [...weeks.values()].map((x) => {
+      const bonusRate = bonus.eligible ? bonus.perHour : 0;
+      return { worker_id: wid, name: w.name, week_start: x.week_start, hours: x.hours, rate: w.rate, bonus_rate: bonusRate, amount: Math.round(x.hours * (w.rate + bonusRate) * 100) / 100, booking_ids: x.ids };
+    });
+  };
+  route('GET', '/api/admin/payouts', ({ user }) => {
+    need(user, 'admin');
+    const ind = db.prepare("SELECT user_id FROM workers WHERE statut = 'I'").all();
+    const today = pricing.todayParis(now());
+    const owed = ind.flatMap((w) => owedFor(w.user_id)).map((o) => ({ ...o, weekOver: o.week_start < mondayOf(today) }));
+    const history = db.prepare('SELECT p.*, u.name FROM payouts p JOIN users u ON u.id = p.worker_id ORDER BY p.id DESC LIMIT 20').all();
+    return { owed, history, total: Math.round(owed.reduce((t, o) => t + o.amount, 0) * 100) / 100 };
+  });
+  route('POST', '/api/admin/payouts', ({ user, body }) => {
+    need(user, 'admin');
+    const wid = Number(body.worker_id);
+    const week = String(body.week_start || '');
+    const o = owedFor(wid).find((x) => x.week_start === week);
+    if (!o) throw new HttpError(409, 'Rien à verser pour cette semaine.');
+    const reference = str(body.reference, 60) || null;
+    db.prepare('INSERT INTO payouts (worker_id, week_start, hours, rate, bonus_rate, amount, booking_ids, reference, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(wid, week, o.hours, o.rate, o.bonus_rate, o.amount, JSON.stringify(o.booking_ids), reference, user.id);
+    mailer.send(emailOf(wid), `Versement de ${o.amount.toFixed(2).replace('.', ',')} €`, 'Votre versement Proprigo', [`Semaine du ${fr(week)} : ${String(o.hours).replace('.', ',')} h × ${o.rate} €${o.bonus_rate ? ` + bonus qualité ${o.bonus_rate} €/h` : ''}.`, `Montant : ${o.amount.toFixed(2).replace('.', ',')} €${reference ? ` (référence ${reference})` : ''}.`], { label: 'Voir mes gains', path: '/#/intervenante' });
+    db_.log(db, `Versement de ${o.amount} € à ${o.name} pour la semaine du ${week}.`);
+    return { ok: true, message: `${o.amount.toFixed(2).replace('.', ',')} € marqués comme versés à ${o.name.split(' ')[0]}.` };
   });
 
   // ----- intervenante : mes gains -----
@@ -638,6 +839,11 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       lastMonth: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", prev)),
       upcoming: pack(sum("status IN ('attribuee','en_cours') AND date >= ?", pricing.todayParis(now()))),
       history: months.map((r) => ({ month: r.m, ...pack(r) })),
+      ...(w.statut === 'I' ? {
+        bonus: bonusOf(user.id),
+        pending: Math.round(owedFor(user.id).reduce((t, o) => t + o.amount, 0) * 100) / 100,
+        paid: db.prepare('SELECT week_start, amount, paid_at FROM payouts WHERE worker_id = ? ORDER BY id DESC LIMIT 5').all(user.id),
+      } : {}),
     };
   });
 
@@ -1002,7 +1208,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
     if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
     if (b.status !== 'terminee' || (production && !b.paid)) throw new HttpError(409, 'Le reçu est disponible après paiement et réalisation du ménage.');
-    const c = db.prepare('SELECT name, email FROM users WHERE id = ?').get(b.client_id);
+    const c = db.prepare('SELECT name, email, company, siret, vat_number, billing_address FROM users WHERE id = ?').get(b.client_id);
     const tva = pricing.PRO_SERVICES.includes(b.service) ? pricing.COSTS.tvaPro : pricing.COSTS.tvaParticulier;
     const ht = Math.round((b.total / (1 + tva)) * 100) / 100;
     const e = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -1015,7 +1221,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
 ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme encaissée. Ce reçu n\'a aucune valeur comptable.</p>'}
 <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap"><div><h1>Reçu ${num}</h1><p class="muted">Date de la prestation : ${e(fr(b.date))}</p></div>
 <div><b>Proprigo</b><br>[RAISON SOCIALE ET FORME JURIDIQUE]<br>[ADRESSE DU SIÈGE]<br>SIRET : [À COMPLÉTER]<br>TVA intracommunautaire : [À COMPLÉTER]</div></div>
-<p><b>Client :</b> ${e(c.name)}<br>${e(b.address)}, ${e(b.cp)}</p>
+${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br>${e(c.billing_address)}` : ''}${c.siret ? `<br>SIRET : ${e(c.siret)}` : ''}${c.vat_number ? `<br>TVA intracommunautaire : ${e(c.vat_number)}` : ''}<br><span class="muted">Commandé par ${e(c.name)}</span></p><p><b>Lieu de la prestation :</b> ${e(b.address)}, ${e(b.cp)}</p>` : `<p><b>Client :</b> ${e(c.name)}<br>${e(b.address)}, ${e(b.cp)}</p>`}
 <table><thead><tr><th>Prestation</th><th class="n">Montant HT</th><th class="n">TVA</th><th class="n">Total TTC</th></tr></thead>
 <tbody><tr><td>${e(label)}<br><span class="muted">${e(fr(b.date))} à ${e(b.time)}</span></td><td class="n">${eur(ht)}</td><td class="n">${Math.round(tva * 100)} % · ${eur(b.total - ht)}</td><td class="n"><b>${eur(b.total)}</b></td></tr></tbody></table>
 <p class="muted">${pricing.PRO_SERVICES.includes(b.service) ? 'Prestation à un professionnel.' : "Service à la personne : l'attestation fiscale annuelle pour le crédit d'impôt sera disponible dès la déclaration de l'entreprise (à confirmer par l'expert-comptable)."}</p>
@@ -1090,6 +1296,7 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
       couts: pricing.COSTS, paymentsEnabled,
       bookings, icalFlagged, workers, waitlist: wl, events, incidents,
       metrics: metrics(),
+      quoteRequests: db.prepare("SELECT COUNT(*) AS n FROM quote_requests WHERE status = 'nouveau'").get().n,
       staff: isOwner(user) ? 'owner' : 'planning',
     };
   });
@@ -1209,12 +1416,12 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     const b = db.prepare("SELECT * FROM bookings WHERE id = ? AND status IN ('en_attente','proposee','attribuee')").get(id);
     if (!b) throw new HttpError(409, 'Ce ménage ne peut plus être annulé.');
     // annulation décidée par l'équipe (séjour annulé chez la plateforme, confirmé avec le client) : remboursement complet
-    db.prepare("UPDATE bookings SET status = 'annulee', payment_status = 'a_rembourser', refund_amount = total, ical_flagged = 0 WHERE id = ?").run(id);
+    db.prepare("UPDATE bookings SET status = 'annulee', payment_status = CASE WHEN paid = 1 OR payment_status IN ('paye','simule') THEN 'a_rembourser' ELSE payment_status END, refund_amount = CASE WHEN paid = 1 OR payment_status IN ('paye','simule') THEN total ELSE 0 END, ical_flagged = 0 WHERE id = ?").run(id);
     db.prepare("DELETE FROM offers WHERE booking_id = ? AND state = 'offered'").run(id);
-    engine.notify(db, id, `Le ménage du ${fr(b.date)} est annulé par l'équipe Proprigo. Vous êtes remboursé intégralement (${b.total} €).`);
+    engine.notify(db, id, b.paid ? `Le ménage du ${fr(b.date)} est annulé par l'équipe Proprigo. Un remboursement intégral de ${b.total} € est à effectuer.` : `Le ménage du ${fr(b.date)} est annulé par l'équipe Proprigo. Aucun paiement encaissé.`);
     if (b.worker_id) mailer.send(emailOf(b.worker_id), `Mission annulée le ${fr(b.date)}`, 'Mission annulée', [`La mission du ${fr(b.date)} à ${b.time} (${b.cp}) est annulée.`], { label: 'Voir mes missions', path: '/#/intervenante' });
-    db_.log(db, `Ménage n° ${id} annulé par l'équipe, ${b.total} € à rembourser.`);
-    return { ok: true, message: `Ménage n° ${id} annulé, ${b.total} € à rembourser.` };
+    db_.log(db, `Ménage n° ${id} annulé par l'équipe, ${b.paid ? `${b.total} € à rembourser` : 'aucun remboursement requis'}.`);
+    return { ok: true, message: b.paid ? `Ménage n° ${id} annulé, ${b.total} € à rembourser.` : `Ménage n° ${id} annulé, aucun remboursement nécessaire.` };
   });
 
   route('POST', '/api/admin/bookings/:id/refunded', ({ user, id }) => {
@@ -1235,10 +1442,10 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
     let r;
     try { r = await stripePay.refund({ db, bookingId: id, amountCents: amount }); }
     catch (e) { throw new HttpError(502, `Remboursement refusé : ${e.message}. Rien n'a été débité ; vérifiez dans Stripe.`); }
-    db.prepare("UPDATE bookings SET payment_status = 'rembourse', refund_id = ? WHERE id = ?").run(r.id, id);
+    db.prepare("UPDATE bookings SET payment_status = ?, refund_id = ? WHERE id = ?").run(r.status === 'succeeded' ? 'rembourse' : 'remboursement_en_cours', r.id, id);
     db_.log(db, `Réservation n° ${id} : ${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe (${r.status === 'pending' ? 'en cours' : 'effectué'}).`);
     engine.notify(db, id, `Votre remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € a été lancé. Il apparaît sur votre compte bancaire sous 5 à 10 jours.`);
-    return { ok: true, message: `${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe.` };
+    return { ok: true, message: r.status === 'succeeded' ? `${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe.` : `Remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € en cours chez Stripe.` };
   });
 
   // ----- planning de la semaine -----
@@ -1294,6 +1501,8 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
         catch { throw new HttpError(400, 'Signature Stripe invalide.'); }
         if ((event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') && event.data.object.payment_status === 'paid') {
           const sess = event.data.object;
+          const gift = db.prepare('SELECT * FROM gift_cards WHERE session_id = ?').get(sess.id);
+          if (gift && sess.currency === 'eur' && sess.amount_total === gift.amount_cents) fulfillGift(gift.id);
           const payment = db.prepare('SELECT * FROM stripe_payments WHERE session_id = ?').get(sess.id);
           if (payment && payment.status !== 'paid' && sess.currency === 'eur' && sess.amount_total === payment.amount_cents) {
             const ids = JSON.parse(payment.booking_ids);
@@ -1317,6 +1526,13 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
             }
           }
         }
+        if (event.type === 'refund.updated') {
+          const refund = event.data.object;
+          if (refund && typeof refund.id === 'string') {
+            if (refund.status === 'succeeded') db.prepare("UPDATE bookings SET payment_status = 'rembourse' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
+            if (['failed', 'canceled'].includes(refund.status)) db.prepare("UPDATE bookings SET payment_status = 'a_rembourser' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
+          }
+        }
         if (event.type === 'checkout.session.async_payment_failed') {
           db.prepare("UPDATE stripe_payments SET status = 'failed' WHERE session_id = ? AND status = 'pending'").run(event.data.object.id);
         }
@@ -1337,6 +1553,19 @@ ${stripeReady ? '' : '<p class="test">DOCUMENT DE TEST : paiement simulé, aucun
         if (out && out.streamed) return;
         if (out && out.data !== undefined && (out.status || out.headers)) return send(res, out.status || 200, out.data, out.headers);
         return send(res, 200, out);
+      }
+      // pages pour Google : /menage-a-domicile/paris-11, plan du site, robots.txt
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        const base = appUrl.replace(/\/$/, '');
+        const seoHead = { 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; script-src 'none'", 'Cache-Control': 'public, max-age=3600' };
+        if (url.pathname === '/sitemap.xml') { res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', ...seoHead }); return res.end(seo.sitemap(base)); }
+        if (url.pathname === '/robots.txt') { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', ...seoHead }); return res.end(seo.robots(base)); }
+        const m = url.pathname.match(/^\/(menage-a-domicile|menage-airbnb|nettoyage-bureaux)\/([a-z0-9-]+)\/?$/);
+        if (m) {
+          const html = seo.page(m[1], m[2], base);
+          if (html) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...seoHead }); return res.end(html); }
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Page introuvable.');
+        }
       }
       // fichiers du site
       let file = path.normalize(path.join(PUBLIC, url.pathname === '/' ? 'index.html' : url.pathname));

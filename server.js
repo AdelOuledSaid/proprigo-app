@@ -27,6 +27,7 @@ const { server } = createApp({
   autoSync: true, // calendriers Airbnb relus toutes les 6 heures, rappels envoyés la veille
   appUrl: process.env.APP_URL || `http://localhost:${PORT}`,
   mail: { provider: process.env.MAIL_PROVIDER, apiKey: process.env.MAIL_API_KEY, from: process.env.MAIL_FROM },
+  googleReviewUrl: process.env.GOOGLE_REVIEW_URL || '', // lien « laisser un avis » de votre fiche Google
   backupDir: process.env.BACKUP_DIR || path.join(path.dirname(DB_FILE), 'backups'), // une sauvegarde par jour, 14 gardées
 });
 server.listen(PORT, () => {

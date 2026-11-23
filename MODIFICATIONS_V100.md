@@ -36,3 +36,29 @@ Après le déploiement, faites un remboursement test d'un petit montant en mode 
 - Checklist par défaut adaptée aux bureaux (postes de travail, corbeilles, sanitaires, coin café, salle de réunion, poignées).
 - Quatrième tuile sur l'accueil et dans la réservation, quatrième fiche « Nettoyage de bureaux » dans les prix, illustration de bureau.
 - Les prix se changent dans `src/pricing.js` (ligne GRID, colonne `bureau`).
+
+# v1.2.0 — croissance : cadeaux, abonnement, options, entreprises, Google, versements
+
+## Gagner plus par client
+- **Carte cadeau** (page « Carte cadeau », lien en pied de page et bandeau sur l'accueil) : 50, 100, 150 ou 200 €, payée par Stripe, code envoyé par e-mail au destinataire (ou à l'acheteur), valable 1 an, utilisable une seule fois. Le code est créé seulement quand Stripe confirme le paiement du bon montant.
+- **Packs d'heures prépayés** : 10 h payées = 11 h de crédit (370 € → 407 €), 20 h = 23 h (740 € → 851 €).
+- **Crédit Proprigo** (parrainage, carte, pack) : déduit automatiquement, jusqu'à 100 % du prix ; un ménage entièrement couvert est confirmé sans passer par Stripe. Annulé, le crédit revient.
+- **Abonnement** : chaque semaine ou toutes les deux semaines, −5 %.
+- **Options** : repassage (+1 h), vitres intérieures (+1 h), four, réfrigérateur, draps (+0,5 h chacune), au tarif de l'heure ; les tâches s'ajoutent à la checklist.
+- **Forfait fin de bail** (grand nettoyage) : taille → durée réglée et checklist de l'état des lieux.
+
+## Entreprises
+- Page **« Entreprises »** et **demande de devis** (alerte par e-mail et dans « À traiter », 5 demandes par heure au maximum).
+- **Profil société** (Mon compte) : raison sociale, SIRET, TVA, adresse de facturation ; le reçu est « Facturé à » la société.
+- **Remise volume** (comptes société, bureaux et Airbnb) : −5 % à partir de 10 prestations dans le mois, −10 % à partir de 30 ; jamais cumulée avec l'abonnement ; calculée par le serveur seulement.
+- **Bureaux de 6 h à 22 h** ; ménages jusqu'à 12 h avec les options.
+
+## Visibilité et équipe
+- **105 pages pour Google** : ménage à domicile, ménage Airbnb et nettoyage de bureaux, pour les 20 arrondissements de Paris et 15 villes proches (ex. /menage-a-domicile/paris-11), avec plan du site `/sitemap.xml` et `robots.txt`. Le bouton « Voir les créneaux » préremplit le code postal.
+- **Avis Google** : après 5 étoiles, invitation à laisser un avis Google. Réglage Render : `GOOGLE_REVIEW_URL` = le lien « Demander des avis » de votre fiche Google.
+- **Versements aux indépendantes** (Chiffres) : ce qui est dû par semaine, « Marquer versé » avec la référence du virement, e-mail à l'intervenante, impossible de verser deux fois la même semaine. **Bonus qualité** : +1 €/h pour une note moyenne ≥ 4,8 sur les 10 derniers avis (5 au moins). L'intervenante voit « En attente de versement » et son bonus.
+
+## À faire de votre côté
+- Render → Environment : ajouter `GOOGLE_REVIEW_URL`.
+- Google Search Console : déclarer le site et envoyer `https://VOTRE-DOMAINE/sitemap.xml`.
+- Stripe : rien à changer (le webhook existant gère aussi les cartes cadeaux et les packs).

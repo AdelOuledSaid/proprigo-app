@@ -72,7 +72,7 @@
   function renderNav() {
     paintTabbar();
     const links = [];
-    if (!me) links.push('<a href="#/inscription-intervenante">Devenir intervenante</a>', '<a href="#/connexion">Se connecter</a>', '<a class="cta" href="#/reserver">Réserver</a>');
+    if (!me) links.push('<a href="#/pro">Entreprises</a>', '<a href="#/inscription-intervenante">Devenir intervenante</a>', '<a href="#/connexion">Se connecter</a>', '<a class="cta" href="#/reserver">Réserver</a>');
     else {
       if (me.role === 'client') links.push('<a href="#/mes-reservations">Mes réservations</a>', '<a href="#/logements">Mes logements</a>', '<a class="cta" href="#/reserver">Réserver</a>');
       if (me.role === 'intervenante') links.push('<a href="#/intervenante">Mes missions</a>');
@@ -93,9 +93,11 @@
     if (lo) lo.onclick = async () => { await api('POST', '/api/logout', {}); me = null; go('#/'); route(); };
   }
 
+  let CONFIG = {};
   async function loadMe() {
     const r = await api('GET', '/api/me');
     me = r.user;
+    if (!CONFIG.loaded) CONFIG = { ...(await api('GET', '/api/config').catch(() => ({}))), loaded: true };
   }
 
   const views = {};
@@ -108,8 +110,8 @@
   DEFAULT_TASKS.bureau = ['Bureaux : poussière des postes de travail, sans déplacer les dossiers', 'Vider les corbeilles et trier les déchets', 'Sols : aspirateur et serpillière', 'Cuisine ou coin café : plans de travail, évier, machine à café', 'Sanitaires : nettoyage et réassort (papier, savon)', 'Salle de réunion : tables et chaises', 'Poignées de porte et interrupteurs'];
   DEFAULT_TASKS.airbnb = [...DEFAULT_TASKS.menage, 'Changer les draps et les serviettes', 'Faire les lits', 'Réassort : papier toilette, savon, café', "Vérifier l'état du logement et signaler tout dégât"];
   const WEEKDAYS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-  const HALF_HOURS = Array.from({ length: 29 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
-  const draftHours = (d) => (d.service === 'airbnb' ? AIR_HOURS[d.size] : Number(d.hours));
+  const HALF_HOURS = Array.from({ length: 33 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
+  const draftHours = (d) => (d.service === 'airbnb' ? AIR_HOURS[d.size] : Number(d.hours) + (['menage', 'grand'].includes(d.service) ? (d.extras || []).reduce((t, k) => t + ({ repassage: 1, vitres: 1, four: 0.5, frigo: 0.5, draps: 0.5 }[k] || 0), 0) : 0));
 
   // Messagerie d'une réservation (client, intervenante, équipe)
   async function openThread(box, id, quick = []) {
@@ -149,7 +151,7 @@
   }
 
   const tomorrowParis = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date(Date.now() + 864e5));
-  const DRAFT0 = () => ({ step: 1, service: 'menage', size: 'T2', hours: 3, kit: false, cp: '', address: '', date: tomorrowParis(), time: null, urgent: false, repeat: '0', occurrences: 8, photoConsent: false, tasks: null, tasksService: null, home_id: null, cgv: false, payment_mode: 'all' });
+  const DRAFT0 = () => ({ step: 1, service: 'menage', size: 'T2', hours: 3, kit: false, extras: [], lease: null, cp: '', address: '', date: tomorrowParis(), time: null, urgent: false, repeat: '0', occurrences: 8, photoConsent: false, tasks: null, tasksService: null, home_id: null, cgv: false, payment_mode: 'all' });
   let draft = DRAFT0();
   const FREE_CANCEL = "Annulation gratuite jusqu'à 24 h avant le ménage. Ensuite, 50 % du prix est retenu.";
   const ICON = {
@@ -157,11 +159,17 @@
     grand: '<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><path d="M12 2.5c.6 4.6 2.3 6.4 7 7-4.7.6-6.4 2.4-7 7-.6-4.6-2.3-6.4-7-7 4.7-.6 6.4-2.4 7-7z"/><path d="M19 15.5c.25 1.9.9 2.6 2.8 2.8-1.9.25-2.55.9-2.8 2.8-.25-1.9-.9-2.55-2.8-2.8 1.9-.2 2.55-.9 2.8-2.8z"/></svg>',
     airbnb: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3.5M21 12v2.5"/></svg>',
   };
+  // options (temps en plus) et forfait fin de bail
+  const EXTRAS = { repassage: { label: 'Repassage', hours: 1 }, vitres: { label: 'Vitres intérieures', hours: 1 }, four: { label: 'Intérieur du four', hours: 0.5 }, frigo: { label: 'Intérieur du réfrigérateur', hours: 0.5 }, draps: { label: 'Changement des draps', hours: 0.5 } };
+  const OPTIONABLE = ['menage', 'grand'];
+  const LEASE = { studio: { label: 'Studio', hours: 4 }, T2: { label: '2 pièces', hours: 5 }, T3: { label: '3 pièces', hours: 7 }, maison: { label: 'Maison', hours: 8 } };
+  const LEASE_TASKS = ['Cuisine : intérieur des placards, four, réfrigérateur, hotte, plaques', 'Salle de bain : calcaire, joints, robinetterie, miroir', 'WC : cuvette, abattant, sol, murs autour', 'Sols de toutes les pièces : aspirateur et serpillière', 'Plinthes, portes, poignées et interrupteurs', 'Intérieur des placards et penderies', 'Vitres intérieures accessibles', 'Traces sur les murs (quand c\'est possible)', 'Radiateurs et grilles de ventilation'];
   const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge', bureau: 'Locaux professionnels, 35 € HT/h' };
   const dateLong = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 
   // ---------- accueil ----------
-  views[''] = async () => {
+  views[''] = async (params) => {
+    if (params && /^\d{5}$/.test(params.get('cp') || '')) draft.cp = params.get('cp'); // venu d'une page de ville
     if (me && me.role === 'intervenante') return go('#/intervenante');
     if (me && me.role === 'admin') return go('#/admin');
     if (me && me.role === 'client') return clientHome();
@@ -203,6 +211,8 @@
         <li>${ico('swap')}<span><b>Remplaçante prévue</b>Si votre intervenante est absente</span></li>
       </ul>
 
+      <a class="gift-band" href="#/cadeau"><span class="gift-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="9" width="17" height="11" rx="2"/><path d="M3.5 13h17M12 9v11M12 9S10.5 4 8 4.5 7 9 12 9zM12 9s1.5-5 4-4.5S17 9 12 9z"/></svg></span><span><b>Pour Noël, offrez un ménage</b><span>Cartes cadeaux de 50 à 200 €, envoyées par e-mail</span></span><span class="gift-go">Offrir</span></a>
+
       <section class="offers" aria-labelledby="offersT">
         <h2 id="offersT">Quatre prestations, un prix clair</h2>
         <div class="offer-grid">
@@ -234,6 +244,7 @@
             <p class="offer-price"><b>35 €</b> HT de l'heure</p>
             <ul><li>Postes de travail, sols, sanitaires, coin café</li><li>Avant l'ouverture ou après la fermeture</li><li>Chaque semaine avec la même intervenante, facture avec TVA</li></ul>
             <button class="btn ghost full" data-book="bureau">Demander un passage</button>
+            <a class="small" href="#/pro" style="text-align:center">Grands locaux, agences, syndics : devis</a>
           </article>
         </div>
         <p class="small muted offers-note">Prix TTC en Île-de-France (bureaux : 35 € HT, soit 42 € TTC). Matériel et produits apportés : +15 €. Dimanche et jours fériés : +20 %. Arrivée dans les 3 heures : +25 %.</p>
@@ -465,7 +476,15 @@
     f.querySelector('.rv-label').textContent = n >= 4 ? 'Un mot sur ce que vous avez aimé (facultatif)' : "Qu'est-ce qui n'allait pas ? L'équipe vous recontacte.";
     f.onsubmit = async (e) => {
       e.preventDefault();
-      try { const r = await api('POST', `/api/bookings/${id}/rate`, { stars: n, review: f.review.value }); toast(r.message || 'Merci pour votre avis.'); route(); } catch (err) { toast(err.message); }
+      try {
+        const r = await api('POST', `/api/bookings/${id}/rate`, { stars: n, review: f.review.value });
+        if (n === 5 && CONFIG.googleReviewUrl) {
+          f.outerHTML = `<div class="g-review"><b>Merci beaucoup !</b><span>Un avis sur Google aide d'autres familles à nous trouver. Ça prend 30 secondes.</span><a class="btn blue" href="${esc(CONFIG.googleReviewUrl)}" target="_blank" rel="noopener">Laisser un avis sur Google</a></div>`;
+          box.remove();
+          return;
+        }
+        toast(r.message || 'Merci pour votre avis.'); route();
+      } catch (err) { toast(err.message); }
     };
     f.review.focus({ preventScroll: true });
   }
@@ -517,7 +536,7 @@
       draft.tasksService = draft.service;
       return draft.tasks;
     };
-    const quote = () => api('POST', '/api/quote', { service: draft.service, size: draft.size, hours: draft.hours, cp: draft.cp, date: draft.date, time: draft.time, urgent: !!draft.urgent, kit: !!draft.kit });
+    const quote = () => api('POST', '/api/quote', { service: draft.service, size: draft.size, hours: draft.hours, cp: draft.cp, date: draft.date, time: draft.time, urgent: !!draft.urgent, kit: !!draft.kit, extras: OPTIONABLE.includes(draft.service) ? draft.extras : [], repeat: draft.repeat });
     const shell = (inner, n) => { $app.innerHTML = `<section class="card wizard">${stepper(n)}${inner}</section>`; window.scrollTo(0, 0); };
 
     // Étape 1 : la prestation
@@ -531,7 +550,13 @@
           ? `<fieldset class="box"><legend>Taille du logement</legend><div class="chips">${Object.keys(SIZE).map((k) => `<button type="button" data-size="${k}" aria-pressed="${draft.size === k}">${SIZE[k]}</button>`).join('')}</div></fieldset>`
           : `<label>Durée<select id="hours">${[2, 2.5, 3, 3.5, 4, 5, 6, 7, 8].map((h) => `<option value="${h}" ${Number(draft.hours) === h ? 'selected' : ''}>${String(h).replace('.', ',')} h</option>`).join('')}</select></label>
              <p class="small muted" style="margin:0">${draft.service === 'bureau' ? 'Repère : environ 1 h pour 80 m² de bureaux (6 à 8 postes), plus les sanitaires et le coin café.' : 'Repère : 2 h pour un studio, 3 h pour un 2 pièces, 4 h pour un 3 pièces.'}</p>
-             <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : l'intervenante apporte aspirateur et produits (+15 €)</label>`}
+             <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : l'intervenante apporte aspirateur et produits (+15 €)</label>
+             ${draft.service === 'grand' ? `<fieldset class="box"><legend>Fin de bail ?</legend>
+               <p class="small muted" style="margin:0 0 8px">Choisissez la taille : la durée et la checklist de l'état des lieux sont réglées pour vous.</p>
+               <div class="chips">${Object.entries(LEASE).map(([k, v]) => `<button type="button" data-lease="${k}" aria-pressed="${draft.lease === k}">${v.label} · ${String(v.hours).replace('.', ',')} h</button>`).join('')}</div></fieldset>` : ''}
+             ${OPTIONABLE.includes(draft.service) ? `<fieldset class="box"><legend>Options</legend>
+               ${Object.entries(EXTRAS).map(([k, v]) => `<label class="check"><input type="checkbox" data-extra="${k}" ${draft.extras.includes(k) ? 'checked' : ''}> ${v.label} <span class="muted">(+${String(v.hours).replace('.', ',')} h · +${eur(v.hours * (draft.service === 'grand' ? 42 : 37))})</span></label>`).join('')}
+             </fieldset>` : ''}`}
         <details class="box"><summary>Ce qui doit être fait (${t.length} tâches)</summary>
           <div id="tasks">${t.map((x, i) => `<label class="check"><input type="checkbox" data-task="${i}" checked> ${esc(x)}</label>`).join('')}</div>
           <div class="row" style="flex-wrap:nowrap"><input type="text" id="newTask" maxlength="100" placeholder="Ajouter une tâche" aria-label="Ajouter une tâche" style="margin:0"><button type="button" class="btn ghost" id="addTask">Ajouter</button></div>
@@ -542,6 +567,13 @@
       if (hs) hs.onchange = () => { const h = homes.find((x) => String(x.id) === hs.value); if (h) useHome(h); else draft.home_id = null; step1(); };
       $app.querySelectorAll('[data-svc]').forEach((b) => b.onclick = () => { draft.service = b.dataset.svc; if (draft.service === 'airbnb') draft.kit = false; draft.time = null; step1(); });
       $app.querySelectorAll('[data-size]').forEach((b) => b.onclick = () => { draft.size = b.dataset.size; draft.time = null; step1(); });
+      $app.querySelectorAll('[data-extra]').forEach((c) => c.onchange = () => { draft.extras = c.checked ? [...new Set([...draft.extras, c.dataset.extra])] : draft.extras.filter((x) => x !== c.dataset.extra); draft.time = null; });
+      $app.querySelectorAll('[data-lease]').forEach((b) => b.onclick = () => {
+        const l = LEASE[b.dataset.lease];
+        draft.lease = b.dataset.lease; draft.hours = l.hours; draft.time = null;
+        draft.tasks = [...LEASE_TASKS]; draft.tasksService = 'grand';
+        step1(); toast(`Fin de bail ${l.label} : ${String(l.hours).replace('.', ',')} h et checklist de l'état des lieux.`);
+      });
       const hr = document.getElementById('hours');
       if (hr) hr.onchange = () => { draft.hours = Number(hr.value); draft.time = null; };
       const kit = document.getElementById('kit');
@@ -564,7 +596,7 @@
         <fieldset class="box"><legend>Heure d'arrivée</legend><div id="slots"><p class="muted small">Chargement des créneaux proposés…</p></div><div id="prefNote"></div></fieldset>
         ${draft.date === todayParis() ? `<label class="check"><input type="checkbox" id="urgent" ${draft.urgent ? 'checked' : ''}> Urgence : arrivée dans les 3 prochaines heures (+25 %)</label>` : ''}
         <fieldset class="box"><legend>Fréquence</legend>
-          <div class="chips">${[['0', 'Une seule fois'], ['7', 'Chaque semaine'], ['14', 'Toutes les 2 semaines']].map(([v, l]) => `<button type="button" data-repeat="${v}" aria-pressed="${draft.repeat === v}">${l}</button>`).join('')}</div>
+          <div class="chips">${[['0', 'Une seule fois'], ['7', 'Chaque semaine · −5 %'], ['14', 'Toutes les 2 semaines · −5 %']].map(([v, l]) => `<button type="button" data-repeat="${v}" aria-pressed="${draft.repeat === v}">${l}</button>`).join('')}</div>
           ${draft.repeat !== '0' ? `<label>Nombre de ménages réservés d'avance<select id="occ">${[4, 8, 12].map((n) => `<option ${Number(draft.occurrences) === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label><p class="small muted" style="margin:0">Même intervenante chaque fois que possible. Vous pouvez arrêter à tout moment.</p>` : ''}
         </fieldset>
         <p class="err" id="err2"></p>
@@ -583,7 +615,7 @@
       const pref = document.getElementById('prefNote');
       let r = { slots: [], preferred: null };
       if (/^\d{5}$/.test(draft.cp)) {
-        r = await api('GET', `/api/slots?date=${encodeURIComponent(draft.date)}&cp=${encodeURIComponent(draft.cp)}&hours=${draftHours(draft)}${draft.home_id ? `&home_id=${draft.home_id}` : ''}`);
+        r = await api('GET', `/api/slots?date=${encodeURIComponent(draft.date)}&cp=${encodeURIComponent(draft.cp)}&hours=${draftHours(draft)}&service=${draft.service}${draft.home_id ? `&home_id=${draft.home_id}` : ''}`);
         if (draft.time && !r.slots.includes(draft.time)) draft.time = null;
         const paintSlots = () => {
           const p = r.preferred;
@@ -614,13 +646,13 @@
       const n = draft.repeat !== '0' ? Number(draft.occurrences) : 1;
       let who = 'Une intervenante vérifiée, confirmée par e-mail';
       try {
-        const s = await api('GET', `/api/slots?date=${draft.date}&cp=${draft.cp}&hours=${draftHours(draft)}${draft.home_id ? `&home_id=${draft.home_id}` : ''}`);
+        const s = await api('GET', `/api/slots?date=${draft.date}&cp=${draft.cp}&hours=${draftHours(draft)}&service=${draft.service}${draft.home_id ? `&home_id=${draft.home_id}` : ''}`);
         if (s.preferred && s.preferred.slots.includes(draft.time)) who = `${s.preferred.name}, votre intervenante préférée`;
       } catch { /* sans incidence */ }
       shell(`
         <h1>Récapitulatif</h1>
         <dl class="facts">
-          <div><dt>Prestation</dt><dd>${draft.service === 'airbnb' ? `Ménage Airbnb ${SIZE[draft.size]} (ménage + linge)` : `${SERVICE[draft.service]} ${String(draft.hours).replace('.', ',')} h`}${draft.kit ? ', matériel fourni' : ''} <button class="link" data-goto="1">Modifier</button></dd></div>
+          <div><dt>Prestation</dt><dd>${draft.service === 'airbnb' ? `Ménage Airbnb ${SIZE[draft.size]} (ménage + linge)` : `${SERVICE[draft.service]} ${String(draft.hours).replace('.', ',')} h`}${draft.kit ? ', matériel fourni' : ''} <button class="link" data-goto="1">Modifier</button>${OPTIONABLE.includes(draft.service) && draft.extras.length ? `<br><span class="muted small">Options : ${draft.extras.map((k) => EXTRAS[k].label.toLowerCase()).join(', ')}</span>` : ''}</dd></div>
           <div><dt>Date</dt><dd>${esc(dateLong(draft.date))} à ${esc(draft.time)}${n > 1 ? `, puis ${draft.repeat === '7' ? 'chaque semaine' : 'toutes les 2 semaines'} (${n} ménages)` : ''} <button class="link" data-goto="2">Modifier</button></dd></div>
           <div><dt>Adresse</dt><dd>${esc(draft.address)}, ${esc(draft.cp)}</dd></div>
           <div><dt>Intervenante</dt><dd>${esc(who)}</dd></div>
@@ -652,7 +684,7 @@
         </div>
         <label class="check"><input type="checkbox" id="cgv" ${draft.cgv ? 'checked' : ''}> J'accepte les <a href="#/cgv" target="_blank" rel="noopener">conditions générales de vente</a> et la <a href="#/confidentialite" target="_blank" rel="noopener">politique de confidentialité</a>.</label>
         <p class="err" id="err4"></p>
-        <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="pay">Payer ${eur(q.total)}</button></div>`, 4);
+        <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="pay">${q.total > 0 ? `Payer ${eur(q.total)}` : 'Confirmer : réglé par mon crédit'}</button></div>`, 4);
       const modeInput = document.getElementById('payment_mode');
       if (modeInput) modeInput.onchange = (e) => { draft.payment_mode = e.target.value; };
       document.getElementById('cgv').onchange = (e) => { draft.cgv = e.target.checked; };
@@ -663,6 +695,7 @@
         try {
           const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined });
           if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
+          if (r.paidByCredit) toast('Réglé avec votre crédit Proprigo : rien à payer.');
           $app.innerHTML = `<section class="card wizard done-card">
             <div class="done-art">${ART.done}</div>
             <h1>C'est réservé !</h1>
@@ -705,6 +738,7 @@
   function signup(role, params) {
     const worker = role === 'intervenante';
     const ref = params && params.get('ref') ? params.get('ref').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) : (sessionStorage.getItem('ref') || '');
+    if (params && params.get('cadeau')) sessionStorage.setItem('cadeau', params.get('cadeau').slice(0, 20));
     if (ref) sessionStorage.setItem('ref', ref);
     $app.innerHTML = `
       <section class="card stack" style="max-width:520px;margin:auto">
@@ -733,6 +767,8 @@
         await api('POST', '/api/signup', { ...formData(e.target), role });
         sessionStorage.removeItem('ref');
         await loadMe();
+        const gift = sessionStorage.getItem('cadeau');
+        if (gift && !worker) { sessionStorage.removeItem('cadeau'); try { const g = await api('POST', '/api/gifts/redeem', { code: gift }); toast(g.message); } catch (err) { toast(err.message); } }
         go(worker ? '#/intervenante' : (sessionStorage.getItem('after') || '#/reserver'));
         sessionStorage.removeItem('after');
       } catch (err) { toast(err.message); }
@@ -1047,7 +1083,12 @@
           <div class="gain"><span>À venir</span><b>${val(g.upcoming)}</b><small>${g.upcoming.n} mission${g.upcoming.n > 1 ? 's' : ''} prévue${g.upcoming.n > 1 ? 's' : ''}</small></div>
         </div>
         ${g.history.length ? `<div class="gain-bars" aria-label="Heures des derniers mois">${g.history.slice().reverse().map((h) => `<div><i style="height:${Math.max(6, Math.round((h.h / max) * 70))}px"></i><span>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'short', timeZone: 'UTC' })}</span></div>`).join('')}</div>` : ''}
-        <p class="small muted" style="margin:8px 0 0">${g.statut === 'I' ? `Calculé avec votre tarif de ${eur(g.rate)}/h, avant vos cotisations.` : 'Heures de ménage réalisées. Le salaire figure sur votre fiche de paie.'}</p>`;
+        <p class="small muted" style="margin:8px 0 0">${g.statut === 'I' ? `Calculé avec votre tarif de ${eur(g.rate)}/h, avant vos cotisations.` : 'Heures de ménage réalisées. Le salaire figure sur votre fiche de paie.'}</p>
+        ${g.statut === 'I' ? `<div class="pay-box">
+          <div><span>En attente de versement</span><b>${eur(g.pending)}</b><small>Versé chaque semaine par virement.</small></div>
+          <div class="${g.bonus.eligible ? 'on' : ''}"><span>Bonus qualité</span><b>${g.bonus.eligible ? `+${eur(g.bonus.perHour)} / h` : 'Pas encore'}</b><small>${g.bonus.eligible ? `Note moyenne ${String(g.bonus.avg).replace('.', ',')} sur vos ${g.bonus.count} derniers avis.` : `Note moyenne de 4,8 sur 5 avis au moins${g.bonus.avg ? ` (vous : ${String(g.bonus.avg).replace('.', ',')} sur ${g.bonus.count})` : ''}.`}</small></div>
+        </div>
+        ${g.paid.length ? `<ul class="plain small">${g.paid.map((p) => `<li><span>Semaine du ${dateFr(p.week_start)}</span><b>${eur(p.amount)}</b></li>`).join('')}</ul>` : ''}` : ''}`;
     }).catch(() => {});
     $app.querySelectorAll('[data-check]').forEach((c) => c.onchange = async () => {
       updateShine(c.dataset.check);
@@ -1114,6 +1155,7 @@
       ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
+      ...(r.quoteRequests ? [`<li class="urgent"><span><b>Demandes de devis</b> · ${r.quoteRequests} nouvelle${r.quoteRequests > 1 ? 's' : ''}</span><button class="btn ghost" id="openDevis">Voir</button></li>`] : []),
       ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
       ...(k.aRembourser.n ? [`<li><span><b>Remboursements</b> · ${k.aRembourser.n} réservation(s), ${eur(k.aRembourser.montant)}</span><button class="btn ghost" data-goto="table">Voir</button></li>`] : []),
@@ -1145,6 +1187,7 @@
         </div>
         ${m.zones.length ? `<h3 style="margin-top:16px">Codes postaux les plus demandés</h3><ul class="plain">${m.zones.map((z) => `<li><span>${esc(z.cp)}</span><span class="muted">${z.n} réservation${z.n > 1 ? 's' : ''}</span></li>`).join('')}</ul>` : ''}
       </section>` : ''}
+      ${owner ? '<section class="card" data-tab="chiffres" id="payoutsBox"><h2>À verser aux indépendantes</h2><p class="muted small">Chargement…</p></section>' : ''}
       <div class="kpis" data-tab="chiffres">
         <div class="kpi"><span class="small muted">Réservations</span><b>${k.reservations}</b><span class="small muted">${k.terminees} terminées</span></div>
         <div class="kpi"><span class="small muted">Chiffre d'affaires HT</span><b>${eur(k.caHT)}</b><span class="small muted">missions terminées</span></div>
@@ -1278,6 +1321,32 @@
     };
     $app.querySelectorAll('[data-cfile]').forEach((b) => b.onclick = () => openFile('client', Number(b.dataset.cfile)));
     $app.querySelectorAll('[data-wfile]').forEach((b) => b.onclick = () => openFile('worker', Number(b.dataset.wfile)));
+    const od = document.getElementById('openDevis');
+    if (od) od.onclick = async () => {
+      let dlg = document.getElementById('fileDlg');
+      if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'fileDlg'; dlg.className = 'file-dlg'; document.body.appendChild(dlg); }
+      const list = await api('GET', '/api/admin/quote-requests');
+      dlg.innerHTML = `<div class="dlg-head"><h2>Demandes de devis</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
+        <ul class="plain">${list.map((q) => `<li><span><b>${esc(q.company)}</b> · ${esc(q.kindLabel)} · ${esc(q.cp)}${q.surface ? ` · ${q.surface} m²` : ''}${q.frequency ? ` · ${esc(q.frequency)}` : ''}<br><span class="small">${esc(q.name)} · <a href="mailto:${esc(q.email)}">${esc(q.email)}</a>${q.phone ? ` · <a href="tel:${esc(q.phone)}">${esc(q.phone)}</a>` : ''}</span>${q.message ? `<br><span class="small muted">${esc(q.message)}</span>` : ''}</span>${q.status === 'nouveau' ? `<button class="btn ghost small-btn" data-qdone="${q.id}">Traitée</button>` : '<span class="pill ok">Traitée</span>'}</li>`).join('') || '<li class="muted">Aucune demande.</li>'}</ul>`;
+      if (!dlg.open) dlg.showModal();
+      dlg.querySelector('[data-close]').onclick = () => { dlg.close(); route(); };
+      dlg.querySelectorAll('[data-qdone]').forEach((b) => b.onclick = async () => { await api('POST', `/api/admin/quote-requests/${b.dataset.qdone}/done`, {}); b.replaceWith(Object.assign(document.createElement('span'), { className: 'pill ok', textContent: 'Traitée' })); });
+    };
+    const pb = document.getElementById('payoutsBox');
+    const paintPayouts = async () => {
+      const d = await api('GET', '/api/admin/payouts').catch(() => null);
+      if (!d || !pb) return;
+      pb.innerHTML = `<h2>À verser aux indépendantes</h2>
+        <p class="small muted">Ménages terminés, par semaine, au tarif de chaque indépendante, bonus qualité compris. Faites le virement depuis votre banque, puis marquez-le ici : l'intervenante est prévenue par e-mail.</p>
+        ${d.owed.length ? `<p style="margin:0 0 6px"><b>Total à verser : ${eur(d.total)}</b></p><ul class="plain">${d.owed.map((o) => `<li><span><b>${esc(o.name)}</b> · semaine du ${dateFr(o.week_start)}${o.weekOver ? '' : ' <span class="pill">en cours</span>'}<br><span class="small muted">${String(o.hours).replace('.', ',')} h × ${eur(o.rate)}${o.bonus_rate ? ` + bonus ${eur(o.bonus_rate)}/h` : ''} = <b>${eur(o.amount)}</b></span></span>
+          <form class="pay-form" data-w="${o.worker_id}" data-week="${o.week_start}"><input name="reference" maxlength="60" placeholder="Réf. du virement" aria-label="Référence du virement"><button class="btn blue small-btn">Marquer versé</button></form></li>`).join('')}</ul>` : '<p class="msg ok">Rien à verser pour le moment.</p>'}
+        ${d.history.length ? `<h3>Derniers versements</h3><ul class="plain small">${d.history.map((h) => `<li><span>${esc(h.name)} · semaine du ${dateFr(h.week_start)}${h.reference ? ` · ${esc(h.reference)}` : ''}</span><b>${eur(h.amount)}</b></li>`).join('')}</ul>` : ''}`;
+      pb.querySelectorAll('.pay-form').forEach((f) => f.onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r = await api('POST', '/api/admin/payouts', { worker_id: Number(f.dataset.w), week_start: f.dataset.week, reference: f.reference.value }); toast(r.message); paintPayouts(); } catch (err) { toast(err.message); }
+      });
+    };
+    if (pb) paintPayouts();
     const staffBox = document.getElementById('staffBox');
     if (staffBox) {
       staffBox.addEventListener('toggle', async () => {
@@ -1433,6 +1502,112 @@
     });
   };
 
+  // ---------- espace entreprises : bureaux, agences, syndics, conciergeries ----------
+  views['pro'] = () => {
+    $app.innerHTML = `
+      <section class="hello pro-hello">
+        <div class="hello-text">
+          <p class="hello-hi">Entreprises</p>
+          <h1>Le ménage de vos locaux, sans y penser</h1>
+          <p class="hello-sub">Bureaux, fins de bail, parties communes, logements de location courte durée : une intervenante régulière, une facture au nom de votre société, des tarifs qui baissent avec le volume.</p>
+          <a class="btn primary" href="#devis" id="toDevis">Demander un devis</a>
+        </div>
+        <div class="hello-art" aria-hidden="true">${ART.services.bureau}</div>
+      </section>
+      <div class="pro-grid">
+        <article class="card"><span class="offer-art">${ART.services.bureau}</span><h3>Bureaux</h3><p>Avant l'ouverture ou après la fermeture, de 6 h à 22 h. Postes de travail, sanitaires, coin café, salles de réunion.</p><p class="offer-price"><b>35 €</b> HT de l'heure</p></article>
+        <article class="card"><span class="offer-art">${ART.services.grand}</span><h3>Agences et syndics</h3><p>Fins de bail prêtes pour l'état des lieux, remises en état avant relocation, entretien des parties communes.</p><p class="offer-price"><b>Sur devis</b></p></article>
+        <article class="card"><span class="offer-art">${ART.services.airbnb}</span><h3>Conciergeries</h3><p>Ménage et linge après chaque départ, calendriers synchronisés, la même intervenante par logement, photos avant / après.</p><p class="offer-price"><b>dès 95 €</b> le logement</p></article>
+      </div>
+      <section class="card">
+        <h2>Plus vous commandez, moins vous payez</h2>
+        <p class="small muted">Avec un compte société, sur le nettoyage de bureaux et les logements Airbnb, selon le nombre de prestations du mois.</p>
+        <div class="gain-grid"><div class="gain"><span>Jusqu'à 9 prestations</span><b>Tarif normal</b></div><div class="gain"><span>10 à 29 prestations</span><b>−5 %</b></div><div class="gain main"><span>30 prestations et plus</span><b>−10 %</b></div></div>
+        <p class="small muted" style="margin:10px 0 0">La remise s'applique toute seule. Elle ne se cumule pas avec la remise d'abonnement : la plus avantageuse est retenue.</p>
+      </section>
+      <section class="card stack" id="devis">
+        <h2>Demander un devis</h2>
+        <form id="devisForm" class="grid2" style="gap:12px">
+          <label>Société<input name="company" required maxlength="120" autocomplete="organization"></label>
+          <label>Votre nom<input name="name" required maxlength="80" autocomplete="name"></label>
+          <label>E-mail professionnel<input type="email" name="email" required maxlength="120" autocomplete="email"></label>
+          <label>Téléphone<input type="tel" name="phone" maxlength="20" autocomplete="tel"></label>
+          <label>Code postal des locaux<input name="cp" inputmode="numeric" maxlength="5" required></label>
+          <label>Type de besoin<select name="kind" required>${[['bureaux', 'Bureaux'], ['agence', 'Agence immobilière / fins de bail'], ['syndic', 'Syndic / parties communes'], ['conciergerie', 'Conciergerie / logements Airbnb'], ['autre', 'Autre']].map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
+          <label>Surface approximative (m²)<input type="number" name="surface" min="0" max="100000"></label>
+          <label>Fréquence souhaitée<input name="frequency" maxlength="60" placeholder="Ex. 3 fois par semaine, 4 fins de bail par mois"></label>
+          <label style="grid-column:1/-1">Précisions (facultatif)<textarea name="message" rows="3" maxlength="1000"></textarea></label>
+          <button class="btn primary" style="grid-column:1/-1">Envoyer ma demande</button>
+        </form>
+        <p class="msg" id="devisDone"></p>
+      </section>`;
+    document.getElementById('toDevis').onclick = (e) => { e.preventDefault(); document.getElementById('devis').scrollIntoView({ behavior: 'smooth' }); };
+    document.getElementById('devisForm').onsubmit = async (e) => {
+      e.preventDefault();
+      try { const r = await api('POST', '/api/quote-requests', formData(e.target)); const d = document.getElementById('devisDone'); d.className = 'msg ok'; d.textContent = r.message; e.target.hidden = true; } catch (err) { toast(err.message); }
+    };
+  };
+
+  // ---------- offrir un ménage : cartes cadeaux et packs d'heures ----------
+  views['cadeau'] = async () => {
+    const offer = await api('GET', '/api/gifts/offer');
+    const back = new URLSearchParams(location.search);
+    let amount = 100;
+    $app.innerHTML = `
+      <section class="hello gift-hello">
+        <div class="hello-text">
+          <p class="hello-hi">Carte cadeau</p>
+          <h1>Offrez un intérieur qui brille</h1>
+          <p class="hello-sub">Un cadeau utile pour des parents, de jeunes parents ou des amis qui déménagent. Valable 1 an, sur toutes les prestations.</p>
+        </div>
+        <div class="hello-art" aria-hidden="true">${ART.services.menage}</div>
+      </section>
+      ${back.get('stripe') === 'success' ? '<p class="msg ok" style="margin-top:14px">Paiement reçu. La carte cadeau part par e-mail dès que Stripe confirme, en général en quelques secondes.</p>' : ''}
+      <div class="gift-grid">
+        <section class="card stack">
+          <h2>Offrir une carte</h2>
+          <div class="chips" role="group" aria-label="Montant">${offer.amounts.map((a) => `<button type="button" data-amount="${a}" aria-pressed="${a === amount}">${a} €</button>`).join('')}</div>
+          <p class="small muted" style="margin:0" id="amountHint"></p>
+          <form id="giftForm" class="stack">
+            <label>Prénom de la personne<input name="recipient_name" maxlength="60" placeholder="Ex. Maman"></label>
+            <label>Son e-mail (facultatif : sinon, vous recevez le code pour le lui donner)<input type="email" name="recipient_email" maxlength="120"></label>
+            <label>Un petit mot (facultatif)<textarea name="message" rows="2" maxlength="300" placeholder="Ex. Joyeux Noël, profite de ton dimanche !"></textarea></label>
+            <button class="btn primary full" id="giftBtn">Offrir 100 €</button>
+          </form>
+        </section>
+        <section class="card stack">
+          <h2>Pour vous : un pack d'heures</h2>
+          <p class="small muted" style="margin:0">Payez d'avance, recevez des heures offertes. Le crédit est déduit tout seul de vos prochains ménages.</p>
+          ${offer.packs.map((p) => `<div class="pack">
+            <div><b>${p.hours} h de ménage</b><span>${p.free} h offerte${p.free > 1 ? 's' : ''} · ${eur(p.credit)} de crédit</span></div>
+            <button class="btn blue" data-pack="${p.hours}">${eur(p.price)}</button></div>`).join('')}
+          <h2 style="margin-top:10px">Vous avez reçu une carte ?</h2>
+          <form id="redeemForm" class="cp-row">
+            <label>Code de la carte<input name="code" maxlength="20" autocapitalize="characters" placeholder="PG-XXXX-XXXX" required></label>
+            <button class="btn ghost">Utiliser</button>
+          </form>
+        </section>
+      </div>`;
+    const hint = () => { document.getElementById('amountHint').textContent = `Environ ${String(Math.round((amount / 37) * 2) / 2).replace('.', ',')} h de ménage à domicile en Île-de-France.`; document.getElementById('giftBtn').textContent = `Offrir ${amount} €`; };
+    hint();
+    $app.querySelectorAll('[data-amount]').forEach((b) => b.onclick = () => { amount = Number(b.dataset.amount); $app.querySelectorAll('[data-amount]').forEach((x) => x.setAttribute('aria-pressed', x === b)); hint(); });
+    const needLogin = () => { if (me && me.role === 'client') return false; sessionStorage.setItem('after', '#/cadeau'); toast('Créez votre compte client pour continuer.'); go('#/inscription'); return true; };
+    const pay = async (body, btn) => {
+      if (needLogin()) return;
+      btn.disabled = true;
+      try { const r = await api('POST', '/api/gifts', body); if (r.checkout_url) { window.location.assign(r.checkout_url); return; } toast(r.message); route(); }
+      catch (e) { toast(e.message); btn.disabled = false; }
+    };
+    document.getElementById('giftForm').onsubmit = (e) => { e.preventDefault(); pay({ amount, ...formData(e.target) }, document.getElementById('giftBtn')); };
+    $app.querySelectorAll('[data-pack]').forEach((b) => b.onclick = () => pay({ kind: 'pack', hours: Number(b.dataset.pack) }, b));
+    document.getElementById('redeemForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const code = e.target.code.value.trim();
+      if (!me || me.role !== 'client') { sessionStorage.setItem('cadeau', code); go('#/inscription'); return; }
+      try { const r = await api('POST', '/api/gifts/redeem', { code }); toast(r.message); e.target.reset(); } catch (err) { toast(err.message); }
+    };
+  };
+
   // ---------- mot de passe oublié ----------
   views['mot-de-passe-oublie'] = () => {
     $app.innerHTML = `
@@ -1498,6 +1673,21 @@
           ${ref.friends ? `<p class="hello-sub" style="margin:10px 0 0">${ref.friends} proche${ref.friends > 1 ? 's' : ''} inscrit${ref.friends > 1 ? 's' : ''} avec votre code.</p>` : ''}
         </div>
       </section>
+      <details class="card stack" id="companyBox"><summary><b>Société (facultatif)</b> <span class="muted small">facture au nom de votre entreprise, remise selon le volume</span></summary>
+        <form id="companyForm" class="grid2" style="gap:12px;margin-top:12px">
+          <label>Raison sociale<input name="company" maxlength="120" autocomplete="organization"></label>
+          <label>SIRET (14 chiffres)<input name="siret" inputmode="numeric" maxlength="20"></label>
+          <label>N° de TVA intracommunautaire<input name="vat_number" maxlength="20" placeholder="FR12345678901"></label>
+          <label>Adresse de facturation<input name="billing_address" maxlength="200"></label>
+          <p class="small muted" id="volumeInfo" style="grid-column:1/-1;margin:0"></p>
+          <button class="btn blue" style="grid-column:1/-1">Enregistrer la société</button>
+        </form>
+      </details>
+      <section class="card stack"><h2>Crédit et cartes cadeaux</h2>
+        <p style="margin:0">Crédit disponible : <b id="myCredit">${eur(ref.credit)}</b>, déduit automatiquement de vos prochains ménages.</p>
+        <form id="redeem2" class="cp-row"><label>Code d'une carte cadeau<input name="code" maxlength="20" autocapitalize="characters" placeholder="PG-XXXX-XXXX" required></label><button class="btn ghost">Utiliser</button></form>
+        <p class="small" style="margin:0"><a href="#/cadeau">Offrir un ménage ou acheter un pack d'heures</a></p>
+      </section>
       <section class="card stack"><h2>Mes documents</h2>
         <p class="small muted">Les reçus de chaque ménage sont dans « Mes ménages ». L'attestation annuelle récapitule les ménages à domicile pour le crédit d'impôt.</p>
         <div class="actions" style="margin:0"><a class="btn ghost" href="/api/me/attestation?year=${year}" target="_blank" rel="noopener">Attestation ${year}</a><a class="btn ghost" href="/api/me/attestation?year=${year - 1}" target="_blank" rel="noopener">Attestation ${year - 1}</a></div>
@@ -1552,6 +1742,17 @@
         else { try { await navigator.clipboard.writeText(`${text} ${ref.link}`); toast('Message copié : collez-le dans un SMS ou WhatsApp.'); } catch { toast(ref.link); } }
       };
     }
+    const cf = document.getElementById('companyForm');
+    if (cf) {
+      api('GET', '/api/account/company').then((c) => {
+        for (const k of ['company', 'siret', 'vat_number', 'billing_address']) cf[k].value = c[k] || '';
+        if (c.company) document.getElementById('companyBox').open = true;
+        document.getElementById('volumeInfo').textContent = c.company ? `Ce mois-ci : ${c.monthCount} prestation${c.monthCount > 1 ? 's' : ''}. ${c.volume ? `Remise volume active : −${Math.round(c.volume * 100)} % sur les bureaux et logements Airbnb.` : `Remise de 5 % à partir de 10 prestations dans le mois (bureaux et logements Airbnb).`}` : '';
+      }).catch(() => {});
+      cf.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/account/company', formData(cf)); toast(r.message); route(); } catch (err) { toast(err.message); } };
+    }
+    const rd = document.getElementById('redeem2');
+    if (rd) rd.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/gifts/redeem', { code: rd.code.value }); toast(r.message); document.getElementById('myCredit').textContent = eur(r.credit); rd.reset(); } catch (err) { toast(err.message); } };
     const wp = document.getElementById('wprof');
     if (wp) wp.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/worker/profile', formData(wp)); toast(r.message); } catch (err) { toast(err.message); } };
     document.getElementById('logout2').onclick = async () => { await api('POST', '/api/logout', {}); me = null; renderNav(); go('#/'); route(); };

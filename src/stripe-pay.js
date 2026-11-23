@@ -55,7 +55,7 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
       headers: {
         Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Idempotency-Key': crypto.randomUUID(),
+        'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${amount}:${Math.floor(Date.now() / 1800000)}`).digest('hex')}`,
       },
       body: params,
       signal: AbortSignal.timeout(15000),
@@ -123,7 +123,46 @@ async function refund({ db, bookingId, amountCents }) {
     console.error('Stripe refund error:', { status: resp.status, code: out.error?.code, message: out.error?.message });
     throw new Error(out.error?.message ? `Stripe : ${out.error.message}` : 'Stripe refund failed');
   }
-  db.prepare('UPDATE stripe_payments SET refunded_cents = COALESCE(refunded_cents, 0) + ? WHERE session_id = ?').run(amountCents, pay.session_id);
+  db.exec('CREATE TABLE IF NOT EXISTS stripe_refund_ledger (refund_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, amount_cents INTEGER NOT NULL)');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const inserted = db.prepare('INSERT OR IGNORE INTO stripe_refund_ledger (refund_id, session_id, amount_cents) VALUES (?, ?, ?)').run(out.id, pay.session_id, amountCents);
+    if (inserted.changes) db.prepare('UPDATE stripe_payments SET refunded_cents = COALESCE(refunded_cents, 0) + ? WHERE session_id = ?').run(amountCents, pay.session_id);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id: out.id, status: out.status };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund };
+/** Paiement d'une carte cadeau ou d'un pack d'heures : une session Stripe dédiée, reconnue par son identifiant. */
+async function checkoutGift({ db, gift, email, appUrl }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (!validBaseUrl(appUrl)) throw new Error('Invalid public URL');
+  const amount = Math.round(gift.price * 100);
+  if (!Number.isSafeInteger(amount) || amount < 50 || amount > 500000) throw new Error('Invalid amount');
+  const params = new URLSearchParams();
+  params.set('mode', 'payment');
+  params.set('customer_email', email);
+  params.set('line_items[0][price_data][currency]', 'eur');
+  params.set('line_items[0][price_data][unit_amount]', String(amount));
+  params.set('line_items[0][price_data][product_data][name]', gift.kind === 'pack' ? `PROPRIGO - Pack ${gift.hours} h de ménage` : `PROPRIGO - Carte cadeau ${gift.amount} €`);
+  params.set('line_items[0][quantity]', '1');
+  params.set('metadata[gift_id]', String(gift.id));
+  params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&gift=${gift.id}#/cadeau`);
+  params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/cadeau`);
+  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `proprigo-gift-${gift.id}` },
+      body: params, signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    console.error('Stripe gift checkout network error:', { name: err.name, message: err.message });
+    throw new Error('Stripe network error');
+  }
+  const out = await resp.json().catch(() => ({}));
+  if (!resp.ok || !out.id || !out.url) { console.error('Stripe gift checkout error:', { status: resp.status, message: out.error?.message }); throw new Error('Stripe checkout failed'); }
+  db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
+  return { url: out.url };
+}
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund, checkoutGift };
