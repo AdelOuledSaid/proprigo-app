@@ -1442,11 +1442,22 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
     if (!stripePay.configured()) throw new HttpError(503, "Stripe n'est pas configuré sur ce serveur : remboursez dans le tableau de bord Stripe, puis cliquez sur « Marquer remboursé ».");
     let r;
     try { r = await stripePay.refund({ db, bookingId: id, amountCents: amount }); }
-    catch (e) { throw new HttpError(502, `Remboursement refusé : ${e.message}. Rien n'a été débité ; vérifiez dans Stripe.`); }
+    catch (e) { throw new HttpError(502, `Remboursement refusé : ${e.message}. Vérifiez dans Stripe avant de réessayer.`); }
     db.prepare("UPDATE bookings SET payment_status = ?, refund_id = ? WHERE id = ?").run(r.status === 'succeeded' ? 'rembourse' : 'remboursement_en_cours', r.id, id);
     db_.log(db, `Réservation n° ${id} : ${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe (${r.status === 'pending' ? 'en cours' : 'effectué'}).`);
     engine.notify(db, id, `Votre remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € a été lancé. Il apparaît sur votre compte bancaire sous 5 à 10 jours.`);
     return { ok: true, message: r.status === 'succeeded' ? `${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe.` : `Remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € en cours chez Stripe.` };
+  });
+
+  // Réconciliation explicite, réservée à l'administrateur : vérifie Stripe avant de modifier un ancien statut.
+  route('POST', '/api/admin/bookings/:id/reconcile-refund', async ({ user, id }) => {
+    need(user, 'admin');
+    if (!stripeReady) throw new HttpError(503, 'Stripe doit être configuré pour vérifier un remboursement.');
+    let result;
+    try { result = await stripePay.reconcileRefund({ db, bookingId: id }); }
+    catch (e) { throw new HttpError(409, `Vérification impossible : ${e.message}. Aucune modification effectuée.`); }
+    db_.log(db, `Réservation n° ${id} : statut de remboursement vérifié auprès de Stripe (${result.status}).`);
+    return { ok: true, ...result, message: `Statut vérifié auprès de Stripe : ${result.status}.` };
   });
 
   // ----- planning de la semaine -----
@@ -1532,6 +1543,18 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
           if (refund && typeof refund.id === 'string') {
             if (refund.status === 'succeeded') db.prepare("UPDATE bookings SET payment_status = 'rembourse' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
             if (['failed', 'canceled'].includes(refund.status)) db.prepare("UPDATE bookings SET payment_status = 'a_rembourser' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
+            if (['failed', 'canceled'].includes(refund.status)) {
+              db.exec('CREATE TABLE IF NOT EXISTS stripe_refund_ledger (refund_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, amount_cents INTEGER NOT NULL)');
+              const entry = db.prepare('SELECT * FROM stripe_refund_ledger WHERE refund_id = ?').get(refund.id);
+              if (entry) {
+                db.exec('BEGIN IMMEDIATE');
+                try {
+                  db.prepare('DELETE FROM stripe_refund_ledger WHERE refund_id = ?').run(refund.id);
+                  db.prepare('UPDATE stripe_payments SET refunded_cents = MAX(0, refunded_cents - ?) WHERE session_id = ?').run(entry.amount_cents, entry.session_id);
+                  db.exec('COMMIT');
+                } catch (e) { db.exec('ROLLBACK'); throw e; }
+              }
+            }
           }
         }
         if (event.type === 'checkout.session.async_payment_failed') {

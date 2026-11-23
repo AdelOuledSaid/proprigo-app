@@ -50,3 +50,40 @@ test('Checkout: double clic simultané ne crée pas deux sessions Stripe', async
     db.close();
   }
 });
+
+test('Réconciliation Stripe : ancien statut remboursé sans remboursement réel revient à rembourser', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE bookings(id INTEGER PRIMARY KEY, paid INTEGER, status TEXT, payment_status TEXT, total REAL, refund_amount REAL, refund_id TEXT);
+    CREATE TABLE stripe_payments(session_id TEXT PRIMARY KEY, booking_ids TEXT, status TEXT, payment_intent TEXT, refunded_cents INTEGER, amount_cents INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+  db.prepare("INSERT INTO bookings VALUES (11,1,'annulee','rembourse',133,133,NULL)").run();
+  db.prepare("INSERT INTO stripe_payments(session_id,booking_ids,status,payment_intent,refunded_cents,amount_cents) VALUES ('cs_test_11','[11]','paid','pi_test_11',0,13300)").run();
+  const prevFetch = global.fetch, prevKey = process.env.STRIPE_SECRET_KEY, prevSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  process.env.STRIPE_SECRET_KEY = 'sk_test_mock'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_mock';
+  global.fetch = async () => ({ ok: true, json: async () => ({ data: [], has_more: false }) });
+  try {
+    const result = await stripe.reconcileRefund({ db, bookingId: 11 });
+    assert.equal(result.status, 'a_rembourser');
+    assert.equal(db.prepare('SELECT payment_status FROM bookings WHERE id = 11').get().payment_status, 'a_rembourser');
+  } finally { global.fetch = prevFetch; if (prevKey === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = prevKey;
+    if (prevSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = prevSecret; db.close(); }
+});
+
+test('Réconciliation Stripe : remboursement confirmé et montant exact', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE bookings(id INTEGER PRIMARY KEY, paid INTEGER, status TEXT, payment_status TEXT, total REAL, refund_amount REAL, refund_id TEXT);
+    CREATE TABLE stripe_payments(session_id TEXT PRIMARY KEY, booking_ids TEXT, status TEXT, payment_intent TEXT, refunded_cents INTEGER, amount_cents INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+  db.prepare("INSERT INTO bookings VALUES (11,1,'annulee','a_rembourser',133,133,NULL)").run();
+  db.prepare("INSERT INTO stripe_payments(session_id,booking_ids,status,payment_intent,refunded_cents,amount_cents) VALUES ('cs_test_11','[11]','paid','pi_test_11',0,13300)").run();
+  const prevFetch = global.fetch, prevKey = process.env.STRIPE_SECRET_KEY, prevSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  process.env.STRIPE_SECRET_KEY = 'sk_test_mock'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_mock';
+  global.fetch = async () => ({ ok: true, json: async () => ({ data: [{ id: 're_test_11', status: 'succeeded', amount: 13300, metadata: { booking_id: '11' } }], has_more: false }) });
+  try {
+    const result = await stripe.reconcileRefund({ db, bookingId: 11 });
+    assert.equal(result.status, 'rembourse');
+    assert.equal(db.prepare('SELECT payment_status FROM bookings WHERE id = 11').get().payment_status, 'rembourse');
+    assert.equal(db.prepare('SELECT refunded_cents FROM stripe_payments WHERE session_id = ?').get('cs_test_11').refunded_cents, 13300);
+  } finally { global.fetch = prevFetch; if (prevKey === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = prevKey;
+    if (prevSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = prevSecret; db.close(); }
+});

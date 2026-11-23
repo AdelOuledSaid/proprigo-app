@@ -166,6 +166,50 @@ async function refund({ db, bookingId, amountCents }) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id: out.id, status: out.status };
 }
+/** Lecture Stripe sans créer de remboursement : aucune supposition à partir du statut local. */
+async function reconcileRefund({ db, bookingId }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
+  if (!booking || booking.status !== 'annulee' || !booking.paid) throw new Error('Booking is not a paid cancellation');
+  const pay = db.prepare("SELECT * FROM stripe_payments WHERE status = 'paid' AND EXISTS (SELECT 1 FROM json_each(booking_ids) WHERE value = ?) ORDER BY created_at DESC LIMIT 1").get(bookingId);
+  if (!pay) throw new Error('No confirmed Stripe payment for this booking');
+  let pi = pay.payment_intent;
+  if (!pi) {
+    const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(pay.session_id)}`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000) });
+    const session = await response.json().catch(() => ({}));
+    if (!response.ok || !session.payment_intent) throw new Error('Cannot verify Stripe payment intent');
+    pi = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent.id;
+  }
+  const response = await fetch(`https://api.stripe.com/v1/refunds?payment_intent=${encodeURIComponent(pi)}&limit=100`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !Array.isArray(payload.data) || payload.has_more) throw new Error('Stripe refunds could not be verified completely');
+  const refunds = payload.data;
+  // A legacy refund without a booking ID cannot safely be assigned to one booking.
+  const matches = refunds.filter(r => r.id === booking.refund_id || String(r.metadata?.booking_id || '') === String(bookingId));
+  const unmatched = refunds.filter(r => !r.metadata?.booking_id && r.id !== booking.refund_id);
+  if (unmatched.length && !matches.length) throw new Error('Unattributed Stripe refund: manual review required');
+  if (matches.length > 1) throw new Error('Multiple Stripe refunds for this booking: manual review required');
+  const matched = matches[0];
+  const expected = Math.round(Number(booking.refund_amount ?? booking.total) * 100);
+  if (matched && matched.amount !== expected) throw new Error('Stripe refund amount differs: manual review required');
+  const next = !matched || ['failed', 'canceled'].includes(matched.status) ? 'a_rembourser'
+    : matched.status === 'succeeded' ? 'rembourse' : matched.status === 'pending' ? 'remboursement_en_cours' : null;
+  if (!next) throw new Error('Unknown Stripe refund status: manual review required');
+  // Synchronize payment-level accounting with succeeded/pending refunds only.
+  db.exec('CREATE TABLE IF NOT EXISTS stripe_refund_ledger (refund_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, amount_cents INTEGER NOT NULL)');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE stripe_payments SET payment_intent = ? WHERE session_id = ?').run(pi, pay.session_id);
+    db.prepare('DELETE FROM stripe_refund_ledger WHERE session_id = ?').run(pay.session_id);
+    const active = refunds.filter(r => ['succeeded', 'pending'].includes(r.status));
+    for (const r of active) db.prepare('INSERT INTO stripe_refund_ledger (refund_id,session_id,amount_cents) VALUES (?,?,?)').run(r.id, pay.session_id, r.amount);
+    db.prepare('UPDATE stripe_payments SET refunded_cents = ? WHERE session_id = ?').run(active.reduce((sum,r) => sum+r.amount, 0), pay.session_id);
+    db.prepare('UPDATE bookings SET payment_status = ?, refund_id = ? WHERE id = ?').run(next, matched?.id || null, bookingId);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  return { status: next, refundId: matched?.id || null, verified: true };
+}
+
 /** Paiement d'une carte cadeau ou d'un pack d'heures : une session Stripe dédiée, reconnue par son identifiant. */
 async function checkoutGift({ db, gift, email, appUrl }) {
   if (!configured()) throw new Error('Stripe not configured');
@@ -199,4 +243,4 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund, checkoutGift };
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund, reconcileRefund, checkoutGift };
