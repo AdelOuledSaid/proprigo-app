@@ -715,26 +715,3 @@ test('administration : création contrôlée et protection des profils fictifs',
     assert.ok(adminId > 0);
   } finally { server.close(); }
 });
-
-test('administration : nouvelles réservations visibles sans reconnexion et tri par numéro décroissant', async () => {
-  const { server, agent } = await startServer();
-  try {
-    const admin = agent();
-    const client = agent();
-    assert.equal((await admin('POST', '/api/login', { email: 'admin@proprigo.test', password: 'admin-test-123' })).status, 200);
-    assert.equal((await client('POST', '/api/login', { email: 'claire@proprigo.test', password: 'demo-proprigo' })).status, 200);
-    const first = await admin('GET', '/api/admin/overview');
-    assert.equal(first.status, 200);
-    const revBefore = (await admin('GET', '/api/admin/revision')).data.revision;
-    const created = await client('POST', '/api/bookings', { service: 'menage', hours: 3, cp: '75011', address: '8 rue du Test', date: '2026-11-25', time: '10:00' });
-    assert.equal(created.status, 201);
-    const revAfter = await admin('GET', '/api/admin/revision');
-    assert.equal(revAfter.status, 200);
-    assert.notEqual(revAfter.data.revision, revBefore);
-    const overview = await admin('GET', '/api/admin/overview');
-    assert.equal(overview.status, 200);
-    assert.equal(overview.data.bookings[0].id, created.data.id);
-    assert.deepEqual(overview.data.bookings.map((b) => b.id), overview.data.bookings.map((b) => b.id).sort((a, b) => b - a));
-    assert.equal((await client('GET', '/api/admin/revision')).status, 403);
-  } finally { server.close(); }
-});

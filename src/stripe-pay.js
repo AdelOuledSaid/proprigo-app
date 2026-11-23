@@ -19,108 +19,74 @@ async function checkout({ db, ids, clientId, email, appUrl }) {
   if (bookings.some((b) => !b || b.paid || b.status === 'annulee' || b.payment_status === 'paye')) throw new Error('Invalid bookings');
   const amount = bookings.reduce((sum, b) => sum + Math.round(b.total * 100), 0);
   if (!Number.isSafeInteger(amount) || amount < 50 || amount > 99999999) throw new Error('Invalid amount');
-  // Verrou persistant et idempotence : un seul appel Stripe à la fois pour la réservation.
-  // En cas de timeout, le prochain essai reprend EXACTEMENT la même requête et la même clé.
-  db.exec(`CREATE TABLE IF NOT EXISTS stripe_checkout_attempts (
-    booking_key TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
-    expires_at INTEGER NOT NULL, lock_until INTEGER NOT NULL DEFAULT 0,
-    session_id TEXT, session_url TEXT, state TEXT NOT NULL DEFAULT 'creating'
-  )`);
-  const bookingKey = `${clientId}:${ids.join(',')}`;
-  const now = Math.floor(Date.now() / 1000);
-  const existingPayment = db.prepare("SELECT session_id FROM stripe_payments WHERE client_id = ? AND booking_ids = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1")
+  // Une reservation en attente peut deja avoir une session Checkout ouverte.
+  // La reutiliser plutot que creer un second paiement pour le meme menage.
+  const previous = db.prepare("SELECT session_id FROM stripe_payments WHERE client_id = ? AND booking_ids = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1")
     .get(clientId, JSON.stringify(ids));
-  if (existingPayment) {
-    const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(existingPayment.session_id)}`, {
-      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000),
-    });
-    const old = await r.json();
-    if (!r.ok) throw new Error('Stripe session lookup failed');
-    if (old.status === 'open' && old.url) return { url: old.url };
-    if (old.payment_status === 'paid') throw new Error('Payment already completed; awaiting webhook');
-  }
-  let attempt;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    attempt = db.prepare('SELECT * FROM stripe_checkout_attempts WHERE booking_key = ?').get(bookingKey);
-    if (attempt && attempt.lock_until > now) throw new Error('Checkout already in progress; retry shortly');
-    // Ne jamais remplacer une tentative incertaine avant son expiration Stripe.
-    // Un éventuel appel précédent peut avoir abouti malgré une réponse réseau perdue.
-    if (!attempt || (attempt.expires_at < now && attempt.state === 'expired')) {
-      const attemptId = crypto.randomUUID();
-      attempt = { booking_key: bookingKey, attempt_id: attemptId,
-        idempotency_key: `proprigo-checkout-${attemptId}`, expires_at: now + 1800,
-        session_id: null, session_url: null, state: 'creating' };
-      db.prepare(`INSERT INTO stripe_checkout_attempts
-        (booking_key,attempt_id,idempotency_key,expires_at,lock_until,session_id,session_url,state)
-        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(booking_key) DO UPDATE SET
-        attempt_id=excluded.attempt_id,idempotency_key=excluded.idempotency_key,
-        expires_at=excluded.expires_at,lock_until=excluded.lock_until,
-        session_id=NULL,session_url=NULL,state=excluded.state`).run(
-        bookingKey, attempt.attempt_id, attempt.idempotency_key, attempt.expires_at, now + 25,
-        null, null, 'creating');
-    } else {
-      db.prepare('UPDATE stripe_checkout_attempts SET lock_until = ? WHERE booking_key = ?').run(now + 25, bookingKey);
-    }
-    db.exec('COMMIT');
-  } catch (e) { db.exec('ROLLBACK'); throw e; }
-  try {
-    if (attempt.session_id) {
-      const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(attempt.session_id)}`, {
+  if (previous) {
+    try {
+      const r = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(previous.session_id)}`, {
         headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000),
       });
       const old = await r.json();
-      if (!r.ok) throw new Error('Stripe session lookup failed');
-      if (old.status === 'open' && old.url) return { url: old.url };
-      if (old.payment_status === 'paid') throw new Error('Payment already completed; awaiting webhook');
-      if (old.status === 'expired') {
-        db.prepare("UPDATE stripe_checkout_attempts SET state = 'expired' WHERE booking_key = ?").run(bookingKey);
-        throw new Error('Stripe session expired; retry to start a new checkout');
-      }
-      throw new Error('Stripe session not available');
+      if (r.ok && old.status === 'open' && old.url) return { url: old.url };
+      if (r.ok && old.payment_status === 'paid') throw new Error('Payment already completed; awaiting webhook');
+      if (!r.ok) throw new Error(`Stripe session lookup failed (${r.status})`);
+    } catch (err) {
+      console.error('Stripe Checkout existing session:', { message: err.message });
+      throw err; // Ne jamais creer un deuxieme paiement si l'etat du premier est inconnu.
     }
-    if (attempt.expires_at <= now) {
-      // Stripe interdit de recréer la même requête avec un nouveau expires_at sous la même clé.
-      // La tentative expirée est libérée uniquement après vérification dans le Dashboard.
-      throw new Error('Checkout state uncertain; manual reconciliation required');
-    }
-    const params = new URLSearchParams();
-    params.set('mode', 'payment');
-    params.set('customer_email', email);
-    params.set('line_items[0][price_data][currency]', 'eur');
-    params.set('line_items[0][price_data][unit_amount]', String(amount));
-    params.set('line_items[0][price_data][product_data][name]', `PROPRIGO - ${bookings.length} prestation(s) de nettoyage`);
-    params.set('line_items[0][quantity]', '1');
-    params.set('metadata[booking_ids]', ids.join(','));
-    params.set('metadata[client_id]', String(clientId));
-    params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&booking=${ids[0]}#/mes-reservations`);
-    params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
-    params.set('expires_at', String(attempt.expires_at));
-    const resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-      method: 'POST', headers: {
+  }
+  const params = new URLSearchParams();
+  params.set('mode', 'payment');
+  params.set('customer_email', email);
+  
+  params.set('line_items[0][price_data][currency]', 'eur');
+  params.set('line_items[0][price_data][unit_amount]', String(amount));
+  params.set('line_items[0][price_data][product_data][name]', `PROPRIGO - ${bookings.length} prestation(s) de nettoyage`);
+  params.set('line_items[0][quantity]', '1');
+  params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&booking=${ids[0]}#/mes-reservations`);
+  params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
+  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: {
         Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Idempotency-Key': attempt.idempotency_key,
-      }, body: params, signal: AbortSignal.timeout(15000),
+        'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${amount}:${Math.floor(Date.now() / 1800000)}`).digest('hex')}`,
+      },
+      body: params,
+      signal: AbortSignal.timeout(15000),
     });
-    const session = await resp.json();
-    if (!resp.ok || !session.id || !session.url) {
-      console.error('Stripe Checkout error:', { status: resp.status, code: session.error?.code, message: session.error?.message });
-      throw new Error('Stripe session failed');
-    }
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.prepare('INSERT OR IGNORE INTO stripe_payments (session_id, client_id, booking_ids, amount_cents, status) VALUES (?, ?, ?, ?, ?)')
-        .run(session.id, clientId, JSON.stringify(ids), amount, 'pending');
-      db.prepare("UPDATE stripe_checkout_attempts SET session_id=?,session_url=?,state='open' WHERE booking_key=?")
-        .run(session.id, session.url, bookingKey);
-      db.exec('COMMIT');
-    } catch (e) { db.exec('ROLLBACK'); throw e; }
-    return { url: session.url };
-  } finally {
-    db.prepare('UPDATE stripe_checkout_attempts SET lock_until=0 WHERE booking_key=? AND attempt_id=?')
-      .run(bookingKey, attempt.attempt_id);
+  } catch (err) {
+    console.error('Stripe Checkout network error:', { name: err.name, message: err.message, cause: err.cause?.code });
+    throw new Error('Stripe Checkout network error');
   }
+  let session;
+  try {
+    session = await resp.json();
+  } catch (err) {
+    console.error('Stripe Checkout invalid response:', { status: resp.status, message: err.message });
+    throw new Error('Stripe Checkout invalid response');
+  }
+  if (!resp.ok || !session.id || !session.url) {
+    console.error('Stripe Checkout error:', {
+      status: resp.status,
+      type: session.error?.type,
+      code: session.error?.code,
+      message: session.error?.message,
+    });
+    throw new Error('Stripe session failed');
+  }
+  try {
+    db.prepare('INSERT INTO stripe_payments (session_id, client_id, booking_ids, amount_cents, status) VALUES (?, ?, ?, ?, ?)').run(session.id, clientId, JSON.stringify(ids), amount, 'pending');
+  } catch (err) {
+    console.error('Stripe Checkout database error:', { code: err.code, message: err.message });
+    throw err;
+  }
+  return { url: session.url };
 }
 /**
  * Remboursement réel dans Stripe. La clé d'idempotence est fixe pour une réservation et un montant :
@@ -166,50 +132,6 @@ async function refund({ db, bookingId, amountCents }) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id: out.id, status: out.status };
 }
-/** Lecture Stripe sans créer de remboursement : aucune supposition à partir du statut local. */
-async function reconcileRefund({ db, bookingId }) {
-  if (!configured()) throw new Error('Stripe not configured');
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
-  if (!booking || booking.status !== 'annulee' || !booking.paid) throw new Error('Booking is not a paid cancellation');
-  const pay = db.prepare("SELECT * FROM stripe_payments WHERE status = 'paid' AND EXISTS (SELECT 1 FROM json_each(booking_ids) WHERE value = ?) ORDER BY created_at DESC LIMIT 1").get(bookingId);
-  if (!pay) throw new Error('No confirmed Stripe payment for this booking');
-  let pi = pay.payment_intent;
-  if (!pi) {
-    const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(pay.session_id)}`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000) });
-    const session = await response.json().catch(() => ({}));
-    if (!response.ok || !session.payment_intent) throw new Error('Cannot verify Stripe payment intent');
-    pi = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent.id;
-  }
-  const response = await fetch(`https://api.stripe.com/v1/refunds?payment_intent=${encodeURIComponent(pi)}&limit=100`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` }, signal: AbortSignal.timeout(15000) });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !Array.isArray(payload.data) || payload.has_more) throw new Error('Stripe refunds could not be verified completely');
-  const refunds = payload.data;
-  // A legacy refund without a booking ID cannot safely be assigned to one booking.
-  const matches = refunds.filter(r => r.id === booking.refund_id || String(r.metadata?.booking_id || '') === String(bookingId));
-  const unmatched = refunds.filter(r => !r.metadata?.booking_id && r.id !== booking.refund_id);
-  if (unmatched.length && !matches.length) throw new Error('Unattributed Stripe refund: manual review required');
-  if (matches.length > 1) throw new Error('Multiple Stripe refunds for this booking: manual review required');
-  const matched = matches[0];
-  const expected = Math.round(Number(booking.refund_amount ?? booking.total) * 100);
-  if (matched && matched.amount !== expected) throw new Error('Stripe refund amount differs: manual review required');
-  const next = !matched || ['failed', 'canceled'].includes(matched.status) ? 'a_rembourser'
-    : matched.status === 'succeeded' ? 'rembourse' : matched.status === 'pending' ? 'remboursement_en_cours' : null;
-  if (!next) throw new Error('Unknown Stripe refund status: manual review required');
-  // Synchronize payment-level accounting with succeeded/pending refunds only.
-  db.exec('CREATE TABLE IF NOT EXISTS stripe_refund_ledger (refund_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, amount_cents INTEGER NOT NULL)');
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare('UPDATE stripe_payments SET payment_intent = ? WHERE session_id = ?').run(pi, pay.session_id);
-    db.prepare('DELETE FROM stripe_refund_ledger WHERE session_id = ?').run(pay.session_id);
-    const active = refunds.filter(r => ['succeeded', 'pending'].includes(r.status));
-    for (const r of active) db.prepare('INSERT INTO stripe_refund_ledger (refund_id,session_id,amount_cents) VALUES (?,?,?)').run(r.id, pay.session_id, r.amount);
-    db.prepare('UPDATE stripe_payments SET refunded_cents = ? WHERE session_id = ?').run(active.reduce((sum,r) => sum+r.amount, 0), pay.session_id);
-    db.prepare('UPDATE bookings SET payment_status = ?, refund_id = ? WHERE id = ?').run(next, matched?.id || null, bookingId);
-    db.exec('COMMIT');
-  } catch (e) { db.exec('ROLLBACK'); throw e; }
-  return { status: next, refundId: matched?.id || null, verified: true };
-}
-
 /** Paiement d'une carte cadeau ou d'un pack d'heures : une session Stripe dédiée, reconnue par son identifiant. */
 async function checkoutGift({ db, gift, email, appUrl }) {
   if (!configured()) throw new Error('Stripe not configured');
@@ -243,4 +165,4 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund, reconcileRefund, checkoutGift };
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, refund, checkoutGift };

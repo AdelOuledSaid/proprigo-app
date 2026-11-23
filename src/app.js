@@ -1265,20 +1265,9 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
       parrainages: db.prepare('SELECT COUNT(*) AS n FROM users WHERE referred_by IS NOT NULL').get().n,
     };
   };
-  // Empreinte légère pour détecter les nouvelles réservations sans reconnecter l'administrateur.
-  // Le journal couvre également les changements de statut, attribution et paiement.
-  const adminRevision = () => {
-    const b = db.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS last FROM bookings').get();
-    const e = db.prepare('SELECT COALESCE(MAX(id), 0) AS last FROM events').get();
-    return `${b.n}:${b.last}:${e.last}`;
-  };
-  route('GET', '/api/admin/revision', ({ user }) => {
-    needStaff(user);
-    return { revision: adminRevision() };
-  });
   route('GET', '/api/admin/overview', ({ user }) => {
     needStaff(user);
-    const bookings = db.prepare('SELECT * FROM bookings ORDER BY id DESC').all().map(bookingView);
+    const bookings = db.prepare('SELECT * FROM bookings ORDER BY date DESC, time DESC LIMIT 200').all().map(bookingView);
     const icalFlagged = db.prepare("SELECT b.id, b.date, b.time, b.cp, h.name AS home_name FROM bookings b LEFT JOIN homes h ON h.id = b.home_id WHERE b.ical_flagged = 1 AND b.status IN ('en_attente','proposee','attribuee') ORDER BY b.date").all();
     const done = db.prepare("SELECT * FROM bookings WHERE status = 'terminee'").all(); // toutes, pas seulement les 200 dernières
     const totals = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS note, COUNT(rating) AS avis FROM bookings").get();
@@ -1296,7 +1285,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
     const clients = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client'").get().n;
     if (!isOwner(user)) {
       return { kpis: { reservations: totals.n, noteMoyenne: totals.avis ? Math.round(totals.note * 10) / 10 : null, clients, terminees: done.length, caHT: 0, marge: 0, aRembourser: { n: 0, montant: 0 } },
-        revision: adminRevision(), couts: null, paymentsEnabled, bookings: bookings.map((b) => ({ ...b, total: null })), icalFlagged, workers: workers.map((w) => ({ ...w, email: '', phone: '' })), waitlist: [], events: [], incidents, metrics: null, staff: 'planning' };
+        couts: null, paymentsEnabled, bookings: bookings.map((b) => ({ ...b, total: null })), icalFlagged, workers: workers.map((w) => ({ ...w, email: '', phone: '' })), waitlist: [], events: [], incidents, metrics: null, staff: 'planning' };
     }
     return {
       kpis: {
@@ -1304,7 +1293,7 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
         noteMoyenne: totals.avis ? Math.round(totals.note * 10) / 10 : null, clients,
         aRembourser: { n: refund.n, montant: refund.montant },
       },
-      revision: adminRevision(), couts: pricing.COSTS, paymentsEnabled,
+      couts: pricing.COSTS, paymentsEnabled,
       bookings, icalFlagged, workers, waitlist: wl, events, incidents,
       metrics: metrics(),
       quoteRequests: db.prepare("SELECT COUNT(*) AS n FROM quote_requests WHERE status = 'nouveau'").get().n,
@@ -1437,7 +1426,6 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
 
   route('POST', '/api/admin/bookings/:id/refunded', ({ user, id }) => {
     need(user, 'admin');
-    if (stripeReady) throw new HttpError(409, 'Remboursement Stripe : utilisez le bouton de remboursement Stripe et attendez sa confirmation.');
     const r = db.prepare("UPDATE bookings SET payment_status = 'rembourse' WHERE id = ? AND payment_status = 'a_rembourser'").run(id);
     if (!r.changes) throw new HttpError(409, 'Rien à rembourser pour cette réservation.');
     db_.log(db, `Réservation n° ${id} : remboursement effectué.`);
@@ -1453,22 +1441,11 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
     if (!stripePay.configured()) throw new HttpError(503, "Stripe n'est pas configuré sur ce serveur : remboursez dans le tableau de bord Stripe, puis cliquez sur « Marquer remboursé ».");
     let r;
     try { r = await stripePay.refund({ db, bookingId: id, amountCents: amount }); }
-    catch (e) { throw new HttpError(502, `Remboursement refusé : ${e.message}. Vérifiez dans Stripe avant de réessayer.`); }
+    catch (e) { throw new HttpError(502, `Remboursement refusé : ${e.message}. Rien n'a été débité ; vérifiez dans Stripe.`); }
     db.prepare("UPDATE bookings SET payment_status = ?, refund_id = ? WHERE id = ?").run(r.status === 'succeeded' ? 'rembourse' : 'remboursement_en_cours', r.id, id);
     db_.log(db, `Réservation n° ${id} : ${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe (${r.status === 'pending' ? 'en cours' : 'effectué'}).`);
     engine.notify(db, id, `Votre remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € a été lancé. Il apparaît sur votre compte bancaire sous 5 à 10 jours.`);
     return { ok: true, message: r.status === 'succeeded' ? `${(amount / 100).toFixed(2).replace('.', ',')} € remboursés dans Stripe.` : `Remboursement de ${(amount / 100).toFixed(2).replace('.', ',')} € en cours chez Stripe.` };
-  });
-
-  // Réconciliation explicite, réservée à l'administrateur : vérifie Stripe avant de modifier un ancien statut.
-  route('POST', '/api/admin/bookings/:id/reconcile-refund', async ({ user, id }) => {
-    need(user, 'admin');
-    if (!stripeReady) throw new HttpError(503, 'Stripe doit être configuré pour vérifier un remboursement.');
-    let result;
-    try { result = await stripePay.reconcileRefund({ db, bookingId: id }); }
-    catch (e) { throw new HttpError(409, `Vérification impossible : ${e.message}. Aucune modification effectuée.`); }
-    db_.log(db, `Réservation n° ${id} : statut de remboursement vérifié auprès de Stripe (${result.status}).`);
-    return { ok: true, ...result, message: `Statut vérifié auprès de Stripe : ${result.status}.` };
   });
 
   // ----- planning de la semaine -----
@@ -1554,18 +1531,6 @@ ${c.company ? `<p><b>Facturé à :</b> ${e(c.company)}${c.billing_address ? `<br
           if (refund && typeof refund.id === 'string') {
             if (refund.status === 'succeeded') db.prepare("UPDATE bookings SET payment_status = 'rembourse' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
             if (['failed', 'canceled'].includes(refund.status)) db.prepare("UPDATE bookings SET payment_status = 'a_rembourser' WHERE refund_id = ? AND payment_status = 'remboursement_en_cours'").run(refund.id);
-            if (['failed', 'canceled'].includes(refund.status)) {
-              db.exec('CREATE TABLE IF NOT EXISTS stripe_refund_ledger (refund_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, amount_cents INTEGER NOT NULL)');
-              const entry = db.prepare('SELECT * FROM stripe_refund_ledger WHERE refund_id = ?').get(refund.id);
-              if (entry) {
-                db.exec('BEGIN IMMEDIATE');
-                try {
-                  db.prepare('DELETE FROM stripe_refund_ledger WHERE refund_id = ?').run(refund.id);
-                  db.prepare('UPDATE stripe_payments SET refunded_cents = MAX(0, refunded_cents - ?) WHERE session_id = ?').run(entry.amount_cents, entry.session_id);
-                  db.exec('COMMIT');
-                } catch (e) { db.exec('ROLLBACK'); throw e; }
-              }
-            }
           }
         }
         if (event.type === 'checkout.session.async_payment_failed') {
