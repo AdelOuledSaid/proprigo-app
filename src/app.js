@@ -2509,6 +2509,16 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
         'Cache-Control': longCache ? 'public, max-age=31536000, immutable' : ['.png', '.svg', '.ico'].includes(ext) ? 'public, max-age=604800' : 'no-cache',
         ETag: etag, Vary: 'Accept-Encoding',
       };
+      // La page d'accueil appelle app.js, art.js et styles.css avec le numéro de version (?v=1.5.9) :
+      // après une mise en ligne, aucun navigateur ne peut garder l'ancien code en mémoire.
+      if (path.basename(file) === 'index.html') {
+        const html = fs.readFileSync(file, 'utf8').replace(/(src|href)="\/(app\.js|art\.js|styles\.css)"/g, `$1="/$2?v=${VERSION}"`)
+          .replace('</head>', `<meta name="proprigo-version" content="${VERSION}">\n</head>`);
+        const out = /\bgzip\b/.test(req.headers['accept-encoding'] || '') ? zlib.gzipSync(html) : Buffer.from(html);
+        const { ETag: _omit, ...pageHeaders } = headers;
+        res.writeHead(200, { ...pageHeaders, 'Cache-Control': 'no-store', ...(out.length !== Buffer.byteLength(html) ? { 'Content-Encoding': 'gzip' } : {}), 'Content-Length': out.length });
+        return res.end(req.method === 'HEAD' ? undefined : out);
+      }
       if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); return res.end(); }
       const compressible = /^(text\/|application\/(json|manifest\+json|javascript)|image\/svg)/.test(headers['Content-Type']);
       if (compressible && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {

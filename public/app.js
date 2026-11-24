@@ -125,7 +125,10 @@
     const r = await api('GET', '/api/me');
     me = r.user;
     if (!CONFIG.loaded) CONFIG = { ...(await api('GET', '/api/config').catch(() => ({}))), loaded: true };
-    if (!window.__proprigoVersion && CONFIG.version) window.__proprigoVersion = CONFIG.version;
+    // Version de cette page : celle écrite par le serveur dans la page au chargement.
+    if (!window.__proprigoVersion) window.__proprigoVersion = document.querySelector('meta[name="proprigo-version"]')?.content || CONFIG.version;
+    const vEl = document.getElementById('appVersion');
+    if (vEl && window.__proprigoVersion) vEl.textContent = `Version ${window.__proprigoVersion}`;
   }
 
   const views = {};

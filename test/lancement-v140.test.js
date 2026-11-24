@@ -299,3 +299,17 @@ test('paiement refusé par Stripe : la vraie raison est notée au journal ; clé
     if (env.w === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = env.w;
   }
 });
+
+test('page d\'accueil : code appelé avec le numéro de version, jamais gardé en mémoire', async () => {
+  const a = await start();
+  try {
+    const { version } = require('../package.json');
+    const r = await fetch(a.base + '/');
+    const html = await r.text();
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.match(html, new RegExp(`src="/app\\.js\\?v=${version.replace(/\./g, '\\.')}"`));
+    assert.match(html, new RegExp(`href="/styles\\.css\\?v=${version.replace(/\./g, '\\.')}"`));
+    assert.match(html, new RegExp(`<meta name="proprigo-version" content="${version.replace(/\./g, '\\.')}">`));
+    assert.equal((await fetch(a.base + `/app.js?v=${version}`)).status, 200);
+  } finally { a.close(); }
+});
