@@ -35,15 +35,17 @@ Sur le Mac, installez :
 
 ## 1. Créer les projets (une seule fois, sur le Mac)
 
-Dans le Terminal, depuis le dossier du projet :
+Android se fait sur **Windows ou Mac**. L'iPhone, uniquement sur **Mac**.
+
+Dans le Terminal (Mac) ou PowerShell (Windows), depuis le dossier du projet :
 
 ```
 cd proprigo-app/mobile
 npm install
-npm run setup
+npm run setup:android
 ```
 
-Cela crée les dossiers `android/` et `ios/`, les icônes et l'écran de démarrage, et branche les notifications côté iPhone.
+Plus tard, sur le Mac, pour l'iPhone : `npm run setup:ios`.
 
 ---
 
