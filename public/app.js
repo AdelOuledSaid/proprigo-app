@@ -103,6 +103,21 @@
   }
 
   let CONFIG = {};
+  // Nouvelle version en ligne : un onglet ouvert depuis longtemps garde l'ancien code en mémoire.
+  // On vérifie toutes les 5 minutes et au retour sur l'onglet, puis on propose de recharger.
+  const checkVersion = async () => {
+    if (!window.__proprigoVersion || document.getElementById('newVersion')) return;
+    try {
+      const r = await fetch('/api/health', { cache: 'no-store' });
+      const h = await r.json();
+      if (h.version && h.version !== window.__proprigoVersion) {
+        document.body.insertAdjacentHTML('beforeend', `<div id="newVersion" class="new-version" role="status"><span>Une nouvelle version de Proprigo est en ligne.</span><button class="btn blue small-btn" type="button">Mettre à jour</button></div>`);
+        document.querySelector('#newVersion button').onclick = () => location.reload();
+      }
+    } catch { /* hors ligne : on réessaiera */ }
+  };
+  setInterval(checkVersion, 5 * 60e3);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersion(); });
   // Prix en vigueur (envoyés par le serveur, modifiables dans l'admin) ; valeurs de secours si hors ligne.
   const PRICES = () => CONFIG.prices || { menage: 37, grand: 42, bureau: 42, bureauHT: 35, airbnb: { studio: 95, T2: 119, T3: 145, maison: 195 }, kit: 15, sunday: 0.2, urgent: 0.25, subscription: 0.05 };
   const pct = (x) => `${Math.round(x * 100)} %`;
@@ -110,6 +125,7 @@
     const r = await api('GET', '/api/me');
     me = r.user;
     if (!CONFIG.loaded) CONFIG = { ...(await api('GET', '/api/config').catch(() => ({}))), loaded: true };
+    if (!window.__proprigoVersion && CONFIG.version) window.__proprigoVersion = CONFIG.version;
   }
 
   const views = {};

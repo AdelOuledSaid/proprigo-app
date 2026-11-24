@@ -1174,7 +1174,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
 
   // ----- réglages publics : lien d'avis Google -----
   const reviewUrl = /^https:\/\/[^\s"<>]+$/.test(googleReviewUrl || '') ? googleReviewUrl : '';
-  route('GET', '/api/config', () => ({ googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
+  route('GET', '/api/config', () => ({ version: VERSION, googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
 
   // ----- tarifs et zones, modifiables par le responsable -----
   // Les réservations déjà créées gardent leur prix : seules les nouvelles suivent la nouvelle grille.
