@@ -562,7 +562,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       return { checkout_url: session.url };
     } catch (e) {
       if (/already completed/.test(e.message)) throw new HttpError(409, 'Paiement déjà reçu : la confirmation arrive dans quelques secondes.');
-      throw new HttpError(502, 'Paiement indisponible. Réessayez.');
+      db_.log(db, `PAIEMENT IMPOSSIBLE pour la réservation n° ${id} (${user.email}) : ${String(e.message).slice(0, 300)}`);
+      throw new HttpError(502, 'Paiement indisponible. Réessayez dans un instant.');
     }
   });
   // ---- double encaissement Stripe : remboursement automatique de ce qui a été payé en trop
@@ -852,6 +853,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
           return { status: 200, data: { checkout_url: session.url, created: 0, reused: true } };
         } catch (e) {
           if (/already completed/.test(e.message)) throw new HttpError(409, 'Paiement déjà reçu : la confirmation arrive dans quelques secondes.');
+          db_.log(db, `PAIEMENT IMPOSSIBLE (reprise) pour la réservation n° ${ids.join(', ')} (${user.email}) : ${String(e.message).slice(0, 300)}`);
           throw new HttpError(502, 'Impossible de reprendre le paiement. Réessayez dans un instant.');
         }
       }
@@ -898,7 +900,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
         return { status: 201, data: { checkout_url: session.url, created: ids.length, payment_mode: payMode } };
       } catch (e) {
         db.prepare(`UPDATE bookings SET status = 'annulee', payment_status = 'paiement_echoue' WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
-        throw new HttpError(502, 'Impossible de démarrer le paiement Stripe. Réessayez.');
+        db_.log(db, `PAIEMENT IMPOSSIBLE pour la réservation n° ${ids.join(', ')} (${user.email}) : ${String(e.message).slice(0, 300)}`);
+        throw new HttpError(502, 'Impossible de démarrer le paiement Stripe. Réessayez dans un instant.');
       }
     }
     const first = bookingView(db.prepare('SELECT * FROM bookings WHERE id = ?').get(ids[0]));
@@ -1129,7 +1132,10 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try {
       const session = await stripePay.checkoutGift({ db, gift: { ...g, id }, email: user.email, appUrl });
       return { checkout_url: session.url };
-    } catch { throw new HttpError(502, 'Paiement indisponible. Réessayez.'); }
+    } catch (e) {
+      db_.log(db, `PAIEMENT IMPOSSIBLE (carte cadeau ou pack) pour ${user.email} : ${String(e.message).slice(0, 300)}`);
+      throw new HttpError(502, 'Paiement indisponible. Réessayez dans un instant.');
+    }
   });
   route('POST', '/api/gifts/redeem', ({ user, body }) => {
     need(user, 'client');

@@ -262,3 +262,40 @@ test('ADMIN_EMAIL : le compte responsable prend la vraie adresse et reçoit les 
     assert.ok(b.db.prepare("SELECT 1 FROM users WHERE email = 'contact@proprigo.fr' AND role = 'admin' AND email_verified_at IS NOT NULL").get());
   } finally { b.close(); }
 });
+
+test('paiement refusé par Stripe : la vraie raison est notée au journal ; clé anti-doublon et expiration sûres', async () => {
+  const env = { k: process.env.STRIPE_SECRET_KEY, w: process.env.STRIPE_WEBHOOK_SECRET };
+  process.env.STRIPE_SECRET_KEY = 'sk_test_fake'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_fake';
+  const realFetch = global.fetch;
+  const sent = [];
+  let refuse = true;
+  global.fetch = async (url, init) => {
+    if (String(url) === 'https://api.stripe.com/v1/checkout/sessions' && init.method === 'POST') {
+      sent.push({ key: init.headers['Idempotency-Key'], body: new URLSearchParams(init.body.toString()) });
+      if (refuse) return new Response(JSON.stringify({ error: { type: 'idempotency_error', code: 'idempotency_key_in_use', message: 'Keys for idempotent requests can only be used with the same parameters' } }), { status: 400 });
+      return new Response(JSON.stringify({ id: `cs_test_${sent.length}`, url: `https://checkout.stripe.com/c/pay/cs_test_${sent.length}` }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  const a = await start({ paymentsEnabled: true, appUrl: 'https://proprigo.example' });
+  try {
+    const claire = await a.session('claire@proprigo.test', 'demo-proprigo');
+    const body = { service: 'menage', hours: 3, cp: '75012', address: '10 rue de Charenton', date: '2026-11-25', time: '10:00' };
+    const r = await claire('POST', '/api/bookings', body);
+    assert.equal(r.status, 502);
+    const log = a.db.prepare("SELECT text FROM events WHERE text LIKE 'PAIEMENT IMPOSSIBLE%'").all().map((x) => x.text).join(' ');
+    assert.match(log, /idempotency_key_in_use/);
+    assert.match(log, /same parameters/);
+    const exp = Number(sent[0].body.get('expires_at'));
+    assert.ok(exp - Math.floor(Date.now() / 1000) >= 34 * 60, 'au moins 30 minutes, avec une marge');
+    refuse = false;
+    const ok = await claire('POST', '/api/bookings', { ...body, time: '14:00' });
+    assert.equal(ok.status, 201);
+    assert.ok(ok.data.checkout_url);
+    assert.notEqual(sent[0].key, sent[1].key, 'une autre demande ne réutilise jamais la même clé');
+  } finally {
+    a.close(); global.fetch = realFetch;
+    if (env.k === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = env.k;
+    if (env.w === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = env.w;
+  }
+});

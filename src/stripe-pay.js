@@ -65,7 +65,9 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   params.set('line_items[0][quantity]', '1');
   params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&booking=${ids[0]}#/mes-reservations`);
   params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
-  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
+  // Stripe exige au moins 30 minutes entre la création et l'expiration : 35 minutes laissent une marge
+  // (horloges légèrement décalées, réseau lent).
+  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 35 * 60));
   let resp;
   try {
     resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
@@ -73,7 +75,9 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
       headers: {
         Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${amount}:${Math.floor(Date.now() / 1800000)}`).digest('hex')}`,
+        // Clé anti-doublon tirée de la demande exacte : deux envois identiques (double clic) donnent la même
+        // session ; une demande différente (heure d'expiration, montant…) ne réutilise jamais une ancienne clé.
+        'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${params.toString()}`).digest('hex')}`,
       },
       body: params,
       signal: AbortSignal.timeout(15000),
@@ -96,7 +100,7 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
       code: session.error?.code,
       message: session.error?.message,
     });
-    throw new Error('Stripe session failed');
+    throw new Error(`Stripe a refusé la session (${resp.status}${session.error?.code ? `, ${session.error.code}` : ''})${session.error?.message ? ` : ${session.error.message}` : ''}`);
   }
   try {
     // Recheck after Stripe API call: the webhook might have marked it paid meanwhile.
