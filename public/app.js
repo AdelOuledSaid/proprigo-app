@@ -99,7 +99,7 @@
     $nav.querySelectorAll('a').forEach((x) => x.addEventListener('click', close));
     window.addEventListener('hashchange', close, { once: true });
     const lo = document.getElementById('logout');
-    if (lo) lo.onclick = async () => { await api('POST', '/api/logout', {}); me = null; go('#/'); route(); };
+    if (lo) lo.onclick = async () => { await nativeForget(); await api('POST', '/api/logout', {}); me = null; go('#/'); route(); };
   }
 
   let CONFIG = {};
@@ -133,6 +133,7 @@
     if (!window.__proprigoVersion) window.__proprigoVersion = document.querySelector('meta[name="proprigo-version"]')?.content || CONFIG.version;
     const vEl = document.getElementById('appVersion');
     if (vEl && window.__proprigoVersion) vEl.textContent = `Version ${window.__proprigoVersion}`;
+    if (me && !loadMe.nativeDone) { loadMe.nativeDone = true; try { nativeRefresh(); } catch { /* appli web */ } }
   }
 
   const views = {};
@@ -281,13 +282,13 @@
           <article class="offer">
             <span class="offer-art">${ART.services.bureau}</span>
             <h3>Nettoyage de bureaux</h3>
-            <p class="offer-price"><b>${eu(P.bureauHT)} €</b> HT de l'heure</p>
-            <ul><li>Postes de travail, sols, sanitaires, coin café</li><li>Avant l'ouverture ou après la fermeture</li><li>Chaque semaine avec la même intervenante, facture avec TVA</li></ul>
+            <p class="offer-price"><b>${eu(CONFIG.franchiseTVA ? P.bureau : P.bureauHT)} €</b> ${CONFIG.franchiseTVA ? '' : 'HT '}de l'heure</p>
+            <ul><li>Postes de travail, sols, sanitaires, coin café</li><li>Avant l'ouverture ou après la fermeture</li><li>Chaque semaine avec la même intervenante, une facture par passage</li></ul>
             <button class="btn ghost full" data-book="bureau">Demander un passage</button>
             <a class="small" href="#/pro" style="text-align:center">Grands locaux, agences, syndics : devis</a>
           </article>
         </div>
-        <p class="small muted offers-note">Prix TTC en Île-de-France (bureaux : ${eu(P.bureauHT)} € HT, soit ${eu(P.bureau)} € TTC). Matériel et produits apportés : +${eu(P.kit)} €. Dimanche et jours fériés : +${Math.round(P.sunday * 100)} %. Arrivée dans les 3 heures : +${Math.round(P.urgent * 100)} %.</p>
+        <p class="small muted offers-note">${CONFIG.franchiseTVA ? "Prix en Île-de-France, TVA non applicable (art. 293 B du CGI)." : `Prix TTC en Île-de-France (bureaux : ${eu(P.bureauHT)} € HT, soit ${eu(P.bureau)} € TTC).`} Matériel et produits apportés : +${eu(P.kit)} €. Dimanche et jours fériés : +${Math.round(P.sunday * 100)} %. Arrivée dans les 3 heures : +${Math.round(P.urgent * 100)} %.</p>
       </section>
 
       <section class="live">
@@ -723,9 +724,9 @@
           <div><dt>À faire</dt><dd>${draft.tasks.length} tâches${draft.photoConsent ? ', photos avant / après' : ''}</dd></div>
         </dl>
         ${q.ok ? `<div class="price">
-          <div class="row"><span>Total TTC${n > 1 ? ' du premier ménage' : ''}</span><span class="total">${eur(q.total)}</span></div>
+          <div class="row"><span>Total${CONFIG.franchiseTVA ? '' : ' TTC'}${n > 1 ? ' du premier ménage' : ''}</span><span class="total">${eur(q.total)}</span></div>
           ${q.lines.map((l) => `<div class="line"><span>${esc(l.label)}</span><span>${eur(l.amount)}</span></div>`).join('')}
-          ${!PRO.includes(q.service) ? (sapOn() ? `<div class="line"><span>Après crédit d'impôt de 50 %*</span><span>${eur(q.total / 2)}</span></div>` : '') : `<div class="line"><span>Dont TVA 20 %</span><span>${eur(q.total - q.total / 1.2)}</span></div>`}
+          ${!PRO.includes(q.service) ? (sapOn() ? `<div class="line"><span>Après crédit d'impôt de 50 %*</span><span>${eur(q.total / 2)}</span></div>` : '') : CONFIG.franchiseTVA ? '<div class="line"><span>TVA non applicable (art. 293 B du CGI)</span><span></span></div>' : `<div class="line"><span>Dont TVA 20 %</span><span>${eur(q.total - q.total / 1.2)}</span></div>`}
         </div>
         ${n > 1 ? '<p class="small muted">Chaque ménage est facturé à son prix (supplément le dimanche ou un jour férié).</p>' : ''}
         ${!PRO.includes(q.service) && sapOn() ? '<p class="small muted">* Crédit d\'impôt pour l\'emploi d\'un salarié à domicile (article 199 sexdecies du CGI), selon les conditions en vigueur. Attestation annuelle fournie.</p>' : ''}` : `<p class="err">${q.errors.map(esc).join(' ')}</p>`}
@@ -1075,9 +1076,54 @@
       <p class="small muted" style="margin:8px 0 0">Zone claire : vos disponibilités. Les missions et propositions apparaissent dans la journée.</p>`;
     box.querySelectorAll('[data-wk]').forEach((b) => b.onclick = () => { weekStart = b.dataset.wk || null; paintWeek(b.dataset.wk || undefined); });
   }
+  // ---- appli Android / iPhone (Capacitor) : notifications natives ----
+  const NATIVE = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() ? window.Capacitor : null;
+  const NPush = NATIVE && NATIVE.Plugins && NATIVE.Plugins.PushNotifications;
+  let nativeToken = null;
+  if (NPush) {
+    NPush.addListener('registration', async (t) => {
+      nativeToken = t.value;
+      if (me) { try { await api('POST', '/api/push/native', { platform: NATIVE.getPlatform(), token: t.value }); } catch { /* réessayé au prochain lancement */ } }
+    });
+    NPush.addListener('pushNotificationActionPerformed', (a) => {
+      const url = String(a?.notification?.data?.url || '');
+      if (url.startsWith('/#/')) location.hash = url.slice(1);
+    });
+    if (NATIVE.getPlatform() === 'android' && NPush.createChannel) NPush.createChannel({ id: 'proprigo', name: 'Ménages', importance: 4 }).catch(() => {});
+  }
+  async function nativeRefresh() { // relance l'enregistrement si l'autorisation est déjà donnée
+    if (!NPush || !me) return;
+    try { if ((await NPush.checkPermissions()).receive === 'granted') await NPush.register(); } catch { /* sans effet */ }
+  }
+  async function nativeForget() { // à la déconnexion, ce téléphone ne reçoit plus les notifications du compte
+    if (!nativeToken) return;
+    try { await api('POST', '/api/push/native/remove', { token: nativeToken }); } catch { /* sans effet */ }
+    loadMe.nativeDone = false;
+  }
+  async function paintNativePush(box, intro) {
+    const head = '<h2>Notifications sur ce téléphone</h2>';
+    let perm = 'prompt';
+    try { perm = (await NPush.checkPermissions()).receive; } catch { /* inconnu */ }
+    box.innerHTML = `${head}<p class="small muted">${intro}</p>
+      ${perm === 'denied' ? '<p class="msg warn">Les notifications sont bloquées. Autorisez-les dans les Réglages du téléphone, rubrique Proprigo.</p>'
+        : perm === 'granted' ? '<p><span class="pill ok">Activées sur ce téléphone</span></p><button class="btn ghost" id="pushTest">Envoyer une notification de test</button>'
+          : '<button class="btn blue" id="pushOn">Activer les notifications</button>'}`;
+    const onBtn = document.getElementById('pushOn');
+    if (onBtn) onBtn.onclick = async () => {
+      onBtn.disabled = true;
+      try {
+        if ((await NPush.requestPermissions()).receive !== 'granted') throw new Error('Notifications refusées. Vous pourrez les autoriser dans les Réglages du téléphone.');
+        await NPush.register();
+        toast('Notifications activées sur ce téléphone.'); setTimeout(() => paintNativePush(box, intro), 800);
+      } catch (e) { toast(e.message || 'Activation impossible.'); onBtn.disabled = false; }
+    };
+    const t = document.getElementById('pushTest');
+    if (t) t.onclick = async () => { try { const r = await api('POST', '/api/push/test', {}); toast(r.message); } catch (e) { toast(e.message); } };
+  }
   // ---- notifications sur ce téléphone (intervenante et client) ----
   async function paintPush(box, intro) {
     if (!box) return;
+    if (NPush) return paintNativePush(box, intro);
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
     const head = '<h2>Notifications sur ce téléphone</h2>';
@@ -2012,7 +2058,7 @@
       <div class="pro-grid">
         <article class="card"><h3>Ce qui est fait</h3><ul class="ticks"><li>Hall d'entrée, boîtes aux lettres, portes vitrées</li><li>Escaliers, paliers, rampes</li><li>Cabine d'ascenseur</li><li>Vitres des parties communes accessibles</li><li>Liste de tâches propre à votre immeuble</li></ul></article>
         <article class="card"><h3>Comment ça se passe</h3><ul class="ticks"><li>Fréquence fixée ensemble (chaque semaine, plusieurs fois par semaine…)</li><li>Une intervenante attitrée, remplacée si elle est absente</li><li>Tâches cochées et photos après passage, consultables en ligne</li><li>Un signalement en un clic si quelque chose ne va pas</li></ul></article>
-        <article class="card"><h3>Facturation</h3><ul class="ticks"><li>À partir de ${String(P.bureauHT).replace('.', ',')} € HT de l'heure</li><li>Une facture par passage, au nom du syndic, téléchargeable</li><li>Paiement en ligne sécurisé</li><li>Sans engagement de durée</li></ul></article>
+        <article class="card"><h3>Facturation</h3><ul class="ticks"><li>À partir de ${String(CONFIG.franchiseTVA ? P.bureau : P.bureauHT).replace('.', ',')} € ${CONFIG.franchiseTVA ? '' : 'HT '}de l'heure</li><li>Une facture par passage, au nom du syndic, téléchargeable</li><li>Paiement en ligne sécurisé</li><li>Sans engagement de durée</li></ul></article>
       </div>
       ${devisBlock('syndic', 'Devis pour votre immeuble')}`;
     bindDevis();
@@ -2354,7 +2400,14 @@
             <label>Votre mot de passe, pour confirmer<input type="password" name="password" autocomplete="current-password" required></label>
             <button class="btn danger">Supprimer définitivement mon compte</button>
           </form>
-        </details>` : `<p class="small muted">${me.role === 'admin' ? 'Compte administrateur : choisissez un mot de passe long et unique avant de partager le site.' : "Pour fermer votre compte intervenante, écrivez à l'équipe Proprigo : certains documents liés à votre activité doivent être conservés."}</p>`}
+        </details>` : me.role === 'admin' ? '<p class="small muted">Compte administrateur : choisissez un mot de passe long et unique avant de partager le site.</p>' : `
+        <details class="danger"><summary>Supprimer mon compte</summary>
+          <p class="small">L'équipe ferme votre compte sous 30 jours, une fois vos dernières missions payées. Vos documents sont effacés ; les relevés de paiement sont gardés le temps exigé par la loi.</p>
+          <form id="delReq" class="stack">
+            <label>Votre mot de passe, pour confirmer<input type="password" name="password" autocomplete="current-password" required></label>
+            <button class="btn danger">Demander la suppression de mon compte</button>
+          </form>
+        </details>`}
       </section>`;
     if (ref) {
       const text = `Je te recommande Proprigo pour le ménage : ${ref.amount} € offerts sur ton premier ménage avec mon code ${ref.code}.`;
@@ -2380,7 +2433,7 @@
     if (rd) rd.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/gifts/redeem', { code: rd.code.value }); toast(r.message); document.getElementById('myCredit').textContent = eur(r.credit); rd.reset(); } catch (err) { toast(err.message); } };
     const wp = document.getElementById('wprof');
     if (wp) wp.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/worker/profile', formData(wp)); toast(r.message); } catch (err) { toast(err.message); } };
-    document.getElementById('logout2').onclick = async () => { await api('POST', '/api/logout', {}); me = null; renderNav(); go('#/'); route(); };
+    document.getElementById('logout2').onclick = async () => { await nativeForget(); await api('POST', '/api/logout', {}); me = null; renderNav(); go('#/'); route(); };
     document.getElementById('info').onsubmit = async (e) => {
       e.preventDefault();
       try { const r = await api('POST', '/api/account', formData(e.target)); await loadMe(); renderNav(); toast(r.message); } catch (err) { toast(err.message); }
@@ -2393,6 +2446,11 @@
     if (del) del.onsubmit = async (e) => {
       e.preventDefault();
       try { await api('POST', '/api/account/delete', formData(e.target)); me = null; toast('Votre compte est supprimé.'); go('#/'); } catch (err) { toast(err.message); }
+    };
+    const delReq = document.getElementById('delReq');
+    if (delReq) delReq.onsubmit = async (e) => {
+      e.preventDefault();
+      try { const r = await api('POST', '/api/account/delete-request', formData(e.target)); toast(r.message); e.target.closest('details').innerHTML = `<p class="msg ok">${esc(r.message)}</p>`; } catch (err) { toast(err.message); }
     };
   };
 
@@ -2464,7 +2522,7 @@
 
   // ---------- routeur ----------
   // installation sur l'écran d'accueil (service minimal, sans cache)
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  if (!NATIVE && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 

@@ -1,0 +1,24 @@
+{
+  "name": "proprigo-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Applis Android et iPhone de Proprigo (Capacitor) : elles ouvrent https://proprigo.fr avec les notifications natives.",
+  "scripts": {
+    "setup": "npx cap add android && npx cap add ios && npm run icons && npm run sync && node scripts/setup-native.js",
+    "icons": "npx capacitor-assets generate --iconBackgroundColor '#1f4fff' --splashBackgroundColor '#f2f5ff' --splashBackgroundColorDark '#0f1a3d'",
+    "sync": "npx cap sync && node scripts/setup-native.js",
+    "android": "npx cap open android",
+    "ios": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/push-notifications": "^8.0.0",
+    "@capacitor/splash-screen": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.0"
+  }
+}

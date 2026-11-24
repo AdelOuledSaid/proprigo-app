@@ -13,6 +13,7 @@ const mailer = require('./mailer');
 const seo = require('./seo');
 const backups = require('./backup');
 const push = require('./push');
+const nativePush = require('./native-push');
 const VERSION = require('../package.json').version;
 const os = require('node:os');
 const stripePay = require('./stripe-pay');
@@ -28,7 +29,7 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed = true, secureCookies = false, production = false, paymentsEnabled = false, photosDir = null, icalAllowAny = false, icalFetch = undefined, autoSync = false, mail = {}, appUrl = 'http://localhost:3000', now = () => new Date(), backupDir = null, googleReviewUrl = '', adminEmail = '' } = {}) {
+function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed = true, secureCookies = false, production = false, paymentsEnabled = false, photosDir = null, icalAllowAny = false, icalFetch = undefined, autoSync = false, mail = {}, appUrl = 'http://localhost:3000', now = () => new Date(), backupDir = null, googleReviewUrl = '', adminEmail = '', companyConfig = null } = {}) {
   const PHOTOS = photosDir || (dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-photos-')) : path.join(path.dirname(dbFile), 'photos'));
   fs.mkdirSync(PHOTOS, { recursive: true });
   const db = db_.open(dbFile);
@@ -221,7 +222,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
     const backupOk = !backupDir || (lastBackup && Date.now() - lastBackup < 48 * 3600e3) || Date.now() - started < 3600e3;
     const ok = dbOk && backupOk;
-    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', emails: mailer.cfg.provider ? `${mailer.cfg.provider} (${String(mailer.cfg.from).replace(/^.*<|>.*$/g, '')}${mailer.cfg.replyTo ? `, réponses à ${String(mailer.cfg.replyTo).replace(/^.*<|>.*$/g, '')}` : ''})` : 'mode local : aucun e-mail ne part', paiements: stripeReady ? (String(process.env.STRIPE_SECRET_KEY).startsWith('sk_live_') ? 'Stripe réel' : 'Stripe test') : 'simulés', erreurs24h: db.prepare("SELECT COUNT(*) AS n FROM server_errors WHERE at >= datetime('now', '-1 day')").get().n, factures: companyMissing.length ? `à compléter (config/entreprise.json : ${companyMissing.join(', ')})` : 'ok', backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
+    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', emails: mailer.cfg.provider ? `${mailer.cfg.provider} (${String(mailer.cfg.from).replace(/^.*<|>.*$/g, '')}${mailer.cfg.replyTo ? `, réponses à ${String(mailer.cfg.replyTo).replace(/^.*<|>.*$/g, '')}` : ''})` : 'mode local : aucun e-mail ne part', paiements: stripeReady ? (String(process.env.STRIPE_SECRET_KEY).startsWith('sk_live_') ? 'Stripe réel' : 'Stripe test') : 'simulés', erreurs24h: db.prepare("SELECT COUNT(*) AS n FROM server_errors WHERE at >= datetime('now', '-1 day')").get().n, tva: franchiseTVA ? `franchise (293 B) : CA ${parisYear()} ${Math.round(caAnnee(parisYear())).toLocaleString('fr-FR')} € sur 37 500 €` : 'TVA facturée', factures: companyMissing.length ? `à compléter (config/entreprise.json : ${companyMissing.join(', ')})` : 'ok', applis: (() => { const c = nativePush.config(); return `iPhone ${c.apns ? 'ok' : 'non configuré'}, Android ${c.fcm ? 'ok' : 'non configuré'}`; })(), backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
     return ok ? data : { status: 503, data };
   });
   // Copie hors de Render : état du dernier envoi (affiché dans l'admin et /api/health)
@@ -492,6 +493,18 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     mailer.send(user.email, 'Votre mot de passe a été changé', 'Mot de passe changé', ["Le mot de passe de votre compte Proprigo vient d'être changé.", "Si ce n'est pas vous, écrivez-nous tout de suite."], null);
     return { ok: true, message: 'Mot de passe changé. Vos autres appareils sont déconnectés.' };
   });
+  // intervenantes : demande de suppression (traitée par l'équipe, car des documents doivent être gardés)
+  route('POST', '/api/account/delete-request', ({ user, body }) => {
+    need(user);
+    if (user.role !== 'intervenante') throw new HttpError(400, 'Cette demande concerne les comptes intervenante.');
+    const u = db.prepare('SELECT pass_hash FROM users WHERE id = ?').get(user.id);
+    if (!db_.checkPassword(String(body.password || ''), u.pass_hash)) throw new HttpError(400, 'Mot de passe incorrect.');
+    if (!db.prepare('INSERT OR IGNORE INTO mail_sent (key) VALUES (?)').run(`delreq-${user.id}-${new Date().toISOString().slice(0, 10)}`).changes) return { ok: true, message: 'Demande déjà envoyée aujourd\'hui. L\'équipe vous répond par e-mail.' };
+    db_.log(db, `Demande de suppression du compte intervenante n° ${user.id} (${user.name}).`);
+    for (const to of ownerEmails()) mailer.send(to, `Suppression de compte demandée : ${user.name}`, 'Une intervenante demande la suppression de son compte', [`${user.name} (${user.email}) demande la fermeture de son compte.`, 'À faire sous 30 jours : payer les dernières missions, retirer l\'intervenante de l\'équipe, puis effacer ses documents.'], null);
+    mailer.send(user.email, 'Votre demande de suppression de compte', 'Demande bien reçue', ['Nous avons bien reçu votre demande de suppression de compte.', 'Nous la traitons sous 30 jours, après le paiement de vos dernières missions, et vous confirmons par e-mail.'], null);
+    return { ok: true, message: 'Demande envoyée. L\'équipe ferme votre compte sous 30 jours et vous confirme par e-mail.' };
+  });
   route('POST', '/api/account/delete', ({ user, body }) => {
     need(user);
     if (user.role !== 'client') throw new HttpError(400, "Pour fermer un compte intervenante ou administrateur, écrivez à l'équipe Proprigo : certains documents doivent être conservés.");
@@ -509,6 +522,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db.prepare('DELETE FROM homes WHERE client_id = ?').run(user.id);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM resets WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM push_subs WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM native_push WHERE user_id = ?').run(user.id);
     db.prepare("UPDATE users SET email = ?, name = 'Client supprimé', phone = NULL, pass_hash = ? WHERE id = ?").run(`supprime-${user.id}@proprigo.invalid`, 'x:' + crypto.randomBytes(16).toString('hex'), user.id);
     db_.log(db, `Compte client n° ${user.id} supprimé à sa demande (données personnelles effacées).`);
     mailer.send(user.email, 'Votre compte Proprigo est supprimé', 'Compte supprimé', ['Votre compte et vos données personnelles ont été supprimés.', 'Les factures sont conservées sans vos coordonnées, comme la loi le demande.'], null);
@@ -611,11 +626,27 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     number TEXT NOT NULL UNIQUE, booking_id INTEGER NOT NULL, client_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, tva_rate REAL NOT NULL,
     ref_invoice TEXT, refund_key TEXT UNIQUE, issued_at TEXT NOT NULL, UNIQUE(kind, year, seq))`);
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS invoices_one_facture ON invoices(booking_id) WHERE kind = 'facture'");
-  const company = (() => {
+  const company = companyConfig || (() => {
     try { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'entreprise.json'), 'utf8')); } catch { return {}; }
   })();
+  // Auto-entrepreneur (micro-entreprise) : franchise en base de TVA, pas de TVA facturée (art. 293 B du CGI).
+  const franchiseTVA = String(company.regimeTVA || '').toLowerCase() === 'franchise';
+  const TVA_SEUIL = 37500; const TVA_SEUIL_MAJORE = 41250; // prestations de services, seuils 2026 (CA hors taxes)
   const companyMissing = ['raisonSociale', 'adresse', 'siret'].filter((k) => !String(company[k] || '').trim());
-  const tvaOf = (b) => (pricing.PRO_SERVICES.includes(b.service) ? pricing.COSTS.tvaPro : pricing.COSTS.tvaParticulier);
+  const tvaOf = (b) => (franchiseTVA ? 0 : pricing.PRO_SERVICES.includes(b.service) ? pricing.COSTS.tvaPro : pricing.COSTS.tvaParticulier);
+  const caAnnee = (year) => { // chiffre d'affaires facturé de l'année (factures moins avoirs), en euros
+    const r = db.prepare("SELECT COALESCE(SUM(CASE WHEN kind = 'facture' THEN amount_cents ELSE -amount_cents END), 0) AS c FROM invoices WHERE year = ? AND tva_rate = 0").get(year);
+    return r.c / 100;
+  };
+  function tvaWatch() { // prévient le responsable avant de dépasser le seuil de la franchise
+    if (!franchiseTVA) return;
+    const year = parisYear(); const ca = caAnnee(year);
+    const alert = (key, subject, lines) => { if (db.prepare('INSERT OR IGNORE INTO mail_sent (key) VALUES (?)').run(key).changes) for (const to of ownerEmails()) mailer.send(to, subject, 'Franchise de TVA', lines, null); };
+    const fmt = (n) => Math.round(n).toLocaleString('fr-FR') + ' €';
+    if (ca >= TVA_SEUIL_MAJORE) alert(`tva-majore-${year}`, 'TVA : seuil majoré dépassé', [`Chiffre d'affaires ${year} : ${fmt(ca)}, au-delà de ${fmt(TVA_SEUIL_MAJORE)}.`, 'La franchise de TVA est perdue dès ce mois : appelez votre expert-comptable avant de facturer à nouveau, les prix et les factures doivent passer avec TVA.']);
+    else if (ca >= TVA_SEUIL) alert(`tva-seuil-${year}`, 'TVA : seuil de 37 500 € dépassé', [`Chiffre d'affaires ${year} : ${fmt(ca)}.`, `Vous gardez la franchise cette année tant que vous restez sous ${fmt(TVA_SEUIL_MAJORE)}, mais vous la perdez au 1er janvier prochain. Prévenez votre expert-comptable.`]);
+    else if (ca >= TVA_SEUIL * 0.8) alert(`tva-80-${year}`, 'TVA : 80 % du seuil de franchise atteint', [`Chiffre d'affaires ${year} : ${fmt(ca)} sur ${fmt(TVA_SEUIL)}.`, 'Pensez à préparer le passage à la TVA avec votre expert-comptable.']);
+  }
   const parisYear = () => Number(new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', year: 'numeric' }).format(now()));
   function nextNumber(kind) {
     const year = parisYear();
@@ -635,6 +666,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
         .run(n.year, n.seq, n.number, b.id, b.client_id, Math.round((b.total + (b.discount || 0)) * 100), tvaOf(b), now().toISOString());
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); throw e; }
+    try { tvaWatch(); } catch { /* l'alerte ne doit jamais bloquer une facture */ }
     return db.prepare("SELECT * FROM invoices WHERE kind = 'facture' AND booking_id = ?").get(bookingId);
   }
   /** Avoir pour un remboursement ; refundKey empêche d'en créer deux pour le même remboursement. */
@@ -1259,7 +1291,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
 
   // ----- réglages publics : lien d'avis Google -----
   const reviewUrl = /^https:\/\/[^\s"<>]+$/.test(googleReviewUrl || '') ? googleReviewUrl : '';
-  route('GET', '/api/config', () => ({ version: VERSION, sap: sapOn() ? { declared: true, numero: sapSettings().numero, services: SAP_SERVICES } : { declared: false }, googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
+  route('GET', '/api/config', () => ({ version: VERSION, franchiseTVA, sap: sapOn() ? { declared: true, numero: sapSettings().numero, services: SAP_SERVICES } : { declared: false }, googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
 
   // ----- tarifs et zones, modifiables par le responsable -----
   // Les réservations déjà créées gardent leur prix : seules les nouvelles suivent la nouvelle grille.
@@ -1778,10 +1810,27 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
   // ----- notifications sur téléphone (Web Push) -----
   push.ensureTable(db);
   const pushSubject = `mailto:${String(mailer.cfg.from || 'contact@proprigo.fr').replace(/^.*<|>.*$/g, '').trim()}`;
-  engine.setPushHook((d, userId, msg) => push.notifyUser(d, userId, msg, { subject: pushSubject }));
+  nativePush.ensureTable(db);
+  const pushAll = async (d, userId, msg) => (await push.notifyUser(d, userId, msg, { subject: pushSubject })) + (await nativePush.notifyUser(d, userId, msg));
+  engine.setPushHook(pushAll);
+  // applis Android / iPhone : le téléphone donne son jeton de notification
+  route('POST', '/api/push/native', ({ user, body }) => {
+    need(user);
+    const platform = String(body.platform || ''); const token = String(body.token || '').trim();
+    if (!['ios', 'android'].includes(platform) || !nativePush.validToken(platform, token)) throw new HttpError(400, 'Jeton de notification invalide.');
+    if (db.prepare('SELECT COUNT(*) AS n FROM native_push WHERE user_id = ?').get(user.id).n >= 10) db.prepare('DELETE FROM native_push WHERE id = (SELECT id FROM native_push WHERE user_id = ? ORDER BY id LIMIT 1)').run(user.id);
+    db.prepare(`INSERT INTO native_push (user_id, platform, token) VALUES (?, ?, ?)
+      ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, platform = excluded.platform, fails = 0`).run(user.id, platform, token);
+    return { ok: true, message: 'Notifications activées sur ce téléphone.' };
+  });
+  route('POST', '/api/push/native/remove', ({ user, body }) => {
+    need(user);
+    db.prepare('DELETE FROM native_push WHERE user_id = ? AND token = ?').run(user.id, String(body.token || ''));
+    return { ok: true };
+  });
   route('GET', '/api/push/key', ({ user }) => {
     need(user);
-    return { publicKey: push.vapidKeys(db).publicKey, subscribed: db.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?').get(user.id).n };
+    return { publicKey: push.vapidKeys(db).publicKey, subscribed: db.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?').get(user.id).n, native: db.prepare('SELECT COUNT(*) AS n FROM native_push WHERE user_id = ?').get(user.id).n };
   });
   route('POST', '/api/push/subscribe', ({ user, body }) => {
     need(user);
@@ -1801,7 +1850,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
   });
   route('POST', '/api/push/test', async ({ user }) => {
     need(user);
-    const n = await push.notifyUser(db, user.id, { title: 'Proprigo', body: 'Les notifications fonctionnent sur cet appareil.', url: '/#/', tag: 'test' }, { subject: pushSubject });
+    const n = await pushAll(db, user.id, { title: 'Proprigo', body: 'Les notifications fonctionnent sur cet appareil.', url: '/#/', tag: 'test' });
     return { ok: true, sent: n, message: n ? 'Notification envoyée : elle doit apparaître dans quelques secondes.' : 'Aucun appareil n\'a pu être prévenu. Réactivez les notifications.' };
   });
 
@@ -2225,14 +2274,21 @@ ${parts || '<p>Aucune réservation retrouvée pour ce paiement : vérifiez dans 
     const isAvoir = doc.kind === 'avoir';
     const title = isAvoir ? `Avoir ${doc.number}` : `Facture ${doc.number}`;
     const credit = Math.round((b.discount || 0) * 100);
+    const noTva = Number(doc.tva_rate) === 0;
+    const table = noTva
+      ? `<table><thead><tr><th>Désignation</th><th class="n">Qté</th><th class="n">Prix unitaire</th><th class="n">Total</th></tr></thead>
+<tbody><tr><td>${isAvoir ? 'Remboursement : ' : ''}${e(label)}<br><span class="muted">Prestation du ${e(fr(b.date))} à ${e(b.time)}</span></td><td class="n">1</td><td class="n">${eur(ttc)}</td><td class="n">${eur(ttc)}</td></tr></tbody>
+<tfoot><tr><td colspan="3">${isAvoir ? 'Total remboursé' : 'Total à payer'}</td><td class="n">${eur(ttc)}</td></tr></tfoot></table>
+<p><b>TVA non applicable, art. 293 B du CGI.</b></p>`
+      : `<table><thead><tr><th>Désignation</th><th class="n">Qté</th><th class="n">Prix HT</th><th class="n">TVA</th><th class="n">Total TTC</th></tr></thead>
+<tbody><tr><td>${isAvoir ? 'Remboursement : ' : ''}${e(label)}<br><span class="muted">Prestation du ${e(fr(b.date))} à ${e(b.time)}</span></td><td class="n">1</td><td class="n">${eur(ht)}</td><td class="n">${Math.round(doc.tva_rate * 1000) / 10} %</td><td class="n">${eur(ttc)}</td></tr></tbody>
+<tfoot><tr><td colspan="4">Total HT</td><td class="n">${eur(ht)}</td></tr><tr><td colspan="4">TVA ${Math.round(doc.tva_rate * 1000) / 10} %</td><td class="n">${eur(ttc - ht)}</td></tr><tr><td colspan="4">${isAvoir ? 'Total remboursé TTC' : 'Total TTC'}</td><td class="n">${eur(ttc)}</td></tr></tfoot></table>`;
     const body = `${isTest ? '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme encaissée. Aucune valeur comptable.</p>' : ''}
 <div class="box"><div><h1>${e(title)}</h1><p class="muted">Date d'émission : ${e(day(doc.issued_at))}${isAvoir ? `<br>Avoir sur la facture ${e(doc.ref_invoice)}` : ''}</p></div>
-<div><b>${e(company.nomCommercial || 'Proprigo')}</b><br>${todo('raisonSociale', 'raison sociale')}${company.formeJuridique ? `, ${e(company.formeJuridique)}` : ''}${company.capital ? ` au capital de ${e(company.capital)}` : ''}<br>${todo('adresse', 'adresse du siège')}<br>SIRET : ${todo('siret', 'SIRET')}${company.rcs ? `<br>RCS ${e(company.rcs)}` : ''}<br>TVA intracommunautaire : ${todo('tvaIntracom', 'n° de TVA')}</div></div>
+<div><b>${e(company.nomCommercial || 'Proprigo')}</b><br>${todo('raisonSociale', 'raison sociale')}${company.formeJuridique ? `, ${e(company.formeJuridique)}` : ''}${company.capital ? ` au capital de ${e(company.capital)}` : ''}<br>${todo('adresse', 'adresse du siège')}<br>SIRET : ${todo('siret', 'SIRET')}${company.rcs ? `<br>RCS ${e(company.rcs)}` : ''}${noTva ? '' : `<br>TVA intracommunautaire : ${todo('tvaIntracom', 'n° de TVA')}`}</div></div>
 <div class="box"><div><b>${isPro ? 'Facturé à' : 'Client'}</b><br>${c.company ? `${e(c.company)}<br>` : ''}${e(c.name)}<br>${c.billing_address ? e(c.billing_address) : `${e(b.address)}, ${e(b.cp)}`}${c.siret ? `<br>SIRET : ${e(c.siret)}` : ''}${c.vat_number ? `<br>TVA intracommunautaire : ${e(c.vat_number)}` : ''}</div>
 <div><b>Lieu de la prestation</b><br>${e(b.address)}, ${e(b.cp)}<br>Réservation n° ${b.id}</div></div>
-<table><thead><tr><th>Désignation</th><th class="n">Qté</th><th class="n">Prix HT</th><th class="n">TVA</th><th class="n">Total TTC</th></tr></thead>
-<tbody><tr><td>${isAvoir ? 'Remboursement : ' : ''}${e(label)}<br><span class="muted">Prestation du ${e(fr(b.date))} à ${e(b.time)}</span></td><td class="n">1</td><td class="n">${eur(ht)}</td><td class="n">${Math.round(doc.tva_rate * 1000) / 10} %</td><td class="n">${eur(ttc)}</td></tr></tbody>
-<tfoot><tr><td colspan="4">Total HT</td><td class="n">${eur(ht)}</td></tr><tr><td colspan="4">TVA ${Math.round(doc.tva_rate * 1000) / 10} %</td><td class="n">${eur(ttc - ht)}</td></tr><tr><td colspan="4">${isAvoir ? 'Total remboursé TTC' : 'Total TTC'}</td><td class="n">${eur(ttc)}</td></tr></tfoot></table>
+${table}
 ${isAvoir ? `<p>Remboursé sur le moyen de paiement d'origine.</p>`
     : `<p>Facture acquittée${isTest ? '' : ` le ${e(day(doc.issued_at))}`} : ${credit > 0 ? `${eur(ttc - credit)} par carte bancaire et ${eur(credit)} avec le crédit Proprigo (parrainage, carte cadeau ou pack).` : 'réglée par carte bancaire.'}</p>`}
 ${isPro ? "<p class=\"muted\">Prestation à un professionnel. Escompte pour paiement anticipé : néant. En cas de retard de paiement : pénalités au taux de 3 fois le taux d'intérêt légal et indemnité forfaitaire pour frais de recouvrement de 40 € (art. L441-10 du Code de commerce).</p>"
@@ -2342,7 +2398,7 @@ ${body}</body></html>`);
       const h = Math.round(i.amount_cents / (1 + i.tva_rate));
       ht += sign * h; tva += sign * (i.amount_cents - h); ttc += sign * i.amount_cents;
       lines.push([i.number, i.kind === 'avoir' ? 'Avoir' : 'Facture', new Date(i.issued_at).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' }), c.company || c.name, c.siret || '', b.id || '',
-        `${SERVICE_NAME[b.service] || 'Ménage'} du ${b.date ? fr(b.date) : '?'}`, eurx(sign * h), `${Math.round(i.tva_rate * 1000) / 10} %`, eurx(sign * (i.amount_cents - h)), eurx(sign * i.amount_cents), i.ref_invoice || ''].map(cell).join(';'));
+        `${SERVICE_NAME[b.service] || 'Ménage'} du ${b.date ? fr(b.date) : '?'}`, eurx(sign * h), i.tva_rate ? `${Math.round(i.tva_rate * 1000) / 10} %` : 'Non applicable (293 B)', eurx(sign * (i.amount_cents - h)), eurx(sign * i.amount_cents), i.ref_invoice || ''].map(cell).join(';'));
     }
     lines.push(['TOTAL', '', '', '', '', '', '', eurx(ht), '', eurx(tva), eurx(ttc), ''].join(';'));
     db_.log(db, `Export des factures de ${query.get('month')} par ${user.name}.`);
@@ -2784,6 +2840,28 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
         const base = appUrl.replace(/\/$/, '');
         const seoHead = { 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; script-src 'none'", 'Cache-Control': 'public, max-age=3600' };
         if (url.pathname === '/sitemap.xml') { res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', ...seoHead }); return res.end(seo.sitemap(base)); }
+        // application Android (Trusted Web Activity) : prouve que l'appli et le site appartiennent à Proprigo
+        if (url.pathname === '/.well-known/assetlinks.json') {
+          const pkg = String(process.env.ANDROID_PACKAGE || 'fr.proprigo.app').trim();
+          const prints = String(process.env.ANDROID_CERT_SHA256 || '').split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter((x) => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(x));
+          const body = prints.length ? [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: pkg, sha256_cert_fingerprints: prints } }] : [];
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*' });
+          return res.end(JSON.stringify(body));
+        }
+        // page publique exigée par Google Play et l'App Store : comment supprimer son compte
+        if (url.pathname === '/suppression-compte') {
+          const contact = String(mail.replyTo || process.env.EMAIL_REPLY_TO || 'contact@proprigo.fr').replace(/^.*<|>.*$/g, '').replace(/[^\w.@+-]/g, '');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...seoHead });
+          return res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Supprimer son compte – Proprigo</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;color:#14204a}h1{font-size:28px}a{color:#1f4fff}</style></head><body>
+<h1>Supprimer votre compte Proprigo</h1>
+<p><b>Dans l'application ou sur proprigo.fr</b> : connectez-vous, ouvrez « Mon compte », puis « Supprimer mon compte » en bas de la page, et confirmez avec votre mot de passe. Les ménages à venir doivent d'abord être annulés.</p>
+<p><b>Sans accès à votre compte</b> : écrivez à <a href="mailto:${contact}?subject=Suppression%20de%20mon%20compte">${contact}</a> depuis l'adresse e-mail du compte. Nous le supprimons sous 30 jours au plus.</p>
+<h2>Ce qui est supprimé</h2>
+<p>Votre nom, e-mail, téléphone, logements, consignes d'accès, photos et abonnements aux notifications.</p>
+<h2>Ce qui est conservé</h2>
+<p>Les factures des ménages passés, sans vos coordonnées, pendant 10 ans, parce que la loi l'impose (article L123-22 du Code de commerce).</p>
+<p><a href="/">Retour à Proprigo</a></p></body></html>`);
+        }
         if (url.pathname === '/robots.txt') { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', ...seoHead }); return res.end(seo.robots(base)); }
         const m = url.pathname.match(/^\/(menage-a-domicile|menage-airbnb|nettoyage-bureaux)\/([a-z0-9-]+)\/?$/);
         if (m) {

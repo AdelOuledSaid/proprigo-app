@@ -291,3 +291,113 @@ test('recrutement : pièces demandées publiques, à jour avec la liste du respo
     assert.doesNotMatch(JSON.stringify(r), /@|password|email/i, 'aucune donnée personnelle');
   } finally { a.close(); }
 });
+
+test('applis mobiles : fichier de vérification Android et page de suppression de compte', async () => {
+  const a = await start();
+  try {
+    let r = await (await fetch(a.base + '/.well-known/assetlinks.json')).json();
+    assert.deepEqual(r, [], 'vide tant que l\'empreinte n\'est pas fournie');
+    const fp = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(':');
+    process.env.ANDROID_CERT_SHA256 = fp;
+    r = await (await fetch(a.base + '/.well-known/assetlinks.json')).json();
+    assert.equal(r[0].target.package_name, 'fr.proprigo.app');
+    assert.deepEqual(r[0].target.sha256_cert_fingerprints, [fp]);
+    delete process.env.ANDROID_CERT_SHA256;
+    const html = await (await fetch(a.base + '/suppression-compte')).text();
+    assert.match(html, /Supprimer mon compte/);
+    assert.match(html, /mailto:/);
+  } finally { a.close(); }
+});
+
+test('applis mobiles : jetons de notification natifs, envoi APNs et FCM', async () => {
+  const crypto = require('node:crypto');
+  const np = require('../src/native-push');
+  const a = await start();
+  try {
+    const claire = await a.session('claire@proprigo.test', 'demo-proprigo');
+    assert.equal((await claire('POST', '/api/push/native', { platform: 'ios', token: 'pas-un-jeton' })).status, 400);
+    const iosTok = 'a'.repeat(64);
+    assert.equal((await claire('POST', '/api/push/native', { platform: 'ios', token: iosTok })).status, 200);
+    assert.equal((await claire('POST', '/api/push/native', { platform: 'android', token: 'fcm:' + 'b'.repeat(40) })).status, 200);
+    assert.equal((await claire('GET', '/api/push/key')).data.native, 2);
+    const uid = a.db.prepare("SELECT id FROM users WHERE email = 'claire@proprigo.test'").get().id;
+
+    // iPhone : JWT ES256 vers Apple, jeton supprimé si Apple répond 410
+    const ec = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const env = {
+      APNS_KEY: ec.privateKey.export({ type: 'pkcs8', format: 'pem' }), APNS_KEY_ID: 'KEY123', APNS_TEAM_ID: 'TEAM123',
+      FCM_SERVICE_ACCOUNT: JSON.stringify({ project_id: 'proprigo-test', client_email: 'x@proprigo-test.iam.gserviceaccount.com', private_key: rsa.privateKey.export({ type: 'pkcs8', format: 'pem' }) }),
+    };
+    const seen = { apns: [], fcm: [] };
+    const http2Connect = (host) => {
+      const { EventEmitter } = require('node:events');
+      const client = new EventEmitter(); client.close = () => {};
+      client.request = (h) => {
+        const req = new EventEmitter(); req.setTimeout = () => {}; req.resume = () => {};
+        req.end = (body) => { seen.apns.push({ host, h, body: JSON.parse(body) }); setImmediate(() => req.emit('response', { ':status': 410 })); };
+        return req;
+      };
+      return client;
+    };
+    const fetchImpl = async (url, opts) => {
+      if (url.includes('oauth2')) return { ok: true, json: async () => ({ access_token: 'tok', expires_in: 3600 }) };
+      seen.fcm.push({ url, opts, body: JSON.parse(opts.body) });
+      return { ok: true, json: async () => ({}) };
+    };
+    np._cache.apns = null; np._cache.fcm = null;
+    const n = await np.notifyUser(a.db, uid, { title: 'Proprigo', body: 'En route', url: '/#/mes-reservations' }, { env, fetchImpl, http2Connect });
+    assert.equal(n, 1, 'Android envoyé, iPhone refusé (410)');
+    assert.equal(seen.apns[0].host, 'https://api.push.apple.com');
+    assert.equal(seen.apns[0].h[':path'], `/3/device/${iosTok}`);
+    assert.equal(seen.apns[0].h['apns-topic'], 'fr.proprigo.app');
+    const [h64, c64, s64] = seen.apns[0].h.authorization.slice(7).split('.');
+    assert.ok(crypto.verify('sha256', Buffer.from(`${h64}.${c64}`), { key: ec.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(s64, 'base64url')), 'signature Apple valide');
+    assert.equal(seen.apns[0].body.url, '/#/mes-reservations');
+    assert.match(seen.fcm[0].url, /projects\/proprigo-test\/messages:send$/);
+    assert.equal(seen.fcm[0].opts.headers.Authorization, 'Bearer tok');
+    assert.equal(seen.fcm[0].body.message.data.url, '/#/mes-reservations');
+    assert.equal(a.db.prepare('SELECT COUNT(*) AS n FROM native_push WHERE user_id = ?').get(uid).n, 1, 'jeton iPhone périmé supprimé');
+    // déconnexion du téléphone
+    await claire('POST', '/api/push/native/remove', { token: 'fcm:' + 'b'.repeat(40) });
+    assert.equal(a.db.prepare('SELECT COUNT(*) AS n FROM native_push WHERE user_id = ?').get(uid).n, 0);
+  } finally { a.close(); }
+});
+
+test('suppression de compte : une intervenante peut la demander depuis l\'appli', async () => {
+  const a = await start();
+  try {
+    const w = a.db.prepare("SELECT email FROM users WHERE role = 'intervenante' ORDER BY id LIMIT 1").get();
+    const s = await a.session(w.email, 'demo-proprigo');
+    assert.equal((await s('POST', '/api/account/delete-request', { password: 'faux' })).status, 400);
+    const r = await s('POST', '/api/account/delete-request', { password: 'demo-proprigo' });
+    assert.equal(r.status, 200);
+    assert.match(r.data.message, /30 jours/);
+    assert.match((await s('POST', '/api/account/delete-request', { password: 'demo-proprigo' })).data.message, /déjà envoyée/);
+  } finally { a.close(); }
+});
+
+test('auto-entrepreneur : factures sans TVA (293 B) et alerte avant le seuil de 37 500 €', async () => {
+  const { createApp } = require('../src/app');
+  const app = createApp({ dbFile: ':memory:', adminPassword: 'admin-test-123', companyConfig: { raisonSociale: 'Adel TEST EI', adresse: '1 rue de Paris', siret: '12345678900011', regimeTVA: 'franchise' } });
+  await new Promise((r) => app.server.listen(0, r));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  try {
+    const cfg = await (await fetch(base + '/api/config')).json();
+    assert.equal(cfg.franchiseTVA, true);
+    const cid = app.db.prepare("SELECT id FROM users WHERE email = 'claire@proprigo.test'").get().id;
+    // 30 500 € de factures déjà émises cette année : l'alerte des 80 % doit partir au prochain paiement
+    const year = Number(new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', year: 'numeric' }).format(new Date()));
+    app.db.prepare("INSERT INTO invoices (kind, year, seq, number, booking_id, client_id, amount_cents, tva_rate, issued_at) VALUES ('facture', ?, 999, 'F-OLD', 999999, ?, 3050000, 0, datetime('now'))").run(year, cid);
+    const r = { lastInsertRowid: mkBooking(app.db) };
+    const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ email: 'claire@proprigo.test', password: 'demo-proprigo' }) });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const html = await (await fetch(`${base}/api/bookings/${r.lastInsertRowid}/receipt`, { headers: { Cookie: cookie } })).text();
+    assert.match(html, /TVA non applicable, art\. 293 B du CGI/);
+    assert.doesNotMatch(html, /Total HT|TVA intracommunautaire/);
+    assert.equal(app.db.prepare('SELECT tva_rate FROM invoices WHERE booking_id = ?').get(r.lastInsertRowid).tva_rate, 0);
+    assert.ok(app.db.prepare("SELECT 1 FROM mail_sent WHERE key = ?").get(`tva-80-${year}`), 'alerte 80 % envoyée une fois');
+    const h = await (await fetch(base + '/api/health')).json();
+    assert.match(h.tva, /franchise \(293 B\)/);
+  } finally { app.server.close(); }
+});

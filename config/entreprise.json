@@ -1,12 +1,13 @@
 {
-  "_aide": "Informations imprimées sur chaque facture et avoir. Remplissez-les avant l'ouverture (avec votre expert-comptable), puis redéployez.",
+  "_aide": "Informations imprimées sur chaque facture et avoir. Auto-entrepreneur : raisonSociale = « Prénom NOM EI » (la mention EI est obligatoire), formeJuridique = « Entreprise individuelle », capital et rcs vides, regimeTVA = « franchise » tant que le chiffre d'affaires reste sous 37 500 € par an. Remplissez puis redéployez.",
   "nomCommercial": "Proprigo",
   "raisonSociale": "",
-  "formeJuridique": "",
+  "formeJuridique": "Entreprise individuelle (micro-entrepreneur)",
   "capital": "",
   "adresse": "",
   "siret": "",
   "rcs": "",
   "tvaIntracom": "",
-  "emailFacturation": ""
+  "emailFacturation": "",
+  "regimeTVA": "franchise"
 }
