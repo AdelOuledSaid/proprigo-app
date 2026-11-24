@@ -277,3 +277,23 @@ test('pièces demandées : liste modifiable par le responsable, appliquée aux c
     assert.equal((await cand('POST', '/api/admin/worker-docs', { list: next })).status, 403);
   } finally { a.close(); }
 });
+
+test('intervenante créée par le responsable : e-mail avec le lien de confirmation, sans le mot de passe', async () => {
+  const a = await start();
+  try {
+    const admin = await a.session('admin@proprigo.test', 'admin-test-123');
+    const before = mailer.outbox(500).length;
+    const r = await admin('POST', '/api/admin/workers', { name: 'Samia Haddad', email: 'samia@test.fr', cp: '75019', statut: 'I', rate: '24', phone: '0600000000', password: 'provisoire-2026' });
+    assert.equal(r.status, 201);
+    assert.match(r.data.message, /reçoit un e-mail/);
+    await new Promise((res) => setTimeout(res, 30));
+    const mail = mailer.outbox(500).slice(0, mailer.outbox(500).length - before).find((m) => m.subject === 'Votre espace intervenante Proprigo est prêt');
+    assert.ok(mail);
+    const html = mailer.readOutbox(mail.file);
+    assert.match(html, /confirmer-email\?t=[0-9a-f]{64}/);
+    assert.doesNotMatch(html, /provisoire-2026/, 'le mot de passe ne part jamais par e-mail');
+    const token = html.match(/confirmer-email\?t=([0-9a-f]{64})/)[1];
+    assert.equal((await fetch(a.base + '/api/email/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).status, 200);
+    assert.ok(a.db.prepare("SELECT email_verified_at FROM users WHERE email = 'samia@test.fr'").get().email_verified_at);
+  } finally { a.close(); }
+});

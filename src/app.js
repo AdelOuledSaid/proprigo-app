@@ -2178,7 +2178,15 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
       db_.setAvailability(db, id, db_.NEW_WORKER_WEEK);
       db.exec('COMMIT');
       db_.log(db, `Intervenante créée par administration : ${name} (validation nécessaire).`);
-      return { status: 201, data: { ok: true, id } };
+      // Elle est prévenue : lien pour confirmer son adresse (obligatoire avant l'activation), puis connexion.
+      // Le mot de passe provisoire n'est jamais envoyé par e-mail : vous le lui donnez de vive voix ou par SMS.
+      mailer.send(email, 'Votre espace intervenante Proprigo est prêt', `Bienvenue, ${name.split(' ')[0]}`, [
+        `L'équipe Proprigo vous a créé un espace intervenante avec l'adresse ${email}.`,
+        '1. Confirmez votre adresse avec le bouton ci-dessous (lien valable 7 jours).',
+        "2. Connectez-vous avec le mot de passe provisoire que l'équipe vous a donné, puis changez-le dans « Mon compte ».",
+        '3. Déposez vos pièces justificatives dans « Mes documents ».',
+      ], { label: 'Confirmer mon adresse', path: verificationLink(id) });
+      return { status: 201, data: { ok: true, id, message: `Compte créé. ${name.split(' ')[0]} reçoit un e-mail pour confirmer son adresse. Donnez-lui le mot de passe provisoire de vive voix ou par SMS.` } };
     } catch (e) { db.exec('ROLLBACK'); throw e; }
   });
 

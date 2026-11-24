@@ -1347,8 +1347,8 @@
       const btn = addWorker.querySelector('[type="submit"]'); btn.disabled = true;
       try {
         const data = Object.fromEntries(new FormData(addWorker).entries());
-        await api('POST', '/api/admin/workers', data);
-        toast('Intervenante créée : validation nécessaire.'); route();
+        const r2 = await api('POST', '/api/admin/workers', data);
+        toast(r2.message || 'Intervenante créée : validation nécessaire.'); route();
       } catch (err) { toast(err.message); btn.disabled = false; }
     };
     const demoBtn = document.getElementById('admin-demo-workers');
