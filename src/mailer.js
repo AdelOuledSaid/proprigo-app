@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const crypto = require('node:crypto');
 
-const cfg = { outbox: null, provider: null, apiKey: null, from: 'Proprigo <bonjour@proprigo.fr>', appUrl: 'http://localhost:3000', db: null, retryDelaysMs: [2000, 8000] };
+const cfg = { outbox: null, provider: null, apiKey: null, replyTo: null, from: 'Proprigo <bonjour@proprigo.fr>', appUrl: 'http://localhost:3000', db: null, retryDelaysMs: [2000, 8000] };
 let onError = () => {};
 
 function configure(opts) {
@@ -41,6 +41,18 @@ ${cta ? `<p style="margin:18px 0 0"><a href="${esc(cfg.appUrl + cta.path)}" styl
 </div></body></html>`;
 }
 
+// Version texte de chaque e-mail : les messageries (Gmail, Yahoo, Outlook) se méfient des e-mails en HTML seul.
+function textOf(body) {
+  return body
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<a [^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (m, href, label) => `${label.replace(/<[^>]+>/g, '').trim()} : ${href}`)
+    .replace(/<\/(p|div|h1|h2|li|tr)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .split('\n').map((l) => l.replace(/[ \t]+/g, ' ').trim()).filter((l, i, a) => l || (a[i - 1] && a[i - 1].trim())).join('\n').trim();
+}
+const addr = (x) => (String(x || '').match(/<([^>]+)>/) || [null, String(x || '').trim()])[1];
+
 class MailError extends Error {
   constructor(message, transient) { super(message); this.transient = transient; }
 }
@@ -52,7 +64,7 @@ async function deliver(to, subject, body, idem = crypto.randomUUID()) {
     const r = await post('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: { 'api-key': cfg.apiKey, 'Content-Type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ sender: { name: m[1].trim(), email: m[2].trim() }, to: [{ email: to }], subject, htmlContent: body }),
+      body: JSON.stringify({ sender: { name: m[1].trim(), email: m[2].trim() }, to: [{ email: to }], subject, htmlContent: body, textContent: textOf(body), ...(cfg.replyTo ? { replyTo: { email: addr(cfg.replyTo) } } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!r.ok) throw failure('Brevo', r.status);
@@ -63,7 +75,7 @@ async function deliver(to, subject, body, idem = crypto.randomUUID()) {
       method: 'POST',
       // Même clé à chaque nouvel essai : Resend n'envoie jamais deux fois le même e-mail.
       headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': idem.slice(0, 256) },
-      body: JSON.stringify({ from: cfg.from, to: [to], subject, html: body }),
+      body: JSON.stringify({ from: cfg.from, to: [to], subject, html: body, text: textOf(body), ...(cfg.replyTo ? { reply_to: addr(cfg.replyTo) } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!r.ok) throw failure('Resend', r.status);
@@ -164,4 +176,4 @@ function readOutbox(file) {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
-module.exports = { configure, send, processQueue, queueState, outbox, readOutbox, cfg, MailError };
+module.exports = { textOf, configure, send, processQueue, queueState, outbox, readOutbox, cfg, MailError };

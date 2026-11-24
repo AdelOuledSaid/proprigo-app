@@ -31,6 +31,7 @@ const { server, reportError } = createApp({
     provider: process.env.MAIL_PROVIDER || (process.env.RESEND_API_KEY ? 'resend' : process.env.BREVO_API_KEY ? 'brevo' : undefined),
     apiKey: process.env.MAIL_API_KEY || process.env.RESEND_API_KEY || process.env.BREVO_API_KEY,
     from: process.env.MAIL_FROM || process.env.EMAIL_FROM,
+    replyTo: process.env.MAIL_REPLY_TO || process.env.EMAIL_REPLY_TO, // facultatif : où arrivent les réponses des clients
   },
   googleReviewUrl: process.env.GOOGLE_REVIEW_URL || '', // lien « laisser un avis » de votre fiche Google
   backupDir: process.env.BACKUP_DIR || path.join(path.dirname(DB_FILE), 'backups'), // une sauvegarde par jour, 14 gardées

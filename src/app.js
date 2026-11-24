@@ -98,7 +98,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   const gzCache = new Map(); // fichiers du site déjà compressés (clé : fichier + version)
   mailer.configure({
     outbox: mail.outbox || (dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-outbox-')) : path.join(path.dirname(dbFile), 'outbox')),
-    provider: mail.provider, apiKey: mail.apiKey, from: mail.from, appUrl, db,
+    provider: mail.provider, apiKey: mail.apiKey, from: mail.from, replyTo: mail.replyTo, appUrl, db,
     retryDelaysMs: mail.retryDelaysMs || [2000, 8000],
     onError: (t) => db_.log(db, t),
   });
@@ -196,7 +196,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
     const backupOk = !backupDir || (lastBackup && Date.now() - lastBackup < 48 * 3600e3) || Date.now() - started < 3600e3;
     const ok = dbOk && backupOk;
-    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', emails: mailer.cfg.provider ? `${mailer.cfg.provider} (${String(mailer.cfg.from).replace(/^.*<|>.*$/g, '')})` : 'mode local : aucun e-mail ne part', paiements: stripeReady ? (String(process.env.STRIPE_SECRET_KEY).startsWith('sk_live_') ? 'Stripe réel' : 'Stripe test') : 'simulés', erreurs24h: db.prepare("SELECT COUNT(*) AS n FROM server_errors WHERE at >= datetime('now', '-1 day')").get().n, factures: companyMissing.length ? `à compléter (config/entreprise.json : ${companyMissing.join(', ')})` : 'ok', backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
+    const data = { ok, version: VERSION, uptimeMinutes: Math.round((Date.now() - started) / 60e3), database: dbOk ? 'ok' : 'erreur', backup: !backupDir ? 'désactivée' : backupOk ? 'ok' : 'en retard', emails: mailer.cfg.provider ? `${mailer.cfg.provider} (${String(mailer.cfg.from).replace(/^.*<|>.*$/g, '')}${mailer.cfg.replyTo ? `, réponses à ${String(mailer.cfg.replyTo).replace(/^.*<|>.*$/g, '')}` : ''})` : 'mode local : aucun e-mail ne part', paiements: stripeReady ? (String(process.env.STRIPE_SECRET_KEY).startsWith('sk_live_') ? 'Stripe réel' : 'Stripe test') : 'simulés', erreurs24h: db.prepare("SELECT COUNT(*) AS n FROM server_errors WHERE at >= datetime('now', '-1 day')").get().n, factures: companyMissing.length ? `à compléter (config/entreprise.json : ${companyMissing.join(', ')})` : 'ok', backupExterne: !offsite.configured ? 'non configurée' : offsite.ok ? 'ok' : offsite.ok === false ? 'en échec' : 'en attente' };
     return ok ? data : { status: 503, data };
   });
   // Copie hors de Render : état du dernier envoi (affiché dans l'admin et /api/health)

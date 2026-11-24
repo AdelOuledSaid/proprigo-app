@@ -225,3 +225,20 @@ test('vitesse : fichiers compressés, revisite sans retéléchargement, polices 
     assert.doesNotMatch((await fetch(a.base + '/')).headers.get('content-security-policy'), /google/);
   } finally { a.close(); }
 });
+
+test('e-mails : version texte et adresse de réponse envoyées à Resend', async () => {
+  const realFetch = global.fetch;
+  let sent;
+  global.fetch = async (url, init) => { if (String(url) === 'https://api.resend.com/emails') { sent = JSON.parse(init.body); return new Response('{}', { status: 200 }); } return realFetch(url, init); };
+  const a = await start({ mail: { provider: 'resend', apiKey: 're_test', from: 'Proprigo <contact@proprigo.fr>', replyTo: 'Proprigo <contact@proprigo.fr>', retryDelaysMs: [0, 0] } });
+  try {
+    assert.equal(await mailer.send('a@test.fr', 'Bienvenue', 'Bienvenue Léa', ['Votre compte est créé.'], { label: 'Confirmer mon adresse', path: '/#/confirmer-email?t=abc' }), 'envoye');
+    assert.equal(sent.from, 'Proprigo <contact@proprigo.fr>');
+    assert.equal(sent.reply_to, 'contact@proprigo.fr');
+    assert.match(sent.text, /Bienvenue Léa/);
+    assert.match(sent.text, /Confirmer mon adresse : http/);
+    assert.doesNotMatch(sent.text, /<[a-z]/i, 'aucune balise dans la version texte');
+    const h = await (await fetch(a.base + '/api/health')).json();
+    assert.equal(h.emails, 'resend (contact@proprigo.fr, réponses à contact@proprigo.fr)');
+  } finally { a.close(); global.fetch = realFetch; }
+});
