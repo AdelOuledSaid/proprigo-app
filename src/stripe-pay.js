@@ -57,7 +57,10 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   // Paiement en deux temps : Stripe bloque le montant, PROPRIGO n'encaisse que le premier
   // paiement autorisé pour une réservation et annule les autres (aucun débit en double).
   params.set('payment_intent_data[capture_method]', 'manual');
-  params.set('payment_method_types[0]', 'card');
+  // Carte seulement (Apple Pay et Google Pay compris). Depuis l'API Stripe du 30/09/2026 (« endive »),
+  // payment_method_types est refusé : on utilise allowed_payment_method_types. Pour un compte encore
+  // sur une version plus ancienne, voir plus bas : un second essai avec l'ancien nom.
+  params.set('allowed_payment_method_types[0]', 'card');
   
   params.set('line_items[0][price_data][currency]', 'eur');
   params.set('line_items[0][price_data][unit_amount]', String(amount));
@@ -68,30 +71,40 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   // Stripe exige au moins 30 minutes entre la création et l'expiration : 35 minutes laissent une marge
   // (horloges légèrement décalées, réseau lent).
   params.set('expires_at', String(Math.floor(Date.now() / 1000) + 35 * 60));
-  let resp;
-  try {
-    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        // Clé anti-doublon tirée de la demande exacte : deux envois identiques (double clic) donnent la même
-        // session ; une demande différente (heure d'expiration, montant…) ne réutilise jamais une ancienne clé.
-        'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${params.toString()}`).digest('hex')}`,
-      },
-      body: params,
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch (err) {
-    console.error('Stripe Checkout network error:', { name: err.name, message: err.message, cause: err.cause?.code });
-    throw new Error('Stripe Checkout network error');
-  }
-  let session;
-  try {
-    session = await resp.json();
-  } catch (err) {
-    console.error('Stripe Checkout invalid response:', { status: resp.status, message: err.message });
-    throw new Error('Stripe Checkout invalid response');
+  const send = async () => {
+    let resp;
+    try {
+      resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          // Clé anti-doublon tirée de la demande exacte : deux envois identiques (double clic) donnent la même
+          // session ; une demande différente (heure d'expiration, montant…) ne réutilise jamais une ancienne clé.
+          'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${params.toString()}`).digest('hex')}`,
+        },
+        body: params,
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (err) {
+      console.error('Stripe Checkout network error:', { name: err.name, message: err.message, cause: err.cause?.code });
+      throw new Error('Stripe Checkout network error');
+    }
+    let body;
+    try {
+      body = await resp.json();
+    } catch (err) {
+      console.error('Stripe Checkout invalid response:', { status: resp.status, message: err.message });
+      throw new Error('Stripe Checkout invalid response');
+    }
+    return { resp, session: body };
+  };
+  let { resp, session } = await send();
+  // Compte Stripe sur une version d'API antérieure au 30/09/2026 : le nouveau nom n'y existe pas encore.
+  if (resp.status === 400 && /allowed_payment_method_types/.test(session.error?.message || '') && session.error?.param === 'allowed_payment_method_types') {
+    params.delete('allowed_payment_method_types[0]');
+    params.set('payment_method_types[0]', 'card');
+    ({ resp, session } = await send());
   }
   if (!resp.ok || !session.id || !session.url) {
     console.error('Stripe Checkout error:', {

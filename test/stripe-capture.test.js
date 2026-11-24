@@ -81,7 +81,8 @@ test('la session Stripe demande un paiement par carte en deux temps', async () =
     await stripe.checkout({ db: s.db, ids: [s.booking], clientId: s.client, email: 'c@test.fr', appUrl: 'https://proprigo.example' });
     const p = s.calls.create[0];
     assert.equal(p['payment_intent_data[capture_method]'], 'manual');
-    assert.equal(p['payment_method_types[0]'], 'card');
+    assert.equal(p['allowed_payment_method_types[0]'], 'card', 'nouveau nom exigé par l\'API Stripe du 30/09/2026');
+    assert.equal(p['payment_method_types[0]'], undefined, 'ancien paramètre refusé par Stripe');
     assert.equal(p['payment_intent_data[metadata][client_id]'], String(s.client));
   } finally { s.done(); }
 });
@@ -140,4 +141,44 @@ test('montant bloqué différent du prix : refusé', async () => {
     assert.equal(s.intents.get('pi_bad').status, 'canceled');
     assert.equal(s.bookingRow().paid, 0);
   } finally { s.done(); }
+});
+
+test('API Stripe du 30/09/2026 : l\'ancien paramètre est refusé, le nouveau passe ; compte ancien : second essai', async () => {
+  const realFetch = global.fetch;
+  const env = { k: process.env.STRIPE_SECRET_KEY, w: process.env.STRIPE_WEBHOOK_SECRET };
+  process.env.STRIPE_SECRET_KEY = 'sk_test_fake'; process.env.STRIPE_WEBHOOK_SECRET = 'whsec_fake';
+  const { createApp: mk } = require('../src/app');
+  const stripe = require('../src/stripe-pay');
+  const run = async (apiVersion) => {
+    const calls = [];
+    global.fetch = async (url, init) => {
+      if (String(url) !== 'https://api.stripe.com/v1/checkout/sessions') return realFetch(url, init);
+      const p = new URLSearchParams(init.body.toString());
+      calls.push(p);
+      if (apiVersion === 'endive' && p.has('payment_method_types[0]')) return new Response(JSON.stringify({ error: { type: 'invalid_request_error', message: 'The `payment_method_types` parameter is no longer supported when creating a Checkout Session.' } }), { status: 400 });
+      if (apiVersion === 'ancienne' && p.has('allowed_payment_method_types[0]')) return new Response(JSON.stringify({ error: { type: 'invalid_request_error', param: 'allowed_payment_method_types', message: 'Received unknown parameter: allowed_payment_method_types' } }), { status: 400 });
+      return new Response(JSON.stringify({ id: 'cs_test_ok', url: 'https://checkout.stripe.com/c/pay/cs_test_ok' }), { status: 200 });
+    };
+    const app = mk({ dbFile: ':memory:', adminPassword: 'admin-test-123', paymentsEnabled: true, appUrl: 'https://proprigo.example' });
+    try {
+      const client = app.db.prepare("SELECT id FROM users WHERE email = 'claire@proprigo.test'").get().id;
+      const id = Number(app.db.prepare(`INSERT INTO bookings (client_id, service, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, status, checklist)
+        VALUES (?, 'menage', 3, '75011', '1 rue', '2026-12-28', '10:00', 0, 0, 111, 'IDF', 0, 'en_attente_paiement', 'en_attente', '[]')`).run(client).lastInsertRowid);
+      const s = await stripe.checkout({ db: app.db, ids: [id], clientId: client, email: 'c@test.fr', appUrl: 'https://proprigo.example' });
+      return { url: s.url, calls };
+    } finally { app.server.close(); }
+  };
+  try {
+    const now = await run('endive');
+    assert.equal(now.url, 'https://checkout.stripe.com/c/pay/cs_test_ok');
+    assert.equal(now.calls.length, 1, 'un seul envoi, accepté du premier coup');
+    const old = await run('ancienne');
+    assert.equal(old.url, 'https://checkout.stripe.com/c/pay/cs_test_ok');
+    assert.equal(old.calls.length, 2);
+    assert.equal(old.calls[1].get('payment_method_types[0]'), 'card');
+  } finally {
+    global.fetch = realFetch;
+    if (env.k === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = env.k;
+    if (env.w === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = env.w;
+  }
 });
