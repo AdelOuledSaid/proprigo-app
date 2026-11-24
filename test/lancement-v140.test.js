@@ -242,3 +242,23 @@ test('e-mails : version texte et adresse de réponse envoyées à Resend', async
     assert.equal(h.emails, 'resend (contact@proprigo.fr, réponses à contact@proprigo.fr)');
   } finally { a.close(); global.fetch = realFetch; }
 });
+
+test('ADMIN_EMAIL : le compte responsable prend la vraie adresse et reçoit les alertes', async () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-admin-'));
+  const dbFile = path.join(dir, 'p.db');
+  let a = await start({ dbFile });
+  a.close(); a.db.close();
+  a = await start({ dbFile, seed: false, adminEmail: 'Contact@Proprigo.fr' });
+  try {
+    assert.ok(a.db.prepare("SELECT 1 FROM users WHERE email = 'contact@proprigo.fr' AND role = 'admin'").get());
+    assert.equal(a.db.prepare("SELECT COUNT(*) AS n FROM users WHERE email = 'admin@proprigo.test'").get().n, 0);
+    const admin = await a.session('contact@proprigo.fr', 'admin-test-123');
+    assert.equal((await admin('GET', '/api/me')).data.user.role, 'admin');
+  } finally { a.close(); a.db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  // base de production vide : le responsable est créé avec cette adresse
+  const b = await start({ seed: false, adminEmail: 'contact@proprigo.fr' });
+  try {
+    assert.ok(b.db.prepare("SELECT 1 FROM users WHERE email = 'contact@proprigo.fr' AND role = 'admin' AND email_verified_at IS NOT NULL").get());
+  } finally { b.close(); }
+});

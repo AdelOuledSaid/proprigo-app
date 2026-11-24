@@ -27,7 +27,7 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed = true, secureCookies = false, production = false, paymentsEnabled = false, photosDir = null, icalAllowAny = false, icalFetch = undefined, autoSync = false, mail = {}, appUrl = 'http://localhost:3000', now = () => new Date(), backupDir = null, googleReviewUrl = '' } = {}) {
+function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed = true, secureCookies = false, production = false, paymentsEnabled = false, photosDir = null, icalAllowAny = false, icalFetch = undefined, autoSync = false, mail = {}, appUrl = 'http://localhost:3000', now = () => new Date(), backupDir = null, googleReviewUrl = '', adminEmail = '' } = {}) {
   const PHOTOS = photosDir || (dbFile === ':memory:' ? fs.mkdtempSync(path.join(os.tmpdir(), 'proprigo-photos-')) : path.join(path.dirname(dbFile), 'photos'));
   fs.mkdirSync(PHOTOS, { recursive: true });
   const db = db_.open(dbFile);
@@ -39,6 +39,23 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db.exec("UPDATE users SET email_verified_at = datetime('now')");
   }
   db.exec('CREATE TABLE IF NOT EXISTS email_checks (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
+  // Compte responsable : ADMIN_EMAIL donne sa vraie adresse (connexion + alertes : nouvelles réservations, contestations, pannes).
+  // L'ancien compte « admin@proprigo.test » prend cette adresse ; sans aucun responsable, il est créé.
+  if (adminEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) {
+    const target = adminEmail.trim().toLowerCase();
+    const taken = db.prepare('SELECT id, role FROM users WHERE email = ?').get(target);
+    const placeholder = db.prepare("SELECT id FROM users WHERE email = 'admin@proprigo.test' AND role = 'admin'").get();
+    if (!taken && placeholder) {
+      db.prepare("UPDATE users SET email = ?, email_verified_at = COALESCE(email_verified_at, datetime('now')) WHERE id = ?").run(target, placeholder.id);
+      db_.log(db, `Compte responsable : adresse admin@proprigo.test remplacée par ${target}.`);
+    } else if (!taken && !db.prepare("SELECT 1 FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").get()) {
+      const id = db_.createUser(db, { role: 'admin', email: target, password: adminPassword, name: 'Équipe Proprigo' });
+      db.prepare("UPDATE users SET email_verified_at = datetime('now') WHERE id = ?").run(id);
+      db_.log(db, `Compte responsable créé : ${target}.`);
+    } else if (taken && taken.role !== 'admin') {
+      console.warn(`ADMIN_EMAIL ${target} appartient déjà à un compte ${taken.role} : rien n'a été changé.`);
+    }
+  }
   // Protection CSRF : une requête qui modifie des données doit venir du site lui-même.
   // Le navigateur envoie toujours Origin (ou au moins Referer) sur un POST ; un autre site ne peut pas le falsifier.
   const ownOrigins = new Set([(() => { try { return new URL(appUrl).origin; } catch { return ''; } })()].filter(Boolean));
