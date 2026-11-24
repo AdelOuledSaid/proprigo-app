@@ -1,0 +1,25 @@
+# Proprigo v1.6.0 — 12 améliorations
+
+## Côté client
+- **Satisfait ou on revient** : 48 h après la fin d'un ménage, bouton « On revient ». L'équipe reçoit l'alerte et planifie un retour gratuit (sans facture).
+- **Vrais avis sur l'accueil** : seulement ceux que les clients acceptent de publier (case à cocher), affichés à partir de 3 avis. Masquables par l'admin (onglet Suivi).
+- **Suivi le jour J** : l'intervenante indique en partant dans combien de temps elle arrive ; le client voit « arrivée estimée vers 10:25 ».
+- Notifications sur téléphone (Mon compte).
+
+## Côté intervenante
+- Planning de la semaine en grille (missions, propositions, congés, disponibilités).
+- Notifications sur téléphone pour les nouvelles missions (sur iPhone : ajouter le site à l'écran d'accueil d'abord).
+- Gains mois par mois sur 12 mois, avec ce qui a déjà été viré.
+
+## Côté admin
+- Planning : pendant le glisser-déposer, les cases possibles s'affichent en vert et les impossibles en rouge.
+- Export comptable : factures et avoirs du mois en CSV (Excel) et en version imprimable (onglet Paiements).
+- Relances automatiques des clients inactifs (45 jours par défaut, au plus une fois tous les 120 jours, lien de désinscription). Réglages et aperçu dans l'onglet Suivi.
+
+## Pour vendre plus
+- **Services à la personne** (onglet Tarifs et zones) : une fois la déclaration faite, cochez la case et saisissez le numéro SAP. Alors seulement le site affiche les prix après crédit d'impôt, les factures portent la mention légale et l'attestation annuelle devient officielle.
+- **Avance immédiate URSSAF** : les clients peuvent demander à être prévenus (Mon compte) ; le nombre d'intéressés s'affiche dans l'admin. Le paiement à 50 % lui-même nécessite l'habilitation URSSAF et ses identifiants API : il sera branché quand vous les aurez.
+- Pages **/#/recrutement**, **/#/syndics**, **/#/agences** avec formulaire de devis.
+
+## Variables facultatives
+- VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY : sinon générées automatiquement et gardées en base.

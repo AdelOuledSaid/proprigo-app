@@ -186,11 +186,17 @@ const firstName = (db, id) => {
 function notify(db, bookingId, text) {
   const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get();
   if (admin) db.prepare('INSERT INTO messages (booking_id, sender_id, text) VALUES (?, ?, ?)').run(bookingId, admin.id, text);
-  const c = db.prepare('SELECT u.email, b.date, b.time FROM bookings b JOIN users u ON u.id = b.client_id WHERE b.id = ?').get(bookingId);
+  const c = db.prepare('SELECT u.email, b.date, b.time, b.client_id FROM bookings b JOIN users u ON u.id = b.client_id WHERE b.id = ?').get(bookingId);
   if (c) mailer.send(c.email, `Votre ménage du ${frDate(c.date)} à ${c.time}`, 'Information sur votre ménage', [text], { label: 'Voir ma réservation', path: '/#/mes-reservations' });
+  if (c && c.client_id) push(db, c.client_id, { title: 'Votre ménage', body: text, url: '/#/mes-reservations', tag: `booking-${bookingId}` });
 }
 
 const frDate = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+
+// Notification sur téléphone (branchée par l'application ; rien si non branchée).
+let pushHook = null;
+function setPushHook(fn) { pushHook = fn; }
+const push = (db, userId, msg) => { if (pushHook) Promise.resolve().then(() => pushHook(db, userId, msg)).catch(() => {}); };
 
 /** Prévient l'intervenante d'une nouvelle mission ou d'une nouvelle proposition. */
 function tellWorkers(db, bookingId, r) {
@@ -203,6 +209,7 @@ function tellWorkers(db, bookingId, r) {
       r.status === 'attribuee' ? 'Une nouvelle mission vous est attribuée' : 'Une mission vous est proposée',
       [`${frDate(b.date)} à ${b.time}, code postal ${b.cp}, ${b.hours} h.`, r.status === 'attribuee' ? "L'adresse et les consignes sont dans votre espace." : "Vous êtes libre d'accepter ou de refuser. La première intervenante qui accepte prend la mission."],
       { label: 'Voir mes missions', path: '/#/intervenante' });
+    push(db, id, { title: r.status === 'attribuee' ? 'Nouvelle mission' : 'Mission proposée', body: `${frDate(b.date)} à ${b.time}, ${b.cp}, ${b.hours} h`, url: '/#/intervenante', tag: `mission-${b.id}` });
   }
 }
 
@@ -292,5 +299,5 @@ function retryPending(db) {
   return ids.length;
 }
 
-module.exports = { requestSlots,
+module.exports = { setPushHook, requestSlots,
   travelMinutes, frDate, tellWorkers, notify, preferredIds, slotsFor, firstName, freeSlots, toMin, assign, assignTo, retryPending, accept, refuse, candidates, proximity, distance, isActive, MAX_PER_DAY };

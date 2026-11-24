@@ -12,6 +12,7 @@ const ical = require('./ical');
 const mailer = require('./mailer');
 const seo = require('./seo');
 const backups = require('./backup');
+const push = require('./push');
 const VERSION = require('../package.json').version;
 const os = require('node:os');
 const stripePay = require('./stripe-pay');
@@ -39,6 +40,13 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db.exec("UPDATE users SET email_verified_at = datetime('now')");
   }
   db.exec('CREATE TABLE IF NOT EXISTS email_checks (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
+  // Colonnes ajoutées en v1.6 : garantie, avis publiés, heure d'arrivée estimée, relances.
+  {
+    const addCol = (table, col, type) => { if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); };
+    for (const [c, t] of [['eta_at', 'TEXT'], ['finished_at', 'TEXT'], ['review_public', 'INTEGER NOT NULL DEFAULT 0'], ['review_hidden', 'INTEGER NOT NULL DEFAULT 0'],
+      ['guarantee_at', 'TEXT'], ['guarantee_text', 'TEXT'], ['guarantee_status', 'TEXT'], ['guarantee_of', 'INTEGER'], ['guarantee_visit_id', 'INTEGER']]) addCol('bookings', c, t);
+    for (const [c, t] of [['marketing_optout', 'INTEGER NOT NULL DEFAULT 0'], ['last_nudge_at', 'TEXT'], ['wants_avance', 'INTEGER NOT NULL DEFAULT 0']]) addCol('users', c, t);
+  }
   // Compte responsable : ADMIN_EMAIL donne sa vraie adresse (connexion + alertes : nouvelles réservations, contestations, pannes).
   // L'ancien compte « admin@proprigo.test » prend cette adresse ; sans aucun responsable, il est créé.
   if (adminEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) {
@@ -168,7 +176,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!t) return null;
     const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(t);
     if (!s || s.expires < Date.now()) return null;
-    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified FROM users WHERE id = ?').get(s.user_id) || null;
+    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance FROM users WHERE id = ?').get(s.user_id) || null;
   };
   const need = (user, role) => {
     if (!user) throw new HttpError(401, 'Connectez-vous pour continuer.');
@@ -192,7 +200,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const inc = db.prepare('SELECT COUNT(*) AS n FROM incidents WHERE booking_id = ? AND resolved = 0').get(b.id).n;
     let list = [];
     try { list = JSON.parse(b.checklist || '[]'); } catch { list = []; }
-    return { ...b, worker_name: w ? w.name : null, checklist: list, photos, messages: msgs, incidents: inc };
+    return { ...b, worker_name: w ? w.name : null, checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
   };
   const nowParisHM = () => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false }).format(now());
   const hoursBefore = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.parse(`${pricing.todayParis(now())}T${nowParisHM()}:00`)) / 36e5;
@@ -619,7 +627,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const existing = db.prepare("SELECT * FROM invoices WHERE kind = 'facture' AND booking_id = ?").get(bookingId);
     if (existing) return existing;
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
-    if (!b || !b.paid) return null;
+    if (!b || !b.paid || b.payment_status === 'garantie') return null; // retour gratuit : rien n'est facturé
     db.exec('BEGIN IMMEDIATE');
     try {
       const n = nextNumber('facture');
@@ -1005,12 +1013,88 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return { ok: true, refund, message: late ? `Réservation annulée. ${refund} € vous seront remboursés (annulation à moins de ${FREE_CANCEL_HOURS} h).` : `Réservation annulée. ${refund} € vous seront remboursés.` };
   });
 
+  // ----- avis clients réels, publiés avec leur accord -----
+  // Moyenne et nombre calculés sur TOUTES les notes (pas seulement celles publiées) : rien n'est trié pour embellir.
+  const placeOf = (cp) => (/^75\d{3}$/.test(cp) ? `Paris ${Number(cp.slice(3))}${Number(cp.slice(3)) === 1 ? 'er' : 'e'}` : cp ? `(${cp.slice(0, 2)})` : '');
+  route('GET', '/api/reviews', () => {
+    const all = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS avg FROM bookings WHERE rating IS NOT NULL").get();
+    const list = db.prepare(`SELECT b.id, b.rating, b.review, b.service, b.cp, b.date, u.name FROM bookings b JOIN users u ON u.id = b.client_id
+      WHERE b.review_public = 1 AND b.review_hidden = 0 AND b.review IS NOT NULL ORDER BY b.date DESC, b.id DESC LIMIT 9`).all()
+      .map((r) => { const [first, ...rest] = r.name.trim().split(/\s+/); return { stars: r.rating, text: r.review, service: SERVICE_NAME[r.service] || 'Ménage', place: placeOf(r.cp),
+        month: r.date.slice(0, 7), author: `${first}${rest.length ? ` ${rest[rest.length - 1][0].toUpperCase()}.` : ''}` }; });
+    return { count: all.n, average: all.n ? Math.round(all.avg * 10) / 10 : null, list };
+  });
+  route('GET', '/api/admin/reviews', ({ user }) => {
+    need(user, 'admin');
+    return db.prepare(`SELECT b.id, b.rating, b.review, b.review_public, b.review_hidden, b.date, u.name FROM bookings b JOIN users u ON u.id = b.client_id
+      WHERE b.review IS NOT NULL ORDER BY b.date DESC LIMIT 40`).all();
+  });
+  route('POST', '/api/admin/reviews/:id', ({ user, id, body }) => {
+    need(user, 'admin');
+    const hidden = body.hidden ? 1 : 0;
+    const r = db.prepare('UPDATE bookings SET review_hidden = ? WHERE id = ? AND review IS NOT NULL').run(hidden, id);
+    if (!r.changes) throw new HttpError(404, 'Avis introuvable.');
+    db_.log(db, `Avis de la réservation n° ${id} ${hidden ? 'masqué' : 'de nouveau affiché'} par ${user.name}.`);
+    return { ok: true, message: hidden ? 'Avis masqué du site.' : 'Avis de nouveau affiché.' };
+  });
+
+  // ----- garantie « satisfait ou on revient » -----
+  // Dans les 48 h après la fin du ménage, le client signale ce qui ne va pas ; l'équipe planifie un retour gratuit.
+  const GUARANTEE_HOURS = 48;
+  const guaranteeOpen = (b) => {
+    if (b.status !== 'terminee' || b.guarantee_at || b.payment_status === 'garantie') return false;
+    const end = b.finished_at ? Date.parse(b.finished_at.replace(' ', 'T') + 'Z') : Date.parse(`${b.date}T23:59:00+01:00`);
+    return now().getTime() - end <= GUARANTEE_HOURS * 3600e3;
+  };
+  route('POST', '/api/bookings/:id/guarantee', ({ user, id, body }) => {
+    need(user, 'client');
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND client_id = ?').get(id, user.id);
+    if (!b) throw new HttpError(404, 'Réservation introuvable.');
+    if (b.guarantee_at) throw new HttpError(409, 'Votre demande est déjà enregistrée : l\'équipe vous recontacte.');
+    if (!guaranteeOpen(b)) throw new HttpError(409, `La garantie se demande dans les ${GUARANTEE_HOURS} h qui suivent le ménage.`);
+    const text = str(body.text, 800);
+    if (text.length < 10) throw new HttpError(400, 'Dites-nous en quelques mots ce qui n\'allait pas (pièces, tâches oubliées…).');
+    db.prepare("UPDATE bookings SET guarantee_at = datetime('now'), guarantee_text = ?, guarantee_status = 'demandee' WHERE id = ?").run(text, id);
+    db.prepare("INSERT INTO incidents (booking_id, text, source) VALUES (?, ?, 'garantie')").run(id, `Garantie demandée : ${text}`);
+    db_.log(db, `GARANTIE · Réservation n° ${id} : ${user.name} n'est pas satisfait(e). Retour gratuit à planifier.`);
+    for (const to of ownerEmails()) mailer.send(to, `Garantie : retour gratuit à planifier (n° ${id})`, 'Un client n\'est pas satisfait', [
+      `${user.name} · ${SERVICE_NAME[b.service] || 'Ménage'} du ${fr(b.date)}, ${b.cp}.`, `« ${text} »`, 'Appelez le client et planifiez le retour gratuit depuis l\'admin (À traiter).',
+    ], { label: 'Planifier le retour', path: '/#/admin' });
+    mailer.send(user.email, 'Nous revenons gratuitement', 'Nous revenons gratuitement', [
+      `Bonjour ${user.name.split(' ')[0]},`, 'Merci de nous l\'avoir signalé. Nous revenons reprendre les points concernés, sans frais.',
+      'L\'équipe vous contacte dans la journée pour fixer le créneau.',
+    ], { label: 'Ma réservation', path: '/#/mes-reservations' }, { key: `guarantee-ack-${id}` });
+    return { ok: true, message: 'C\'est noté. Nous revenons gratuitement : l\'équipe vous contacte dans la journée pour fixer le créneau.' };
+  });
+  route('POST', '/api/admin/bookings/:id/guarantee-visit', ({ user, id, body }) => {
+    needStaff(user);
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+    if (!b || !b.guarantee_at) throw new HttpError(404, 'Aucune demande de garantie pour cette réservation.');
+    if (b.guarantee_visit_id) throw new HttpError(409, `Retour déjà planifié (réservation n° ${b.guarantee_visit_id}).`);
+    const date = str(body.date, 10); const time = str(body.time, 5);
+    if (!pricing.isValidDate(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new HttpError(400, 'Date ou heure invalide.');
+    if (date < pricing.todayParis(now())) throw new HttpError(400, 'Choisissez une date à venir.');
+    const hours = Math.max(1, Math.min(b.hours, Number(body.hours) || Math.ceil(b.hours / 2)));
+    const vid = Number(db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, status, checklist, photo_consent, home_id, guarantee_of)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, 'garantie', 'en_attente', ?, ?, ?, ?)`).run(b.client_id, b.service, b.size, hours, b.cp, b.address, date, time, b.zone, b.checklist, b.photo_consent, b.home_id, b.id).lastInsertRowid);
+    db.prepare("UPDATE bookings SET guarantee_status = 'planifiee', guarantee_visit_id = ? WHERE id = ?").run(vid, id);
+    db.prepare("UPDATE incidents SET resolved = 1 WHERE booking_id = ? AND source = 'garantie'").run(id);
+    db_.log(db, `Garantie : retour gratuit n° ${vid} planifié le ${date} à ${time} pour la réservation n° ${id} (${user.name}). Attribution nécessaire.`);
+    const c = db.prepare('SELECT name, email FROM users WHERE id = ?').get(b.client_id);
+    mailer.send(c.email, `Retour gratuit prévu le ${fr(date)} à ${time}`, 'Votre retour gratuit est planifié', [
+      `Bonjour ${c.name.split(' ')[0]},`, `Nous revenons le ${fr(date)} à ${time} reprendre les points signalés. C'est gratuit.`, 'Vous recevrez le nom de l\'intervenante dès qu\'elle est attribuée.',
+    ], { label: 'Voir la réservation', path: '/#/mes-reservations' }, { key: `guarantee-visit-${id}` });
+    return { ok: true, id: vid, message: `Retour gratuit planifié (n° ${vid}). Attribuez-le comme une réservation normale.` };
+  });
+
   route('POST', '/api/bookings/:id/rate', ({ user, id, body }) => {
     need(user, 'client');
     const stars = Number(body.stars);
     if (![1, 2, 3, 4, 5].includes(stars)) throw new HttpError(400, 'Note de 1 à 5.');
     const review = str(body.review, 500) || null;
-    const r = db.prepare("UPDATE bookings SET rating = ?, review = ? WHERE id = ? AND client_id = ? AND status = 'terminee' AND rating IS NULL").run(stars, review, id, user.id);
+    // Publication sur le site seulement avec l'accord explicite du client (prénom + initiale).
+    const publish = body.publish === true && Boolean(review) ? 1 : 0;
+    const r = db.prepare("UPDATE bookings SET rating = ?, review = ?, review_public = ? WHERE id = ? AND client_id = ? AND status = 'terminee' AND rating IS NULL").run(stars, review, publish, id, user.id);
     if (!r.changes) throw new HttpError(409, 'Cette réservation ne peut pas être notée.');
     db_.log(db, `Réservation n° ${id} : note ${stars}/5${review ? ' avec commentaire' : ''}.${stars < 4 ? ' Alerte qualité : rappeler le client.' : ''}`);
     if (stars < 4) db.prepare("INSERT INTO incidents (booking_id, text, source) VALUES (?, ?, 'note')").run(id, `Note ${stars}/5${review ? ` : ${review}` : ''}`);
@@ -1059,6 +1143,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db_.log(db, `Réservation n° ${id} : ${action === 'start' ? 'ménage commencé' : 'ménage terminé'} par ${user.name}.`);
       const cl = db.prepare('SELECT email FROM users WHERE id = ?').get(b.client_id);
       if (action === 'start') mailer.send(cl.email, 'Votre ménage a commencé', `${user.name.split(' ')[0]} a commencé votre ménage`, [`Ménage du ${fr(b.date)}, ${b.address}.`], { label: 'Suivre le ménage', path: '/#/' });
+      if (action === 'finish') db.prepare("UPDATE bookings SET finished_at = COALESCE(finished_at, datetime('now')) WHERE id = ?").run(id);
       if (action === 'finish') rewardSponsor(b.client_id);
       if (action === 'finish') mailer.send(cl.email, 'Votre ménage est terminé', 'Votre ménage est terminé', [`${user.name.split(' ')[0]} a terminé le ménage du ${fr(b.date)}.`, 'Donnez votre avis en un clic : il nous aide à garantir la qualité. Un problème ? Signalez-le depuis la réservation.'], { label: 'Donner mon avis', path: '/#/mes-reservations' });
     }
@@ -1174,7 +1259,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
 
   // ----- réglages publics : lien d'avis Google -----
   const reviewUrl = /^https:\/\/[^\s"<>]+$/.test(googleReviewUrl || '') ? googleReviewUrl : '';
-  route('GET', '/api/config', () => ({ version: VERSION, googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
+  route('GET', '/api/config', () => ({ version: VERSION, sap: sapOn() ? { declared: true, numero: sapSettings().numero, services: SAP_SERVICES } : { declared: false }, googleReviewUrl: reviewUrl, prices: pricing.publicPrices(), openDepts: [...pricing.OPEN_DEPTS] }));
 
   // ----- tarifs et zones, modifiables par le responsable -----
   // Les réservations déjà créées gardent leur prix : seules les nouvelles suivent la nouvelle grille.
@@ -1186,6 +1271,35 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (saved && pricing.validateSettings(saved).length) { db_.log(db, 'Tarifs enregistrés invalides : grille par défaut utilisée.'); saved = null; }
     pricing.applySettings(saved || pricing.DEFAULTS);
   }
+  // ----- services à la personne (crédit d'impôt) -----
+  // Le crédit d'impôt n'est mentionné qu'une fois la déclaration SAP faite et son numéro saisi dans l'admin.
+  const SAP_SERVICES = ['menage', 'grand'];
+  const sapSettings = () => {
+    try { return { declared: false, numero: '', ...JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'sap'").get()?.value || '{}') }; } catch { return { declared: false, numero: '' }; }
+  };
+  const sapOn = () => { const st = sapSettings(); return Boolean(st.declared && /^SAP\d{9}$/.test(st.numero)); };
+  route('GET', '/api/admin/sap', ({ user }) => {
+    need(user, 'admin');
+    return { ...sapSettings(), active: sapOn(), interested: db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client' AND wants_avance = 1").get().n };
+  });
+  route('POST', '/api/admin/sap', ({ user, body }) => {
+    need(user, 'admin');
+    const numero = str(body.numero, 20).toUpperCase().replace(/\s+/g, '');
+    const declared = Boolean(body.declared);
+    if (declared && !/^SAP\d{9}$/.test(numero)) throw new HttpError(400, 'Numéro de déclaration au format SAP suivi de 9 chiffres (il figure sur le récépissé de déclaration).');
+    db.prepare("INSERT INTO settings (key, value, updated_by) VALUES ('sap', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), updated_by = excluded.updated_by").run(JSON.stringify({ declared, numero }), user.id);
+    db_.log(db, `Services à la personne : ${declared ? `déclaration ${numero} enregistrée, crédit d'impôt affiché` : 'crédit d\'impôt masqué'} (${user.name}).`);
+    return { ok: true, message: declared ? 'Crédit d\'impôt affiché sur le site, les factures et les attestations.' : 'Crédit d\'impôt masqué.' };
+  });
+  // Avance immédiate : liste des clients intéressés, en attendant le raccordement à l'URSSAF.
+  route('POST', '/api/me/avance', ({ user, body }) => {
+    need(user, 'client');
+    db.prepare('UPDATE users SET wants_avance = ? WHERE id = ?').run(body.wants ? 1 : 0, user.id);
+    return { ok: true, message: body.wants ? 'C\'est noté : nous vous prévenons dès que l\'avance immédiate est disponible.' : 'C\'est noté.' };
+  });
+  // Pièces demandées aux candidates : liste publique (page de recrutement).
+  route('GET', '/api/recruitment', () => ({ docs: { S: kindsFor('S'), I: kindsFor('I') }, rate: { min: 15, max: 40 } }));
+
   const describeChanges = (a, b) => {
     const out = [];
     const pct = (x) => `${Math.round(x * 1000) / 10} %`;
@@ -1278,6 +1392,30 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   });
 
   // ----- intervenante : mes gains -----
+  // ----- intervenante : sa semaine (missions, propositions, disponibilités, congés) -----
+  route('GET', '/api/worker/week', ({ user, query }) => {
+    need(user, 'intervenante');
+    const today = pricing.todayParis(now());
+    const ask = pricing.isValidDate(query.get('start') || '') ? query.get('start') : today;
+    const d0 = new Date(`${ask}T12:00:00Z`);
+    d0.setUTCDate(d0.getUTCDate() - ((d0.getUTCDay() + 6) % 7)); // lundi
+    const days = [];
+    const avail = db.prepare('SELECT start, end FROM availability WHERE worker_id = ? AND weekday = ?');
+    const off = db.prepare('SELECT 1 FROM timeoff WHERE worker_id = ? AND start_date <= ? AND end_date >= ?');
+    const missions = db.prepare("SELECT id, date, time, hours, cp, service, status, on_way_at, arrived_at FROM bookings WHERE worker_id = ? AND date = ? AND status IN ('attribuee','en_cours','terminee') ORDER BY time");
+    const offers = db.prepare("SELECT b.id, b.date, b.time, b.hours, b.cp, b.service FROM offers o JOIN bookings b ON b.id = o.booking_id WHERE o.worker_id = ? AND o.state = 'offered' AND b.status = 'proposee' AND b.date = ? ORDER BY b.time");
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(d0); d.setUTCDate(d0.getUTCDate() + i);
+      const date = d.toISOString().slice(0, 10);
+      const a = avail.get(user.id, d.getUTCDay());
+      days.push({ date, today: date === today, off: Boolean(off.get(user.id, date, date)), avail: a || null,
+        items: [...missions.all(user.id, date).map((m) => ({ ...m, kind: 'mission', service: SERVICE_NAME[m.service] || m.service })),
+          ...offers.all(user.id, date).map((o) => ({ ...o, kind: 'offre', service: SERVICE_NAME[o.service] || o.service }))].sort((x, y) => x.time.localeCompare(y.time)) });
+    }
+    const shift = (n) => { const d = new Date(d0); d.setUTCDate(d0.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    return { start: shift(0), prev: shift(-7), next: shift(7), days, hours: days.reduce((t, d) => t + d.items.filter((x) => x.kind === 'mission').reduce((u, x) => u + x.hours, 0), 0) };
+  });
+
   route('GET', '/api/worker/earnings', ({ user }) => {
     need(user, 'intervenante');
     const w = workerProfile(user.id);
@@ -1285,13 +1423,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const prev = new Date(Date.parse(m0 + '-15T12:00:00Z') - 30 * 864e5).toISOString().slice(0, 7);
     const sum = (where, ...args) => db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(hours), 0) AS h FROM bookings WHERE worker_id = ? AND ${where}`).get(user.id, ...args);
     const pack = (r) => ({ n: r.n, h: r.h, eur: w.statut === 'I' ? Math.round(r.h * (w.rate || 0) * 100) / 100 : null });
-    const months = db.prepare("SELECT substr(date, 1, 7) AS m, COUNT(*) AS n, SUM(hours) AS h FROM bookings WHERE worker_id = ? AND status = 'terminee' GROUP BY m ORDER BY m DESC LIMIT 6").all(user.id);
+    const months = db.prepare("SELECT substr(date, 1, 7) AS m, COUNT(*) AS n, SUM(hours) AS h FROM bookings WHERE worker_id = ? AND status = 'terminee' GROUP BY m ORDER BY m DESC LIMIT 12").all(user.id);
+    const paidByMonth = w.statut === 'I' ? Object.fromEntries(db.prepare("SELECT substr(paid_at, 1, 7) AS m, SUM(amount) AS s FROM payouts WHERE worker_id = ? AND paid_at IS NOT NULL GROUP BY m").all(user.id).map((r) => [r.m, Math.round(r.s * 100) / 100])) : {};
     return {
       statut: w.statut, rate: w.rate,
       month: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", m0)),
       lastMonth: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", prev)),
       upcoming: pack(sum("status IN ('attribuee','en_cours') AND date >= ?", pricing.todayParis(now()))),
-      history: months.map((r) => ({ month: r.m, ...pack(r) })),
+      history: months.map((r) => ({ month: r.m, ...pack(r), paid: paidByMonth[r.m] ?? null })),
       ...(w.statut === 'I' ? {
         bonus: bonusOf(user.id),
         pending: Math.round(owedFor(user.id).reduce((t, o) => t + o.amount, 0) * 100) / 100,
@@ -1327,9 +1466,9 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const e = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const html = `<!doctype html><html lang="fr"><meta charset="utf-8"><title>Attestation ${year}</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:760px;margin:30px auto;padding:0 20px;color:#0f1a4a}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin:16px 0}td,th{border-bottom:1px solid #dfe5f3;padding:7px;text-align:left}td.n,th.n{text-align:right}.warn{background:#fff1e6;border:1px solid #ffb999;padding:12px;border-radius:10px}@media print{.noprint{display:none}}</style>
-<p class="warn"><b>Document provisoire.</b> Cette attestation ne vaut pour le crédit d'impôt qu'une fois Proprigo déclaré « services à la personne » (n° [À COMPLÉTER]). Les ménages de logements de location courte durée et le nettoyage de bureaux n'y ouvrent pas droit et ne sont pas listés.</p>
+${sapOn() ? '' : `<p class="warn"><b>Document provisoire.</b> Cette attestation ne vaut pour le crédit d'impôt qu'une fois Proprigo déclaré « services à la personne » (n° [À COMPLÉTER]). Les ménages de logements de location courte durée et le nettoyage de bureaux n'y ouvrent pas droit et ne sont pas listés.</p>`}
 <h1>Attestation fiscale annuelle ${year}</h1>
-<p>Proprigo, [RAISON SOCIALE, ADRESSE, SIRET] atteste que <b>${e(user.name)}</b> a bénéficié des prestations de ménage à domicile suivantes, réglées en ${year} :</p>
+<p>${e(company.raisonSociale || 'Proprigo [RAISON SOCIALE]')}, ${e(company.adresse || '[ADRESSE]')}, SIRET ${e(company.siret || '[SIRET]')}${sapOn() ? `, déclaré organisme de services à la personne sous le n° ${e(sapSettings().numero)},` : ''} atteste que <b>${e(user.name)}</b> a bénéficié des prestations de ménage à domicile suivantes, réglées en ${year} :</p>
 <table><tr><th>Date</th><th>Prestation</th><th>Adresse</th><th class="n">Heures</th><th class="n">Montant TTC</th></tr>
 ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>${b.service === 'grand' ? 'Grand nettoyage' : 'Ménage'}</td><td>${e(b.address)}, ${e(b.cp)}</td><td class="n">${String(b.hours).replace('.', ',')}</td><td class="n">${b.total.toFixed(2).replace('.', ',')} €</td></tr>`).join('') || '<tr><td colspan="5">Aucune prestation éligible cette année.</td></tr>'}
 <tr><th colspan="4">Total réglé</th><th class="n">${total.toFixed(2).replace('.', ',')} €</th></tr></table>
@@ -1402,7 +1541,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     db_.log(db, `Compte « planning » créé pour ${name}.`);
     return { status: 201, data: { ok: true, message: `Compte planning créé pour ${name}. Demandez-lui de changer son mot de passe dans « Mon compte ».` } };
   });
-  for (const step of ['onway', 'arrived']) route('POST', `/api/worker/missions/:id/${step}`, ({ user, id }) => {
+  for (const step of ['onway', 'arrived']) route('POST', `/api/worker/missions/:id/${step}`, ({ user, id, body }) => {
     need(user, 'intervenante');
     const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND worker_id = ?').get(id, user.id);
     if (!b) throw new HttpError(404, 'Mission introuvable.');
@@ -1410,10 +1549,14 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     if (b.date !== pricing.todayParis(now())) throw new HttpError(409, 'Ce bouton sert le jour de la mission.');
     const first = user.name.split(' ')[0];
     if (step === 'onway') {
-      if (b.on_way_at) return { ok: true, message: 'Le client sait déjà que vous êtes en route.' };
-      db.prepare("UPDATE bookings SET on_way_at = datetime('now') WHERE id = ?").run(id);
-      engine.notify(db, id, `${first} est en route vers votre logement.`);
-      return { ok: true, message: 'Le client est prévenu que vous êtes en route.' };
+      // Heure d'arrivée estimée : choisie par l'intervenante (5 à 90 minutes), modifiable tant qu'elle n'est pas arrivée.
+      const mins = [5, 10, 15, 20, 30, 45, 60, 90].includes(Number(body.eta)) ? Number(body.eta) : null;
+      const eta = mins ? new Date(now().getTime() + mins * 60e3) : null;
+      const hhmm = eta ? new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }).format(eta) : null;
+      if (b.on_way_at && !mins) return { ok: true, message: 'Le client sait déjà que vous êtes en route.' };
+      db.prepare("UPDATE bookings SET on_way_at = COALESCE(on_way_at, datetime('now')), eta_at = ? WHERE id = ?").run(eta ? eta.toISOString() : null, id);
+      engine.notify(db, id, b.on_way_at ? `${first} a mis à jour son heure d'arrivée : vers ${hhmm}.` : `${first} est en route vers votre logement${hhmm ? ` : arrivée estimée vers ${hhmm}` : ''}.`);
+      return { ok: true, message: hhmm ? `Le client est prévenu : arrivée vers ${hhmm}.` : 'Le client est prévenu que vous êtes en route.' };
     }
     if (b.arrived_at) return { ok: true, message: 'Arrivée déjà signalée.' };
     db.prepare("UPDATE bookings SET arrived_at = datetime('now'), on_way_at = COALESCE(on_way_at, datetime('now')) WHERE id = ?").run(id);
@@ -1630,6 +1773,36 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     fs.writeFileSync(path.join(PHOTOS, file), buf);
     db.prepare('INSERT INTO photos (booking_id, kind, file, uploaded_by) VALUES (?, ?, ?, ?)').run(id, kind, file, user.id);
     return { ok: true };
+  });
+
+  // ----- notifications sur téléphone (Web Push) -----
+  push.ensureTable(db);
+  const pushSubject = `mailto:${String(mailer.cfg.from || 'contact@proprigo.fr').replace(/^.*<|>.*$/g, '').trim()}`;
+  engine.setPushHook((d, userId, msg) => push.notifyUser(d, userId, msg, { subject: pushSubject }));
+  route('GET', '/api/push/key', ({ user }) => {
+    need(user);
+    return { publicKey: push.vapidKeys(db).publicKey, subscribed: db.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?').get(user.id).n };
+  });
+  route('POST', '/api/push/subscribe', ({ user, body }) => {
+    need(user);
+    const endpoint = String(body.endpoint || '');
+    const p256dh = String(body.keys?.p256dh || ''); const auth = String(body.keys?.auth || '');
+    if (!push.validEndpoint(endpoint)) throw new HttpError(400, 'Service de notification non reconnu.');
+    if (push.fromB64u(p256dh).length !== 65 || push.fromB64u(auth).length < 16) throw new HttpError(400, 'Abonnement invalide.');
+    if (db.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?').get(user.id).n >= 10) db.prepare('DELETE FROM push_subs WHERE id = (SELECT id FROM push_subs WHERE user_id = ? ORDER BY id LIMIT 1)').run(user.id);
+    db.prepare(`INSERT INTO push_subs (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, fails = 0`).run(user.id, endpoint, p256dh, auth);
+    return { ok: true, message: 'Notifications activées sur cet appareil.' };
+  });
+  route('POST', '/api/push/unsubscribe', ({ user, body }) => {
+    need(user);
+    db.prepare('DELETE FROM push_subs WHERE user_id = ? AND endpoint = ?').run(user.id, String(body.endpoint || ''));
+    return { ok: true, message: 'Notifications désactivées sur cet appareil.' };
+  });
+  route('POST', '/api/push/test', async ({ user }) => {
+    need(user);
+    const n = await push.notifyUser(db, user.id, { title: 'Proprigo', body: 'Les notifications fonctionnent sur cet appareil.', url: '/#/', tag: 'test' }, { subject: pushSubject });
+    return { ok: true, sent: n, message: n ? 'Notification envoyée : elle doit apparaître dans quelques secondes.' : 'Aucun appareil n\'a pu être prévenu. Réactivez les notifications.' };
   });
 
   // ----- documents des intervenantes : déposés par elles, vérifiés par le responsable -----
@@ -1985,7 +2158,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     need(user, 'admin');
     if (!monthOk(query.get('month'))) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
     const m = movements(query.get('month'));
-    const cell = (v) => { const t = String(v ?? ''); return /[;"\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? "'" : '') + t.replace(/"/g, '""')}"` : t; };
+    const cell = (v) => { const t = String(v ?? ''); if (/^-?\d+(,\d+)?$/.test(t)) return t; return /[;"\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? "'" : '') + t.replace(/"/g, '""')}"` : t; }; // un nombre (même négatif) reste un nombre ; un texte qui commence par = + - @ est neutralisé
     const eurx = (c) => (c / 100).toFixed(2).replace('.', ',');
     const lines = [['Date', 'Type', 'Pièce', 'Client', 'Réservation', 'Montant TTC', 'Dont carte', 'Dont crédit Proprigo', 'Taux TVA', 'Statut', 'Référence Stripe'].join(';')];
     for (const r of m.rows) lines.push([new Date(r.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' }), r.type, r.ref, r.client, r.booking, eurx(r.amount_cents), eurx(r.card_cents), eurx(r.credit_cents),
@@ -2037,16 +2210,9 @@ ${parts || '<p>Aucune réservation retrouvée pour ce paiement : vérifiez dans 
     return { streamed: true };
   });
 
-  route('GET', '/api/bookings/:id/receipt', ({ user, id, res, query }) => {
-    const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
-    if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
-    const isTest = !b.paid;
-    if (isTest && (production || b.status !== 'terminee')) throw new HttpError(409, 'La facture est disponible dès que la réservation est payée.');
-    const facture = isTest ? null : issueInvoice(b.id);
-    const avoirs = isTest ? [] : db.prepare("SELECT * FROM invoices WHERE kind = 'avoir' AND booking_id = ? ORDER BY seq").all(b.id);
-    const wanted = String(query.get('doc') || '');
-    const doc = isTest ? { kind: 'facture', number: `TEST-${b.id}`, amount_cents: Math.round((b.total + (b.discount || 0)) * 100), tva_rate: tvaOf(b), issued_at: now().toISOString() }
-      : avoirs.find((a) => a.number === wanted) || facture;
+  // Rendu d'une facture ou d'un avoir (page seule, ou impression groupée pour le comptable).
+  const INVOICE_CSS = `body{font:15px/1.5 Arial,sans-serif;color:#0f1430;max-width:760px;margin:24px auto;padding:0 16px}h1{font-size:24px;margin:0}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{padding:8px;border-bottom:1px solid #dce3f7;text-align:left;vertical-align:top}.n{text-align:right;white-space:nowrap}.muted{color:#596181;font-size:13px}.todo{background:#fff1c2}.test{background:#fff1c2;padding:10px;border-radius:8px;font-weight:700}.box{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:12px}tfoot td{font-weight:700}@media print{.noprint{display:none}}`;
+  function invoiceBody(doc, b, { isTest = false, avoirs = [], forPrint = false } = {}) {
     const c = db.prepare('SELECT name, email, company, siret, vat_number, billing_address FROM users WHERE id = ?').get(b.client_id);
     const e = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     const eur = (cents) => (cents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
@@ -2059,10 +2225,7 @@ ${parts || '<p>Aucune réservation retrouvée pour ce paiement : vérifiez dans 
     const isAvoir = doc.kind === 'avoir';
     const title = isAvoir ? `Avoir ${doc.number}` : `Facture ${doc.number}`;
     const credit = Math.round((b.discount || 0) * 100);
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
-    res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)}</title>
-<style>body{font:15px/1.5 Arial,sans-serif;color:#0f1430;max-width:760px;margin:24px auto;padding:0 16px}h1{font-size:24px;margin:0}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{padding:8px;border-bottom:1px solid #dce3f7;text-align:left;vertical-align:top}.n{text-align:right;white-space:nowrap}.muted{color:#596181;font-size:13px}.todo{background:#fff1c2}.test{background:#fff1c2;padding:10px;border-radius:8px;font-weight:700}.box{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:12px}tfoot td{font-weight:700}@media print{.noprint{display:none}}</style></head><body>
-${isTest ? '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme encaissée. Aucune valeur comptable.</p>' : ''}
+    const body = `${isTest ? '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme encaissée. Aucune valeur comptable.</p>' : ''}
 <div class="box"><div><h1>${e(title)}</h1><p class="muted">Date d'émission : ${e(day(doc.issued_at))}${isAvoir ? `<br>Avoir sur la facture ${e(doc.ref_invoice)}` : ''}</p></div>
 <div><b>${e(company.nomCommercial || 'Proprigo')}</b><br>${todo('raisonSociale', 'raison sociale')}${company.formeJuridique ? `, ${e(company.formeJuridique)}` : ''}${company.capital ? ` au capital de ${e(company.capital)}` : ''}<br>${todo('adresse', 'adresse du siège')}<br>SIRET : ${todo('siret', 'SIRET')}${company.rcs ? `<br>RCS ${e(company.rcs)}` : ''}<br>TVA intracommunautaire : ${todo('tvaIntracom', 'n° de TVA')}</div></div>
 <div class="box"><div><b>${isPro ? 'Facturé à' : 'Client'}</b><br>${c.company ? `${e(c.company)}<br>` : ''}${e(c.name)}<br>${c.billing_address ? e(c.billing_address) : `${e(b.address)}, ${e(b.cp)}`}${c.siret ? `<br>SIRET : ${e(c.siret)}` : ''}${c.vat_number ? `<br>TVA intracommunautaire : ${e(c.vat_number)}` : ''}</div>
@@ -2073,10 +2236,132 @@ ${isTest ? '<p class="test">DOCUMENT DE TEST : paiement simulé, aucune somme en
 ${isAvoir ? `<p>Remboursé sur le moyen de paiement d'origine.</p>`
     : `<p>Facture acquittée${isTest ? '' : ` le ${e(day(doc.issued_at))}`} : ${credit > 0 ? `${eur(ttc - credit)} par carte bancaire et ${eur(credit)} avec le crédit Proprigo (parrainage, carte cadeau ou pack).` : 'réglée par carte bancaire.'}</p>`}
 ${isPro ? "<p class=\"muted\">Prestation à un professionnel. Escompte pour paiement anticipé : néant. En cas de retard de paiement : pénalités au taux de 3 fois le taux d'intérêt légal et indemnité forfaitaire pour frais de recouvrement de 40 € (art. L441-10 du Code de commerce).</p>"
+    : sapOn() && SAP_SERVICES.includes(b.service) ? `<p class="muted">Prestation de services à la personne (déclaration n° ${e(sapSettings().numero)}), ouvrant droit au crédit d'impôt de l'article 199 sexdecies du Code général des impôts, dans les conditions en vigueur. L'attestation fiscale annuelle est disponible dans votre espace.</p>`
     : "<p class=\"muted\">Service à la personne : l'attestation fiscale annuelle pour le crédit d'impôt sera disponible dès la déclaration de l'entreprise (à confirmer par l'expert-comptable).</p>"}
 ${!isAvoir && avoirs.length ? `<p class="noprint"><b>Avoirs liés :</b> ${avoirs.map((a) => `<a href="?doc=${encodeURIComponent(a.number)}">${e(a.number)}</a> (${eur(a.amount_cents)})`).join(', ')}</p>` : ''}
 ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)}</a></p>` : ''}
 <p class="noprint muted">Pour l'enregistrer en PDF : Ctrl + P sur ordinateur, ou Partager › Imprimer sur téléphone.</p>
+`;
+    return { title, body: forPrint ? body.replace(/<p class="noprint[\s\S]*?<\/p>\n?/g, '') : body };
+  }
+
+  route('GET', '/api/bookings/:id/receipt', ({ user, id, res, query }) => {
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+    if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
+    const isTest = !b.paid;
+    if (isTest && (production || b.status !== 'terminee')) throw new HttpError(409, 'La facture est disponible dès que la réservation est payée.');
+    const facture = isTest ? null : issueInvoice(b.id);
+    const avoirs = isTest ? [] : db.prepare("SELECT * FROM invoices WHERE kind = 'avoir' AND booking_id = ? ORDER BY seq").all(b.id);
+    const wanted = String(query.get('doc') || '');
+    const doc = isTest ? { kind: 'facture', number: `TEST-${b.id}`, amount_cents: Math.round((b.total + (b.discount || 0)) * 100), tva_rate: tvaOf(b), issued_at: now().toISOString() }
+      : avoirs.find((a) => a.number === wanted) || facture;
+    const { title, body } = invoiceBody(doc, b, { isTest, avoirs });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title.replace(/[<>&"]/g, '')}</title>
+<style>${INVOICE_CSS}</style></head><body>
+${body}</body></html>`);
+    return { streamed: true };
+  });
+
+  // ----- relances des clients qui ne reviennent pas -----
+  // Clients existants, pour un service qu'ils ont déjà acheté : autorisé sans accord préalable (« soft opt-in »),
+  // à condition d'offrir la désinscription en un clic dans chaque e-mail. Une relance au plus tous les 120 jours.
+  const nudgeSettings = () => {
+    try { return { enabled: true, days: 45, ...JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'nudges'").get()?.value || '{}') }; } catch { return { enabled: true, days: 45 }; }
+  };
+  const unsubSecret = (() => {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'unsub_secret'").get();
+    if (row) return row.value;
+    const v = crypto.randomBytes(32).toString('hex');
+    db.prepare("INSERT INTO settings (key, value) VALUES ('unsub_secret', ?)").run(v);
+    return v;
+  })();
+  const unsubToken = (uid) => crypto.createHmac('sha256', unsubSecret).update(`unsub:${uid}`).digest('hex').slice(0, 32);
+  const unsubUrl = (uid) => `${appUrl.replace(/\/$/, '')}/desinscription?u=${uid}&t=${unsubToken(uid)}`;
+  function nudgeCandidates() {
+    const st = nudgeSettings();
+    const today = pricing.todayParis(now());
+    const back = (n) => new Date(Date.parse(today + 'T12:00:00Z') - n * 864e5).toISOString().slice(0, 10);
+    return db.prepare(`SELECT u.id, u.name, u.email, MAX(b.date) AS last FROM users u JOIN bookings b ON b.client_id = u.id AND b.status = 'terminee'
+      WHERE u.role = 'client' AND u.marketing_optout = 0 AND (u.last_nudge_at IS NULL OR u.last_nudge_at < datetime('now', '-120 days'))
+        AND NOT EXISTS (SELECT 1 FROM bookings x WHERE x.client_id = u.id AND x.status IN ('en_attente','proposee','attribuee','en_cours'))
+      GROUP BY u.id HAVING MAX(b.date) <= ? AND MAX(b.date) >= ? ORDER BY last`).all(back(st.days), back(st.days + 60));
+  }
+  function runNudges({ force = false } = {}) {
+    const st = nudgeSettings();
+    if (!st.enabled && !force) return 0;
+    let n = 0;
+    for (const c of nudgeCandidates()) {
+      const last = db.prepare("SELECT * FROM bookings WHERE client_id = ? AND status = 'terminee' ORDER BY date DESC, id DESC LIMIT 1").get(c.id);
+      db.prepare("UPDATE users SET last_nudge_at = datetime('now') WHERE id = ?").run(c.id);
+      const url = unsubUrl(c.id);
+      mailer.send(c.email, 'On repasse faire briller chez vous ?', `Bonjour ${c.name.split(' ')[0]}`, [
+        `Votre dernier ménage avec Proprigo date du ${fr(last.date)}.`,
+        'On revient ? Réservez le même ménage en une minute : même adresse, mêmes consignes, et votre intervenante préférée si elle est libre.',
+        `Vous ne souhaitez plus recevoir ces rappels ? Désinscription : ${url}`,
+      ], { label: 'Réserver le même ménage', path: `/#/reserver?again=${last.id}` }, { key: `nudge-${c.id}-${last.date}`, headers: { 'List-Unsubscribe': `<${url}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
+      n += 1;
+    }
+    if (n) db_.log(db, `Relances envoyées à ${n} client(s) sans ménage depuis ${st.days} jours.`);
+    return n;
+  }
+  route('GET', '/api/admin/nudges', ({ user }) => {
+    need(user, 'admin');
+    return { settings: nudgeSettings(), preview: nudgeCandidates().map((c) => ({ name: c.name, last: c.last })),
+      optouts: db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client' AND marketing_optout = 1").get().n,
+      sent30: db.prepare("SELECT COUNT(*) AS n FROM users WHERE last_nudge_at >= datetime('now', '-30 days')").get().n };
+  });
+  route('POST', '/api/admin/nudges', ({ user, body }) => {
+    need(user, 'admin');
+    const days = [30, 45, 60, 90].includes(Number(body.days)) ? Number(body.days) : 45;
+    const st = { enabled: Boolean(body.enabled), days };
+    db.prepare("INSERT INTO settings (key, value, updated_by) VALUES ('nudges', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), updated_by = excluded.updated_by").run(JSON.stringify(st), user.id);
+    db_.log(db, `Relances ${st.enabled ? `activées (après ${days} jours sans ménage)` : 'désactivées'} par ${user.name}.`);
+    return { ok: true, message: st.enabled ? `Relances activées : après ${days} jours sans ménage.` : 'Relances désactivées.' };
+  });
+  route('POST', '/api/admin/nudges/run', ({ user }) => {
+    need(user, 'admin');
+    const n = runNudges({ force: true });
+    return { ok: true, sent: n, message: n ? `${n} relance(s) envoyée(s).` : 'Personne à relancer aujourd\'hui.' };
+  });
+
+  // ----- export des factures pour le comptable -----
+  const invoicesOfMonth = (month) => db.prepare('SELECT * FROM invoices ORDER BY kind DESC, year, seq').all()
+    .filter((i) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit' }).format(new Date(i.issued_at)).slice(0, 7) === month);
+  route('GET', '/api/admin/invoices.csv', ({ user, query, res }) => {
+    need(user, 'admin');
+    if (!monthOk(query.get('month'))) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
+    const cell = (v) => { const t = String(v ?? ''); if (/^-?\d+(,\d+)?$/.test(t)) return t; return /[;"\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? "'" : '') + t.replace(/"/g, '""')}"` : t; }; // un nombre (même négatif) reste un nombre ; un texte qui commence par = + - @ est neutralisé
+    const eurx = (c) => (c / 100).toFixed(2).replace('.', ',');
+    const lines = [['Numéro', 'Type', 'Date', 'Client', 'SIRET client', 'Réservation', 'Prestation', 'Montant HT', 'Taux TVA', 'TVA', 'Montant TTC', 'Facture d\'origine'].join(';')];
+    let ht = 0; let tva = 0; let ttc = 0;
+    for (const i of invoicesOfMonth(query.get('month'))) {
+      const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(i.booking_id) || {};
+      const c = db.prepare('SELECT name, company, siret FROM users WHERE id = ?').get(i.client_id) || {};
+      const sign = i.kind === 'avoir' ? -1 : 1;
+      const h = Math.round(i.amount_cents / (1 + i.tva_rate));
+      ht += sign * h; tva += sign * (i.amount_cents - h); ttc += sign * i.amount_cents;
+      lines.push([i.number, i.kind === 'avoir' ? 'Avoir' : 'Facture', new Date(i.issued_at).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' }), c.company || c.name, c.siret || '', b.id || '',
+        `${SERVICE_NAME[b.service] || 'Ménage'} du ${b.date ? fr(b.date) : '?'}`, eurx(sign * h), `${Math.round(i.tva_rate * 1000) / 10} %`, eurx(sign * (i.amount_cents - h)), eurx(sign * i.amount_cents), i.ref_invoice || ''].map(cell).join(';'));
+    }
+    lines.push(['TOTAL', '', '', '', '', '', '', eurx(ht), '', eurx(tva), eurx(ttc), ''].join(';'));
+    db_.log(db, `Export des factures de ${query.get('month')} par ${user.name}.`);
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="proprigo-factures-${query.get('month')}.csv"`, 'Cache-Control': 'no-store' });
+    res.end('﻿' + lines.join('\r\n'));
+    return { streamed: true };
+  });
+  // Toutes les factures et avoirs du mois sur une page, une pièce par feuille : « Imprimer › Enregistrer en PDF ».
+  route('GET', '/api/admin/invoices/print', ({ user, query, res }) => {
+    need(user, 'admin');
+    if (!monthOk(query.get('month'))) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
+    const list = invoicesOfMonth(query.get('month'));
+    const docs = list.map((i) => { const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(i.booking_id); return b ? invoiceBody(i, b, { forPrint: true }).body : ''; });
+    db_.log(db, `Impression groupée des factures de ${query.get('month')} par ${user.name} (${list.length} pièce(s)).`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Factures ${query.get('month')}</title>
+<style>${INVOICE_CSS} .doc{page-break-after:always;break-after:page;padding-bottom:24px;border-bottom:2px dashed #dce3f7;margin-bottom:24px}.doc:last-child{page-break-after:auto;border:0}@media print{.doc{border:0}}</style></head><body>
+<p class="noprint muted">${list.length} pièce(s) pour ${query.get('month')}. Pour un PDF unique : Ctrl + P, puis « Enregistrer au format PDF ».</p>
+${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucune facture ce mois-ci.</p>'}
 </body></html>`);
     return { streamed: true };
   });
@@ -2352,7 +2637,7 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
     needStaff(user);
     const bookingToAssign = db.prepare('SELECT paid, payment_status FROM bookings WHERE id = ?').get(id);
     if (!bookingToAssign) throw new HttpError(404, 'Réservation introuvable.');
-    if (production && (!bookingToAssign.paid || bookingToAssign.payment_status !== 'paye')) throw new HttpError(409, 'Paiement confirmé requis avant attribution.');
+    if (production && (!bookingToAssign.paid || !['paye', 'garantie'].includes(bookingToAssign.payment_status))) throw new HttpError(409, 'Paiement confirmé requis avant attribution.');
     if (body.worker_id === 'auto') {
       db.prepare("DELETE FROM offers WHERE booking_id = ? AND state = 'offered'").run(id);
       const r = engine.assign(db, id);
@@ -2460,6 +2745,26 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
         }
         return send(res, 200, { received: true });
       }
+      // Désinscription des relances : la page demande une confirmation (les robots qui ouvrent les liens ne désinscrivent personne) ;
+      // Gmail et Yahoo envoient un POST « un clic » (RFC 8058), accepté directement.
+      if (url.pathname === '/desinscription') {
+        const uid = Number(url.searchParams.get('u'));
+        const t = String(url.searchParams.get('t') || '');
+        const valid = Number.isSafeInteger(uid) && uid > 0 && t.length === 32 && crypto.timingSafeEqual(Buffer.from(t), Buffer.from(unsubToken(uid)));
+        const page = (msg, form = '') => {
+          res.writeHead(valid ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" });
+          res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Proprigo · désinscription</title>
+<style>body{font:16px/1.5 Arial,sans-serif;color:#0f1430;background:#f2f5ff;display:grid;place-items:center;min-height:100vh;margin:0;padding:16px}main{background:#fff;border-radius:18px;padding:28px;max-width:440px}b.logo{color:#1f4fff;font-size:22px}button{background:#1f4fff;color:#fff;border:0;border-radius:12px;padding:12px 18px;font:inherit;font-weight:700;cursor:pointer}</style></head>
+<body><main><b class="logo">proprigo</b><p>${msg}</p>${form}</main></body></html>`);
+        };
+        if (!valid) return page('Ce lien de désinscription n\'est pas valable.');
+        if (req.method === 'POST') {
+          db.prepare('UPDATE users SET marketing_optout = 1 WHERE id = ?').run(uid);
+          db_.log(db, `Client n° ${uid} désinscrit des relances.`);
+          return page('C\'est fait : vous ne recevrez plus nos rappels. Les e-mails liés à vos réservations (confirmations, factures) continuent d\'arriver.');
+        }
+        return page('Ne plus recevoir nos rappels « On repasse faire briller chez vous ? » ?', `<form method="post"><button>Me désinscrire</button></form>`);
+      }
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'GET' && req.method !== 'HEAD' && !sameOrigin(req)) throw new HttpError(403, 'Requête refusée : origine non autorisée.');
         if (req.method === 'POST' && !(req.headers['content-type'] || '').startsWith('application/json')) {
@@ -2565,13 +2870,14 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
     return list.length;
   };
   if (autoSync) {
+    setInterval(() => { try { runNudges(); } catch (e) { console.error('Relances :', e.message); } }, 24 * 3600e3).unref();
     setInterval(() => { try { purgePhotos(); purgeAttempts(); purgeRejectedDocs(); } catch (e) { console.error('Nettoyage quotidien :', e.message); } }, 24 * 3600e3).unref();
     setInterval(() => { mailer.processQueue().catch((e) => console.error('File des e-mails :', e.message)); }, 5 * 60e3).unref();
     setTimeout(runReminders, 60_000).unref();
     setInterval(runReminders, 3600e3).unref();
   }
 
-  return { server, db, runReminders, runBackup, purgePhotos, reportError };
+  return { server, db, runReminders, runBackup, purgePhotos, reportError, runNudges };
 }
 
 module.exports = { createApp };

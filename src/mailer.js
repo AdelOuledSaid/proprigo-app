@@ -58,13 +58,13 @@ class MailError extends Error {
 }
 const failure = (name, status) => new MailError(`${name} : erreur ${status}`, status === 429 || status >= 500);
 
-async function deliver(to, subject, body, idem = crypto.randomUUID()) {
+async function deliver(to, subject, body, idem = crypto.randomUUID(), headers = null) {
   if (cfg.provider === 'brevo') {
     const m = /^(.*)<(.+)>$/.exec(cfg.from) || [null, 'Proprigo', cfg.from];
     const r = await post('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: { 'api-key': cfg.apiKey, 'Content-Type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ sender: { name: m[1].trim(), email: m[2].trim() }, to: [{ email: to }], subject, htmlContent: body, textContent: textOf(body), ...(cfg.replyTo ? { replyTo: { email: addr(cfg.replyTo) } } : {}) }),
+      body: JSON.stringify({ sender: { name: m[1].trim(), email: m[2].trim() }, to: [{ email: to }], subject, htmlContent: body, textContent: textOf(body), ...(cfg.replyTo ? { replyTo: { email: addr(cfg.replyTo) } } : {}), ...(headers ? { headers } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!r.ok) throw failure('Brevo', r.status);
@@ -75,7 +75,7 @@ async function deliver(to, subject, body, idem = crypto.randomUUID()) {
       method: 'POST',
       // Même clé à chaque nouvel essai : Resend n'envoie jamais deux fois le même e-mail.
       headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': idem.slice(0, 256) },
-      body: JSON.stringify({ from: cfg.from, to: [to], subject, html: body, text: textOf(body), ...(cfg.replyTo ? { reply_to: addr(cfg.replyTo) } : {}) }),
+      body: JSON.stringify({ from: cfg.from, to: [to], subject, html: body, text: textOf(body), ...(cfg.replyTo ? { reply_to: addr(cfg.replyTo) } : {}), ...(headers ? { headers } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!r.ok) throw failure('Resend', r.status);
@@ -117,7 +117,7 @@ async function send(to, subject, title, lines, cta, opts = {}) {
   const body = html(title, lines, cta);
   const idem = opts.key ? `proprigo-${opts.key}` : crypto.randomUUID();
   for (let i = 0; ; i++) {
-    try { await deliver(to, subject, body, idem); return 'envoye'; }
+    try { await deliver(to, subject, body, idem, opts.headers || null); return 'envoye'; }
     catch (e) {
       const transient = e.transient !== false;
       if (transient && i < cfg.retryDelaysMs.length) { await sleep(cfg.retryDelaysMs[i]); continue; }

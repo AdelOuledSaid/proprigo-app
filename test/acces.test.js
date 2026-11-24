@@ -10,16 +10,16 @@ const db_ = require('../src/db');
 
 const PUBLIC = new Set(['GET /api/health', 'GET /api/me', 'POST /api/email/verify', 'POST /api/signup', 'POST /api/login', 'POST /api/password/forgot',
   'POST /api/password/reset', 'POST /api/quote-requests', 'POST /api/quote', 'POST /api/waitlist', 'GET /api/slots', 'GET /api/gifts/offer', 'GET /api/config',
-  'POST /api/stripe/webhook']);
+  'POST /api/stripe/webhook', 'GET /api/reviews', 'GET /api/recruitment']);
 // Réservé au responsable : le planificateur n'y a pas accès.
 const OWNER_ONLY = ['GET /api/admin/backups', 'POST /api/admin/backups', 'GET /api/admin/backups/latest', 'GET /api/admin/outbox', 'GET /api/admin/staff', 'POST /api/admin/staff',
   'GET /api/admin/payouts', 'POST /api/admin/payouts', 'POST /api/admin/bookings/:id/refund', 'POST /api/admin/bookings/:id/refunded', 'POST /api/admin/workers/:id/advance',
   'POST /api/admin/workers', 'POST /api/admin/bookings/:id/cancel', 'GET /api/admin/payments', 'GET /api/admin/payments.csv', 'GET /api/admin/stats',
-  'GET /api/admin/pricing', 'POST /api/admin/pricing', 'GET /api/admin/disputes/:id/evidence', 'POST /api/admin/documents/:id/review', 'POST /api/admin/workers/:id/reject', 'GET /api/admin/worker-docs', 'POST /api/admin/worker-docs'];
+  'GET /api/admin/pricing', 'POST /api/admin/pricing', 'GET /api/admin/disputes/:id/evidence', 'POST /api/admin/documents/:id/review', 'POST /api/admin/workers/:id/reject', 'GET /api/admin/worker-docs', 'POST /api/admin/worker-docs', 'GET /api/admin/reviews', 'POST /api/admin/reviews/:id', 'GET /api/admin/sap', 'POST /api/admin/sap', 'GET /api/admin/nudges', 'POST /api/admin/nudges', 'POST /api/admin/nudges/run', 'GET /api/admin/invoices.csv', 'GET /api/admin/invoices/print'];
 // Routes d'un client sur SES données : un autre client doit recevoir un refus.
 const CLIENT_OWNED = ['POST /api/bookings/:id/pay', 'GET /api/bookings/:id/preferred-slots', 'POST /api/bookings/:id/update', 'POST /api/bookings/:id/cancel',
   'POST /api/bookings/:id/rate', 'POST /api/bookings/:id/photos', 'POST /api/bookings/:id/report', 'GET /api/bookings/:id/messages', 'POST /api/bookings/:id/messages',
-  'GET /api/bookings/:id/receipt', 'POST /api/bookings/:id/ical-keep', 'POST /api/homes/:id', 'POST /api/homes/:id/delete', 'POST /api/homes/:id/sync', 'POST /api/series/:id/stop'];
+  'GET /api/bookings/:id/receipt', 'POST /api/bookings/:id/ical-keep', 'POST /api/homes/:id', 'POST /api/homes/:id/delete', 'POST /api/homes/:id/sync', 'POST /api/series/:id/stop', 'POST /api/bookings/:id/guarantee'];
 
 function allRoutes() {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');

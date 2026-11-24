@@ -81,7 +81,7 @@
   function renderNav() {
     paintTabbar();
     const links = [];
-    if (!me) links.push('<a href="#/pro">Entreprises</a>', '<a href="#/inscription-intervenante">Devenir intervenante</a>', '<a href="#/connexion">Se connecter</a>', '<a class="cta" href="#/reserver">Réserver</a>');
+    if (!me) links.push('<a href="#/pro">Entreprises</a>', '<a href="#/recrutement">Devenir intervenante</a>', '<a href="#/connexion">Se connecter</a>', '<a class="cta" href="#/reserver">Réserver</a>');
     else {
       if (me.role === 'client') links.push('<a href="#/mes-reservations">Mes réservations</a>', '<a href="#/logements">Mes logements</a>', '<a class="cta" href="#/reserver">Réserver</a>');
       if (me.role === 'intervenante') links.push('<a href="#/intervenante">Mes missions</a>');
@@ -121,6 +121,10 @@
   // Prix en vigueur (envoyés par le serveur, modifiables dans l'admin) ; valeurs de secours si hors ligne.
   const PRICES = () => CONFIG.prices || { menage: 37, grand: 42, bureau: 42, bureauHT: 35, airbnb: { studio: 95, T2: 119, T3: 145, maison: 195 }, kit: 15, sunday: 0.2, urgent: 0.25, subscription: 0.05 };
   const pct = (x) => `${Math.round(x * 100)} %`;
+  // Crédit d'impôt : affiché seulement une fois la déclaration « services à la personne » enregistrée dans l'admin.
+  const sapOn = () => Boolean(CONFIG.sap && CONFIG.sap.declared);
+  const afterCredit = (n) => `soit ${String(Math.round(n * 50) / 100).replace('.', ',')} € après crédit d'impôt`;
+  const hhmm = (iso) => new Date(iso).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
   async function loadMe() {
     const r = await api('GET', '/api/me');
     me = r.user;
@@ -209,6 +213,7 @@
       clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
       badge: '<path d="M12 3l7 3v5.5c0 4.3-3 7.6-7 9-4-1.4-7-4.7-7-9V6z"/><path d="m8.8 12 2.2 2.2 4.4-4.6"/>',
       swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+      back: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/><path d="M9 12.5l2 2 4-4"/>',
     };
     const ico = (k) => `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICO[k]}</svg>`;
     // Prix en vigueur, envoyés par le serveur (modifiables par le responsable dans l'admin).
@@ -243,6 +248,7 @@
         <li>${ico('clock')}<span><b>Annulation gratuite</b>Jusqu'à 24 h avant</span></li>
         <li>${ico('badge')}<span><b>Intervenantes vérifiées</b>Identité, entretien, suivi qualité</span></li>
         <li>${ico('swap')}<span><b>Remplaçante prévue</b>Si votre intervenante est absente</span></li>
+        <li>${ico('back')}<span><b>Satisfait ou on revient</b>Gratuitement, si vous le signalez sous 48 h</span></li>
       </ul>
 
       <a class="gift-band" href="#/cadeau"><span class="gift-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="9" width="17" height="11" rx="2"/><path d="M3.5 13h17M12 9v11M12 9S10.5 4 8 4.5 7 9 12 9zM12 9s1.5-5 4-4.5S17 9 12 9z"/></svg></span><span><b>Pour Noël, offrez un ménage</b><span>Cartes cadeaux de 50 à 200 €, envoyées par e-mail</span></span><span class="gift-go">Offrir</span></a>
@@ -253,7 +259,7 @@
           <article class="offer">
             <span class="offer-art">${ART.services.menage}</span>
             <h3>Ménage à domicile</h3>
-            <p class="offer-price"><b>${eu(P.menage)} €</b> de l'heure</p>
+            <p class="offer-price"><b>${eu(P.menage)} €</b> de l'heure</p>${sapOn() ? `<p class="small offer-credit">${afterCredit(P.menage)}</p>` : ''}
             <ul><li>Cuisine, salle de bain, sols, poussière</li><li>Même intervenante chaque semaine si vous le souhaitez</li><li>Checklist personnalisée</li></ul>
             <button class="btn ghost full" data-book="menage">Réserver ce ménage</button>
           </article>
@@ -268,7 +274,7 @@
           <article class="offer">
             <span class="offer-art">${ART.services.grand}</span>
             <h3>Grand nettoyage</h3>
-            <p class="offer-price"><b>${eu(P.grand)} €</b> de l'heure</p>
+            <p class="offer-price"><b>${eu(P.grand)} €</b> de l'heure</p>${sapOn() ? `<p class="small offer-credit">${afterCredit(P.grand)}</p>` : ''}
             <ul><li>Fin de bail, emménagement, remise en état</li><li>Intérieur des placards, plinthes, vitres accessibles</li><li>Matériel apporté sur demande</li></ul>
             <button class="btn ghost full" data-book="grand">Réserver ce ménage</button>
           </article>
@@ -320,8 +326,11 @@
         </ul>
       </section>
 
+      <section class="reviews" id="homeReviews" aria-labelledby="revT" hidden></section>
+
       <section class="faq-home">
         <h2>Questions fréquentes</h2>
+        <details class="faq"><summary>Et si je ne suis pas satisfait ?</summary><p>Signalez-le dans les 48 h depuis votre réservation (bouton « On revient »). Nous revenons reprendre les points concernés, gratuitement.</p></details>
         <details class="faq"><summary>Qui vient chez moi ?</summary><p>Une intervenante sélectionnée par Proprigo : identité vérifiée, entretien, première mission accompagnée. Vous voyez son prénom avant le ménage.</p></details>
         <details class="faq"><summary>Dois-je fournir le matériel ?</summary><p>Vous pouvez fournir aspirateur et produits, ou choisir l'option « matériel apporté » pour 15 €. Pour un logement Airbnb, le matériel reste sur place.</p></details>
         <details class="faq"><summary>Puis-je annuler ou changer l'heure ?</summary><p>Oui, depuis votre espace. C'est gratuit jusqu'à 24 h avant le ménage ; ensuite, 50 % du prix est retenu.</p></details>
@@ -335,8 +344,21 @@
           <label>Code postal<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" placeholder="Ex. 75011" required></label>
           <button class="btn primary">Voir les créneaux</button>
         </form>
-        <p class="small">Vous faites le ménage ? <a href="#/inscription-intervenante">Rejoignez les intervenantes Proprigo</a></p>
+        <p class="small">Vous faites le ménage ? <a href="#/recrutement">Rejoignez les intervenantes Proprigo</a></p>
       </section>`;
+    // Avis réels des clients (publiés avec leur accord). Affichés seulement à partir de 3 notes.
+    api('GET', '/api/reviews').then((rv) => {
+      const box = document.getElementById('homeReviews');
+      if (!box || rv.count < 3 || !rv.list.length) return;
+      const stars = (n) => `<span class="rv-stars" aria-label="${n} sur 5">${'★'.repeat(n)}<span aria-hidden="true">${'★'.repeat(5 - n)}</span></span>`;
+      const month = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+      box.innerHTML = `<h2 id="revT">Ce que disent nos clients</h2>
+        <p class="rv-summary"><b>${String(rv.average).replace('.', ',')}/5</b> sur ${rv.count} avis de clients ayant réservé un ménage</p>
+        <div class="rv-grid">${rv.list.map((r) => `<figure class="rv-card">${stars(r.stars)}<blockquote>${esc(r.text)}</blockquote>
+          <figcaption><b>${esc(r.author)}</b> · ${esc(r.service)}${r.place ? `, ${esc(r.place)}` : ''} · ${month(r.month)}</figcaption></figure>`).join('')}</div>
+        <p class="small muted">Avis publiés avec l'accord de leurs auteurs. La note moyenne compte tous les avis reçus.</p>`;
+      box.hidden = false;
+    }).catch(() => {});
     // avant / après : on glisse pour faire briller
     const range = document.getElementById('baRange');
     const paintBA = () => {
@@ -455,7 +477,7 @@
       </section>
       ${next ? `
         <article class="card next">
-          ${next.status === 'attribuee' && next.on_way_at ? `<p class="live-line"><span class="live-dot"></span>${next.arrived_at ? `${esc((next.worker_name || '').split(' ')[0])} est arrivée chez vous.` : `${esc((next.worker_name || '').split(' ')[0])} est en route.`}</p>` : ''}
+          ${next.status === 'attribuee' && next.on_way_at ? `<p class="live-line"><span class="live-dot"></span>${next.arrived_at ? `${esc((next.worker_name || '').split(' ')[0])} est arrivée chez vous.` : `${esc((next.worker_name || '').split(' ')[0])} est en route${next.eta_at ? `, arrivée estimée vers ${hhmm(next.eta_at)}` : ''}.`}</p>` : ''}
           ${next.worker_id ? '<div id="wcardHost"></div>' : ''}
           ${next.status === 'en_cours' && next.checklist.length ? shine(next) : ''}
           <dl class="facts">
@@ -504,14 +526,14 @@
     if (!f) {
       f = document.createElement('form');
       f.className = 'review-form stack';
-      f.innerHTML = '<label><span class="rv-label"></span><textarea name="review" rows="2" maxlength="500"></textarea></label><button class="btn blue">Envoyer mon avis</button>';
+      f.innerHTML = '<label><span class="rv-label"></span><textarea name="review" rows="2" maxlength="500"></textarea></label><label class="check small"><input type="checkbox" name="publish"> J\'accepte que mon avis soit publié sur proprigo.fr, avec mon prénom et l\'initiale de mon nom.</label><button class="btn blue">Envoyer mon avis</button>';
       box.after(f);
     }
     f.querySelector('.rv-label').textContent = n >= 4 ? 'Un mot sur ce que vous avez aimé (facultatif)' : "Qu'est-ce qui n'allait pas ? L'équipe vous recontacte.";
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        const r = await api('POST', `/api/bookings/${id}/rate`, { stars: n, review: f.review.value });
+        const r = await api('POST', `/api/bookings/${id}/rate`, { stars: n, review: f.review.value, publish: f.publish.checked });
         if (n === 5 && CONFIG.googleReviewUrl) {
           f.outerHTML = `<div class="g-review"><b>Merci beaucoup !</b><span>Un avis sur Google aide d'autres familles à nous trouver. Ça prend 30 secondes.</span><a class="btn blue" href="${esc(CONFIG.googleReviewUrl)}" target="_blank" rel="noopener">Laisser un avis sur Google</a></div>`;
           box.remove();
@@ -550,8 +572,8 @@
   const STEP_NAMES = ['Votre ménage', 'Date et heure', 'Récapitulatif', 'Paiement'];
   const stepper = (n) => `<ol class="stepper" aria-label="Étape ${n} sur 4">${STEP_NAMES.map((t, i) => `<li class="${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}" ${i + 1 === n ? 'aria-current="step"' : ''}><span>${i + 1}</span>${t}</li>`).join('')}</ol>`;
 
-  views['reserver'] = async () => {
-    if (!me) { sessionStorage.setItem('after', '#/reserver'); return go('#/inscription'); }
+  views['reserver'] = async (params) => {
+    if (!me) { sessionStorage.setItem('after', `#/reserver${params && params.get('again') ? `?again=${params.get('again')}` : ''}`); return go('#/inscription'); }
     if (me.role !== 'client') return go('#/');
     const [past, homes] = await Promise.all([api('GET', '/api/bookings/mine').catch(() => []), api('GET', '/api/homes').catch(() => [])]);
     const useHome = (h) => {
@@ -563,6 +585,14 @@
     };
     const wanted = sessionStorage.getItem('home');
     if (wanted) { sessionStorage.removeItem('home'); draft = DRAFT0(); useHome(homes.find((h) => String(h.id) === wanted)); }
+    // « Réserver le même ménage » (lien des e-mails de relance) : on reprend la prestation passée, sans la date.
+    const again = params && past.find((b) => String(b.id) === params.get('again'));
+    if (again) {
+      draft = DRAFT0();
+      Object.assign(draft, { service: again.service, size: again.size || draft.size, hours: again.hours, cp: again.cp, address: again.address, kit: Boolean(again.kit), home_id: again.home_id || null, date: tomorrowParis(), time: null });
+      if (again.checklist.length) { draft.tasks = again.checklist.map((t) => t.task); draft.tasksService = again.service; }
+      history.replaceState(null, '', '#/reserver');
+    }
     const tasks = () => {
       if (draft.tasks && draft.tasksService === draft.service) return draft.tasks;
       const prev = past.find((b) => b.service === draft.service && draft.address && b.address === draft.address && b.checklist.length);
@@ -695,10 +725,10 @@
         ${q.ok ? `<div class="price">
           <div class="row"><span>Total TTC${n > 1 ? ' du premier ménage' : ''}</span><span class="total">${eur(q.total)}</span></div>
           ${q.lines.map((l) => `<div class="line"><span>${esc(l.label)}</span><span>${eur(l.amount)}</span></div>`).join('')}
-          ${!PRO.includes(q.service) ? `<div class="line"><span>Après crédit d'impôt de 50 %*</span><span>${eur(q.total / 2)}</span></div>` : `<div class="line"><span>Dont TVA 20 %</span><span>${eur(q.total - q.total / 1.2)}</span></div>`}
+          ${!PRO.includes(q.service) ? (sapOn() ? `<div class="line"><span>Après crédit d'impôt de 50 %*</span><span>${eur(q.total / 2)}</span></div>` : '') : `<div class="line"><span>Dont TVA 20 %</span><span>${eur(q.total - q.total / 1.2)}</span></div>`}
         </div>
         ${n > 1 ? '<p class="small muted">Chaque ménage est facturé à son prix (supplément le dimanche ou un jour férié).</p>' : ''}
-        ${!PRO.includes(q.service) ? '<p class="small muted">* Selon les conditions en vigueur, une fois l\'entreprise déclarée « services à la personne ».</p>' : ''}` : `<p class="err">${q.errors.map(esc).join(' ')}</p>`}
+        ${!PRO.includes(q.service) && sapOn() ? '<p class="small muted">* Crédit d\'impôt pour l\'emploi d\'un salarié à domicile (article 199 sexdecies du CGI), selon les conditions en vigueur. Attestation annuelle fournie.</p>' : ''}` : `<p class="err">${q.errors.map(esc).join(' ')}</p>`}
         <p class="box small">${FREE_CANCEL} Vous pouvez modifier la date ou l'heure jusqu'à 24 h avant.</p>
         <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="next" ${q.ok ? '' : 'disabled'}>Continuer vers le paiement</button></div>`, 3);
       $app.querySelectorAll('[data-goto]').forEach((b) => b.onclick = () => { draft.step = Number(b.dataset.goto); render(); });
@@ -827,7 +857,9 @@
         return `
         <article class="card">
           <div class="row"><h3>${esc(label(b))}${b.series_id ? ' <span class="pill">Récurrent</span>' : ''}</h3>${pill(b.status)}</div>
-          <p class="muted" style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · ${esc(b.address)} · ${esc(b.cp)} · <b>${eur(b.total)}</b>${b.kit ? ' · matériel fourni' : ''}</p>
+          <p class="muted" style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · ${esc(b.address)} · ${esc(b.cp)} · <b>${b.payment_status === 'garantie' ? 'Gratuit (garantie)' : eur(b.total)}</b>${b.kit ? ' · matériel fourni' : ''}</p>
+          ${b.payment_status === 'garantie' ? '<p class="small" style="margin:6px 0 0"><span class="pill ok">Retour gratuit</span> Nous revenons reprendre les points que vous avez signalés.</p>' : ''}
+          ${b.status === 'attribuee' && b.on_way_at && !b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est en route${b.eta_at ? `, arrivée estimée vers ${hhmm(b.eta_at)}` : ''}.</p>` : ''}
           ${b.worker_name ? `<p style="margin:8px 0 0">Intervenante vérifiée : <b>${esc(b.worker_name)}</b>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
           ${b.source === 'ical' ? '<p class="small muted" style="margin:6px 0 0">Créé automatiquement depuis le calendrier de votre annonce.</p>' : ''}
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
@@ -847,6 +879,9 @@
           ${active && b.preferred_id && b.worker_id !== b.preferred_id ? `<div class="notice"><b>${esc(b.preferred_name)}, votre intervenante préférée, n'est pas disponible à ce créneau.</b> Une autre intervenante vérifiée Proprigo viendra à sa place.
             ${hoursLeft(b) >= 24 ? `<br>Vous préférez ${esc(b.preferred_name)} ? <button class="btn ghost" data-prefslots="${b.id}">Voir quand ${esc(b.preferred_name)} est libre</button><div id="pref-${b.id}"></div>` : ''}</div>` : ''}
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
+          ${b.guarantee_status === 'demandee' ? '<div class="notice"><b>Retour gratuit demandé.</b> L\'équipe vous contacte pour fixer le créneau.</div>' : ''}
+          ${b.guarantee_status === 'planifiee' ? `<div class="notice"><b>Retour gratuit planifié</b> (réservation n° ${b.guarantee_visit_id}, ci-dessus).</div>` : ''}
+          ${b.guarantee_open ? `<div class="guarantee"><span><b>Pas satisfait ?</b> Dites-le-nous dans les 48 h : on revient gratuitement.</span><button class="btn ghost" data-guarantee="${b.id}">On revient</button></div><div id="guar-${b.id}"></div>` : ''}
           ${b.status === 'terminee' && !b.rating ? `<p style="margin:10px 0 0"><b>Comment s'est passé le ménage ?</b></p><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div>` : ''}
           ${b.rating ? `<p class="small muted" style="margin:8px 0 0">Votre note : ${'★'.repeat(b.rating)}</p>` : ''}
           ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
@@ -875,6 +910,18 @@
           try { const u = await api('POST', `/api/bookings/${m.dataset.move}/update`, { date: m.dataset.date, time: m.dataset.time }); toast(u.message); route(); } catch (e) { toast(e.message); }
         });
       } catch (e) { toast(e.message); }
+    });
+    act('[data-guarantee]', (btn) => {
+      const id = btn.dataset.guarantee;
+      const box = document.getElementById(`guar-${id}`);
+      if (box.innerHTML) { box.innerHTML = ''; return; }
+      box.innerHTML = `<form class="box stack"><label>Qu'est-ce qui n'allait pas ? (pièces, tâches oubliées…)<textarea name="text" rows="3" maxlength="800" required minlength="10" placeholder="Ex. la salle de bain n'a pas été faite, traces sur les vitres du salon"></textarea></label>
+        <button class="btn primary">Demander le retour gratuit</button></form>`;
+      box.querySelector('form').onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r = await api('POST', `/api/bookings/${id}/guarantee`, { text: e.target.text.value }); toast(r.message); route(); } catch (err) { toast(err.message); }
+      };
+      box.querySelector('textarea').focus();
     });
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
@@ -1005,6 +1052,62 @@
   };
 
   // ---------- espace intervenante ----------
+  // ---- planning de la semaine de l'intervenante ----
+  let weekStart = null;
+  async function paintWeek(start) {
+    const box = document.getElementById('week');
+    if (!box) return;
+    let w;
+    try { w = await api('GET', `/api/worker/week${start ? `?start=${start}` : weekStart ? `?start=${weekStart}` : ''}`); } catch (e) { box.innerHTML = `<h2>Ma semaine</h2><p class="err">${esc(e.message)}</p>`; return; }
+    weekStart = w.start;
+    const H0 = 7; const H1 = 21; const PX = 34; // une heure = 34 px
+    const top = (t) => (Number(t.slice(0, 2)) + Number(t.slice(3, 5)) / 60 - H0) * PX;
+    const dayName = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
+    const range = `${new Date(w.days[0].date + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', timeZone: 'UTC' })} – ${new Date(w.days[6].date + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', timeZone: 'UTC' })}`;
+    box.innerHTML = `<div class="row"><h2>Ma semaine</h2><span class="row" style="gap:6px"><button class="btn ghost small-btn" data-wk="${w.prev}" aria-label="Semaine précédente">‹</button><button class="btn ghost small-btn" data-wk="" aria-label="Cette semaine">Aujourd'hui</button><button class="btn ghost small-btn" data-wk="${w.next}" aria-label="Semaine suivante">›</button></span></div>
+      <p class="small muted" style="margin:4px 0 10px">${range} · ${String(w.hours).replace('.', ',')} h de missions${w.days.some((d) => d.items.some((x) => x.kind === 'offre')) ? ' · <span class="wk-legend offre">proposition à accepter</span>' : ''}</p>
+      <div class="wk-scroll"><div class="wk" style="--h:${(H1 - H0) * PX}px">
+        <div class="wk-hours">${Array.from({ length: H1 - H0 + 1 }, (_, i) => `<span style="top:${i * PX}px">${H0 + i} h</span>`).join('')}</div>
+        ${w.days.map((d) => `<div class="wk-day${d.today ? ' today' : ''}${d.off ? ' off' : ''}"><b class="wk-head">${dayName(d.date)}</b>
+          <div class="wk-col">${d.off ? '<span class="wk-off">Congé</span>' : d.avail ? `<i class="wk-avail" style="top:${top(d.avail.start)}px;height:${top(d.avail.end) - top(d.avail.start)}px" title="Disponible ${esc(d.avail.start)} – ${esc(d.avail.end)}"></i>` : '<span class="wk-off">Indisponible</span>'}
+          ${d.items.map((x) => `<a class="wk-item ${x.kind} ${x.status || ''}" href="#/intervenante" style="top:${Math.max(0, top(x.time))}px;height:${Math.max(28, x.hours * PX - 3)}px" title="${esc(x.service)} · ${esc(x.time)} · ${esc(x.cp)}"><b>${esc(x.time)}</b> ${esc(x.cp)}<small>${x.kind === 'offre' ? 'À accepter' : x.status === 'terminee' ? 'Terminée' : esc(x.service)}</small></a>`).join('')}</div></div>`).join('')}
+      </div></div>
+      <p class="small muted" style="margin:8px 0 0">Zone claire : vos disponibilités. Les missions et propositions apparaissent dans la journée.</p>`;
+    box.querySelectorAll('[data-wk]').forEach((b) => b.onclick = () => { weekStart = b.dataset.wk || null; paintWeek(b.dataset.wk || undefined); });
+  }
+  // ---- notifications sur ce téléphone (intervenante et client) ----
+  async function paintPush(box, intro) {
+    if (!box) return;
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    const head = '<h2>Notifications sur ce téléphone</h2>';
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      box.innerHTML = `${head}<p class="small muted">${ios && !standalone ? 'Sur iPhone : touchez Partager puis « Sur l\'écran d\'accueil », ouvrez Proprigo depuis la nouvelle icône, et revenez ici pour activer les notifications.' : 'Ce navigateur ne gère pas les notifications. Essayez avec Chrome ou Firefox, ou installez Proprigo sur l\'écran d\'accueil.'}</p>`;
+      return;
+    }
+    let key; let reg; let sub;
+    try { key = await api('GET', '/api/push/key'); reg = await navigator.serviceWorker.ready; sub = await reg.pushManager.getSubscription(); } catch { box.innerHTML = `${head}<p class="small muted">Notifications indisponibles pour le moment.</p>`; return; }
+    const on = Boolean(sub) && Notification.permission === 'granted';
+    box.innerHTML = `${head}<p class="small muted">${intro}</p>
+      ${Notification.permission === 'denied' ? '<p class="msg warn">Les notifications sont bloquées pour Proprigo. Autorisez-les dans les réglages du navigateur (icône du cadenas à côté de l\'adresse), puis revenez ici.</p>'
+        : on ? '<p><span class="pill ok">Activées sur cet appareil</span></p><div class="row" style="justify-content:flex-start;gap:8px"><button class="btn ghost" id="pushTest">Envoyer une notification de test</button><button class="btn ghost" id="pushOff">Désactiver</button></div>'
+          : '<button class="btn blue" id="pushOn">Activer les notifications</button>'}`;
+    const b64 = (s) => { const p = '='.repeat((4 - (s.length % 4)) % 4); const raw = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, (c) => c.charCodeAt(0)); };
+    const onBtn = document.getElementById('pushOn');
+    if (onBtn) onBtn.onclick = async () => {
+      onBtn.disabled = true;
+      try {
+        if (await Notification.requestPermission() !== 'granted') throw new Error('Notifications refusées. Vous pourrez les autoriser plus tard dans les réglages.');
+        const s2 = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(key.publicKey) });
+        const r = await api('POST', '/api/push/subscribe', s2.toJSON());
+        toast(r.message); paintPush(box, intro);
+      } catch (e) { toast(e.message || 'Activation impossible.'); onBtn.disabled = false; }
+    };
+    const t = document.getElementById('pushTest');
+    if (t) t.onclick = async () => { try { const r = await api('POST', '/api/push/test', {}); toast(r.message); } catch (e) { toast(e.message); } };
+    const off = document.getElementById('pushOff');
+    if (off) off.onclick = async () => { try { await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe(); toast('Notifications désactivées sur cet appareil.'); paintPush(box, intro); } catch (e) { toast(e.message); } };
+  }
   // Pièces justificatives de l'intervenante : dépôt et suivi de la vérification.
   const DOC_STATUS = { a_verifier: ['En cours de vérification', ''], valide: ['Validé', 'ok'], refuse: ['À renvoyer', 'warn'] };
   async function paintDocs() {
@@ -1110,7 +1213,7 @@
       if (b.status !== 'attribuee') return `<button class="btn primary full" data-act="finish" data-id="${b.id}">Terminer la mission</button>`;
       const isToday = b.date === todayParis();
       const steps = isToday ? `<div class="dayflow">
-          <button class="btn ${b.on_way_at ? 'ghost done' : 'blue'}" data-act="onway" data-id="${b.id}" ${b.on_way_at ? 'disabled' : ''}>${b.on_way_at ? '✓ En route' : 'Je pars'}</button>
+          <button class="btn ${b.on_way_at ? 'ghost' : 'blue'}" data-act="onway" data-id="${b.id}" ${b.arrived_at ? 'disabled' : ''}>${b.on_way_at ? (b.eta_at ? `✓ En route · vers ${hhmm(b.eta_at)} (changer)` : '✓ En route (heure d\'arrivée)') : 'Je pars'}</button>
           <button class="btn ${b.arrived_at ? 'ghost done' : b.on_way_at ? 'blue' : 'ghost'}" data-act="arrived" data-id="${b.id}" ${b.arrived_at ? 'disabled' : ''}>${b.arrived_at ? '✓ Arrivée' : 'Je suis arrivée'}</button>
         </div>` : '';
       return `${steps}<button class="btn primary full" data-act="start" data-id="${b.id}" ${isToday ? '' : 'disabled'}>Commencer le ménage</button>${isToday ? '' : '<p class="small muted" style="margin:4px 0 0">Les boutons du jour J s\'activent le jour de la mission.</p>'}`;
@@ -1128,12 +1231,30 @@
         </article>`).join('') : '<p class="card muted">Aucune proposition pour le moment.</p>'}` : ''}
       ${today.length ? `<h2 style="margin-top:20px">Aujourd'hui</h2>${today.map(card).join('')}` : '<p class="card muted" style="margin-top:20px">Pas de mission aujourd\'hui.</p>'}
       ${later.length ? `<h2 style="margin-top:20px">À venir</h2>${(() => { const one = (b) => `<details class="card later"><summary><b>${dateFr(b.date)} ${esc(b.time)}</b> · ${esc(label(b))} · ${esc(b.cp)} ${pill(b.status)}</summary>${card(b)}</details>`; return later.slice(0, 5).map(one).join('') + (later.length > 5 ? `<details class="more"><summary>Voir les ${later.length - 5} autres missions</summary>${later.slice(5).map(one).join('')}</details>` : ''); })()}` : ''}
+      <section class="card" id="week"><h2>Ma semaine</h2><p class="muted small">Chargement…</p></section>
+      <section class="card" id="pushBox"></section>
       <section class="card" id="gains"><h2>Mes gains</h2><p class="muted small">Chargement…</p></section>
       ${calendar}
       <details class="card" id="docsBox"><summary><b>Mes documents</b></summary><div class="stack" id="docs"></div></details>`;
     const db0 = document.getElementById('docsBox');
     if (db0) db0.addEventListener('toggle', () => { if (db0.open) paintDocs(); }, { once: true });
+    paintWeek();
+    paintPush(document.getElementById('pushBox'), 'Recevez les nouvelles missions sur ce téléphone, même application fermée.');
     $app.querySelectorAll('[data-act]').forEach((btn) => btn.onclick = async () => {
+      // « Je pars » : l'intervenante indique dans combien de temps elle arrive ; le client voit l'heure estimée.
+      if (btn.dataset.act === 'onway') {
+        const host = btn.closest('article, .card') || btn.parentElement;
+        let box = host.querySelector('.eta-pick');
+        if (box) { box.remove(); return; }
+        box = document.createElement('div');
+        box.className = 'eta-pick';
+        box.innerHTML = `<p class="small" style="margin:8px 0 6px"><b>J'arrive dans…</b></p><div class="chips">${[10, 15, 20, 30, 45, 60].map((m) => `<button type="button" data-eta="${m}">${m} min</button>`).join('')}</div>`;
+        btn.parentElement.after(box);
+        box.querySelectorAll('[data-eta]').forEach((c) => c.onclick = async () => {
+          try { const r = await api('POST', `/api/worker/missions/${btn.dataset.id}/onway`, { eta: Number(c.dataset.eta) }); toast(r.message); route(); } catch (e) { toast(e.message); }
+        });
+        return;
+      }
       try { const r = await api('POST', `/api/worker/missions/${btn.dataset.id}/${btn.dataset.act}`, {}); toast(r.message || 'C\'est enregistré.'); route(); } catch (e) { toast(e.message); }
     });
     // problème sur place : alerte immédiate de l'équipe
@@ -1166,6 +1287,10 @@
         </div>
         ${g.history.length ? `<div class="gain-bars" aria-label="Heures des derniers mois">${g.history.slice().reverse().map((h) => `<div><i style="height:${Math.max(6, Math.round((h.h / max) * 70))}px"></i><span>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'short', timeZone: 'UTC' })}</span></div>`).join('')}</div>` : ''}
         <p class="small muted" style="margin:8px 0 0">${g.statut === 'I' ? `Calculé avec votre tarif de ${eur(g.rate)}/h, avant vos cotisations.` : 'Heures de ménage réalisées. Le salaire figure sur votre fiche de paie.'}</p>
+        ${g.history.length ? `<details class="gain-history"><summary>Historique mois par mois</summary><div class="table-wrap"><table class="stats" style="min-width:0">
+          <thead><tr><th>Mois</th><th class="n">Ménages</th><th class="n">Heures</th>${g.statut === 'I' ? '<th class="n">Gagné</th><th class="n">Versé</th>' : ''}</tr></thead>
+          <tbody>${g.history.map((h) => `<tr><td>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</td><td class="n">${h.n}</td><td class="n">${String(h.h).replace('.', ',')}</td>${g.statut === 'I' ? `<td class="n">${eur(h.eur)}</td><td class="n">${h.paid === null ? '–' : eur(h.paid)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+          ${g.statut === 'I' ? '<p class="small muted">« Versé » : virements reçus ce mois-là (ils peuvent porter sur des ménages du mois précédent).</p>' : ''}</details>` : ''}
         ${g.statut === 'I' ? `<div class="pay-box">
           <div><span>En attente de versement</span><b>${eur(g.pending)}</b><small>Versé chaque semaine par virement.</small></div>
           <div class="${g.bonus.eligible ? 'on' : ''}"><span>Bonus qualité</span><b>${g.bonus.eligible ? `+${eur(g.bonus.perHour)} / h` : 'Pas encore'}</b><small>${g.bonus.eligible ? `Note moyenne ${String(g.bonus.avg).replace('.', ',')} sur vos ${g.bonus.count} derniers avis.` : `Note moyenne de 4,8 sur 5 avis au moins${g.bonus.avg ? ` (vous : ${String(g.bonus.avg).replace('.', ',')} sur ${g.bonus.count})` : ''}.`}</small></div>
@@ -1238,7 +1363,7 @@
         .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
       ...(r.quoteRequests ? [`<li class="urgent"><span><b>Demandes de devis</b> · ${r.quoteRequests} nouvelle${r.quoteRequests > 1 ? 's' : ''}</span><button class="btn ghost" id="openDevis">Voir</button></li>`] : []),
-      ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
+      ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'garantie' ? 'Garantie : retour gratuit à planifier' : x.source === 'litige' ? 'Contestation bancaire' : x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
       ...(k.aRembourser.n ? [`<li><span><b>Remboursements</b> · ${k.aRembourser.n} réservation(s), ${eur(k.aRembourser.montant)}</span><button class="btn ghost" data-goto="table">Voir</button></li>`] : []),
       ...(r.workers.some((w) => w.docs && w.docs.toCheck && !w.rejected) ? [`<li class="urgent"><span><b>Documents à vérifier</b> · ${r.workers.filter((w) => w.docs && w.docs.toCheck && !w.rejected).map((w) => esc(w.name)).join(', ')}</span><button class="btn ghost" data-goto="team">Voir</button></li>`] : []),
@@ -1287,7 +1412,9 @@
       </table></div></section>
       ${r.incidents.length ? `<section class="card" id="sec-incidents" data-tab="todo"><h2>Problèmes signalés par les clients</h2>${r.incidents.map((x) => `
         <div class="row box" style="margin-top:8px"><div><b>Réservation n° ${x.booking_id}</b> · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}<br>${esc(x.text)}</div>
-        <div class="row"><button class="btn ghost" data-thread="${x.booking_id}" data-inc>Écrire au client</button><button class="btn blue" data-resolve="${x.id}">Marquer traité</button></div></div>
+        <div class="row"><button class="btn ghost" data-thread="${x.booking_id}" data-inc>Écrire au client</button>${x.source === 'garantie' ? `<button class="btn blue" data-gvisit="${x.booking_id}">Planifier le retour</button>` : `<button class="btn blue" data-resolve="${x.id}">Marquer traité</button>`}</div></div>
+        ${x.source === 'garantie' ? `<form class="box row gvisit-form" id="gv-${x.booking_id}" hidden style="flex-wrap:wrap;gap:10px;align-items:end"><label>Date<input type="date" name="date" required></label><label>Heure<input type="time" name="time" value="10:00" step="1800" required></label>
+          <label>Durée (h)<input type="number" name="hours" min="1" max="8" step="0.5" value="2"></label><button class="btn blue">Créer le retour gratuit</button></form>` : ''}
         <div id="thread-inc-${x.booking_id}"></div>`).join('')}</section>` : ''}
       <section class="card" id="sec-team" data-tab="equipe"><h2>Équipe et recrutement</h2>
         <p class="small muted">Aucune mission avant le statut « Active ».</p>
@@ -1518,6 +1645,15 @@
       catch (e) { toast(e.message); btn.disabled = false; }
     });
     bind('data-resolve', (id) => `/api/admin/incidents/${id}/resolve`);
+    $app.querySelectorAll('[data-gvisit]').forEach((b) => b.onclick = () => {
+      const f = document.getElementById(`gv-${b.dataset.gvisit}`);
+      f.hidden = !f.hidden;
+      if (!f.hidden) f.date.min = new Date().toISOString().slice(0, 10);
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r2 = await api('POST', `/api/admin/bookings/${b.dataset.gvisit}/guarantee-visit`, { date: f.date.value, time: f.time.value, hours: Number(f.hours.value) }); toast(r2.message); route(); } catch (err) { toast(err.message); }
+      };
+    });
     const cents = (c) => eur(Math.round(c) / 100);
     const monthName = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
     // ---- statistiques par mois ----
@@ -1551,7 +1687,10 @@
             <span class="muted">${x.client ? esc(x.client) + ' · ' : ''}${x.bookings.length ? `réservation n° ${x.bookings.join(', ')}` : 'réservation non retrouvée'}</span></span>
             <span class="row" style="gap:6px;flex-wrap:wrap"><a class="btn ghost small-btn" href="/api/admin/disputes/${x.id}/evidence" target="_blank" rel="noopener">Dossier de preuve</a><a class="btn blue small-btn" href="${esc(x.stripeUrl)}" target="_blank" rel="noopener">Répondre dans Stripe</a></span></li>`).join('')}</ul></div>` : ''}
         <div class="row" style="justify-content:flex-start;align-items:end;gap:10px;flex-wrap:wrap"><label>Mois<input type="month" id="payMonth" value="${esc(d.month)}"></label>
-          <a class="btn ghost" href="/api/admin/payments.csv?month=${esc(d.month)}" download>Exporter pour le comptable (CSV)</a></div>
+          <a class="btn ghost" href="/api/admin/payments.csv?month=${esc(d.month)}" download>Paiements (CSV)</a>
+          <a class="btn ghost" href="/api/admin/invoices.csv?month=${esc(d.month)}" download>Factures et avoirs (CSV)</a>
+          <a class="btn ghost" href="/api/admin/invoices/print?month=${esc(d.month)}" target="_blank" rel="noopener">Toutes les factures du mois (PDF)</a></div>
+        <p class="small muted" style="margin:6px 0 0">Pour le comptable : le tableau des factures et avoirs, et toutes les pièces du mois sur une page à enregistrer en un seul PDF.</p>
         <div class="kpis"><div class="kpi"><span>Encaissé par carte</span><b>${cents(d.totals.encaisse)}</b></div><div class="kpi"><span>Crédit Proprigo utilisé</span><b>${cents(d.totals.credit)}</b></div>
           <div class="kpi"><span>Remboursé</span><b>${cents(d.totals.rembourse)}</b></div><div class="kpi"><span>Net encaissé</span><b>${cents(d.totals.net)}</b></div><div class="kpi"><span>Dont TVA (factures − avoirs)</span><b>${cents(d.totals.tva)}</b></div></div>
         ${d.rows.length ? `<div class="table-wrap"><table class="stats"><thead><tr><th>Date</th><th>Type</th><th>Pièce</th><th>Client</th><th class="n">Réserv.</th><th class="n">Montant</th><th>Détail</th></tr></thead><tbody>
@@ -1561,6 +1700,62 @@
           : '<p class="muted">Aucun mouvement ce mois-ci.</p>'}
         <p class="small muted">Chaque paiement a sa facture et chaque remboursement son avoir. Les doublons bloqués n'ont jamais été encaissés. Les contestations arrivent de Stripe si les événements « charge.dispute » sont cochés sur le webhook.</p>`;
       document.getElementById('payMonth').onchange = (e) => { if (e.target.value) paintPayments(e.target.value); };
+    };
+    // ---- avis : publiés avec l'accord du client, masquables en cas de contenu inapproprié ----
+    const paintReviews = async () => {
+      const box = document.getElementById('revBox');
+      if (!box) return;
+      let list;
+      try { list = await api('GET', '/api/admin/reviews'); } catch (e) { box.innerHTML = `<h2>Avis des clients</h2><p class="err">${esc(e.message)}</p>`; return; }
+      box.innerHTML = `<h2>Avis des clients</h2><p class="small muted">Seuls les avis dont l'auteur a donné son accord apparaissent sur l'accueil (dès 3 notes au total). Masquez un avis seulement s'il est injurieux ou donne des informations personnelles : masquer les avis négatifs serait trompeur.</p>
+        ${list.length ? `<ul class="plain small">${list.map((r2) => `<li><span>${'★'.repeat(r2.rating)} · <b>${esc(r2.name)}</b> · ${dateFr(r2.date)}<br>« ${esc(r2.review)} »<br>
+          <span class="muted">${r2.review_public ? (r2.review_hidden ? 'Masqué du site' : 'Publié sur le site') : 'Non publié (pas d\'accord du client)'}</span></span>
+          ${r2.review_public ? `<button class="btn ghost small-btn" data-revhide="${r2.id}" data-hidden="${r2.review_hidden ? 0 : 1}">${r2.review_hidden ? 'Afficher' : 'Masquer'}</button>` : ''}</li>`).join('')}</ul>` : '<p class="muted">Aucun avis écrit pour le moment.</p>'}`;
+      box.querySelectorAll('[data-revhide]').forEach((b) => b.onclick = async () => {
+        try { const r2 = await api('POST', `/api/admin/reviews/${b.dataset.revhide}`, { hidden: b.dataset.hidden === '1' }); toast(r2.message); paintReviews(); } catch (e) { toast(e.message); }
+      });
+    };
+    // ---- services à la personne : déclaration, crédit d'impôt, avance immédiate ----
+    const paintSap = async () => {
+      const box = document.getElementById('sapBox');
+      if (!box) return;
+      let d;
+      try { d = await api('GET', '/api/admin/sap'); } catch (e) { box.innerHTML = `<h2>Services à la personne et crédit d'impôt</h2><p class="err">${esc(e.message)}</p>`; return; }
+      box.innerHTML = `<h2>Services à la personne et crédit d'impôt</h2>
+        <p class="small muted">Une fois Proprigo déclaré « services à la personne » (déclaration gratuite sur nova.entreprises.gouv.fr), vos clients particuliers récupèrent 50 % du prix des ménages à domicile et grands nettoyages en crédit d'impôt. Tant que ce n'est pas activé ici, le site n'en parle pas.</p>
+        <form id="sapForm" class="row" style="justify-content:flex-start;gap:12px;flex-wrap:wrap;align-items:end">
+          <label class="check"><input type="checkbox" name="declared" ${d.declared ? 'checked' : ''}> Proprigo est déclaré services à la personne</label>
+          <label>Numéro de déclaration<input name="numero" value="${esc(d.numero || '')}" placeholder="SAP123456789" maxlength="20"></label>
+          <button class="btn blue">Enregistrer</button></form>
+        <p class="small" style="margin-top:10px">${d.active ? `<span class="pill ok">Activé</span> Prix « après crédit d'impôt » affichés, mention sur les factures, attestation annuelle officielle.` : '<span class="pill">Non activé</span>'}</p>
+        <h3>Avance immédiate (le client ne paie que 50 %)</h3>
+        <p class="small muted">Avec l'avance immédiate de l'URSSAF, le crédit d'impôt est déduit au moment du paiement. Il faut d'abord la déclaration SAP, puis une habilitation « tiers de prestation » auprès de l'URSSAF et ses identifiants d'accès à l'API. Dès que vous les avez, le raccordement peut être fait.</p>
+        <p class="small"><b>${d.interested}</b> client(s) ont demandé à être prévenus quand ce sera disponible.</p>`;
+      document.getElementById('sapForm').onsubmit = async (e) => {
+        e.preventDefault();
+        try { const r2 = await api('POST', '/api/admin/sap', { declared: e.target.declared.checked, numero: e.target.numero.value }); toast(r2.message); CONFIG.loaded = false; paintSap(); } catch (err) { toast(err.message); }
+      };
+    };
+    // ---- relances des clients inactifs ----
+    const paintNudges = async () => {
+      const box = document.getElementById('nudgeBox');
+      if (!box) return;
+      let d;
+      try { d = await api('GET', '/api/admin/nudges'); } catch (e) { box.innerHTML = `<h2>Relances des clients</h2><p class="err">${esc(e.message)}</p>`; return; }
+      box.innerHTML = `<h2>Relances des clients</h2>
+        <p class="small muted">Un e-mail « On repasse faire briller chez vous ? » avec un bouton pour réserver le même ménage, envoyé une fois par jour aux clients sans ménage depuis le délai choisi, et sans réservation à venir. Au plus une relance tous les 120 jours par client ; désinscription en un clic dans chaque e-mail.</p>
+        <form id="nudgeForm" class="row" style="justify-content:flex-start;gap:12px;flex-wrap:wrap;align-items:end">
+          <label class="check"><input type="checkbox" name="enabled" ${d.settings.enabled ? 'checked' : ''}> Relances automatiques</label>
+          <label>Après<select name="days">${[30, 45, 60, 90].map((n) => `<option value="${n}" ${d.settings.days === n ? 'selected' : ''}>${n} jours sans ménage</option>`).join('')}</select></label>
+          <button class="btn blue">Enregistrer</button><button type="button" class="btn ghost" id="nudgeRun" ${d.preview.length ? '' : 'disabled'}>Relancer maintenant (${d.preview.length})</button></form>
+        <p class="small" style="margin-top:10px">${d.preview.length ? `À relancer aujourd'hui : ${d.preview.slice(0, 8).map((c) => `${esc(c.name)} (dernier ménage le ${dateFr(c.last)})`).join(', ')}${d.preview.length > 8 ? '…' : ''}` : 'Personne à relancer aujourd\'hui.'}</p>
+        <p class="small muted">${d.sent30} relance(s) ces 30 derniers jours · ${d.optouts} client(s) désinscrit(s).</p>`;
+      const f = document.getElementById('nudgeForm');
+      f.onsubmit = async (e) => { e.preventDefault(); try { const r2 = await api('POST', '/api/admin/nudges', { enabled: f.enabled.checked, days: Number(f.days.value) }); toast(r2.message); paintNudges(); } catch (err) { toast(err.message); } };
+      document.getElementById('nudgeRun').onclick = async () => {
+        if (!confirm(`Envoyer ${d.preview.length} relance(s) maintenant ?`)) return;
+        try { const r2 = await api('POST', '/api/admin/nudges/run', {}); toast(r2.message); paintNudges(); } catch (err) { toast(err.message); }
+      };
     };
     // ---- tarifs et zones ----
     const paintPricing = async () => {
@@ -1617,14 +1812,18 @@
     if (owner && !document.getElementById('payBox')) {
       $app.insertAdjacentHTML('beforeend', `
         <section class="card" data-tab="chiffres" id="statsBox"><h2>Statistiques par mois</h2><p class="muted small">Chargement…</p></section>
+        <section class="card" data-tab="suivi" id="revBox"><h2>Avis des clients</h2><p class="muted small">Chargement…</p></section>
+        <section class="card" data-tab="suivi" id="nudgeBox"><h2>Relances des clients</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="paiements" id="payBox"><h2>Paiements et remboursements</h2><p class="muted small">Chargement…</p></section>
-        <section class="card" data-tab="tarifs" id="priceBox"><h2>Tarifs et zones</h2><p class="muted small">Chargement…</p></section>`);
+        <section class="card" data-tab="tarifs" id="priceBox"><h2>Tarifs et zones</h2><p class="muted small">Chargement…</p></section>
+        <section class="card" data-tab="tarifs" id="sapBox"><h2>Services à la personne et crédit d'impôt</h2><p class="muted small">Chargement…</p></section>`);
     }
     const showTab = (k) => {
       sessionStorage.setItem('adminTab', k);
       if (k === 'chiffres' && owner) paintStats();
       if (k === 'paiements' && owner) paintPayments();
-      if (k === 'tarifs' && owner) paintPricing();
+      if (k === 'tarifs' && owner) { paintPricing(); paintSap(); }
+      if (k === 'suivi' && owner) { paintReviews(); paintNudges(); }
       $app.querySelectorAll('[data-tab]').forEach((el) => { el.hidden = el.dataset.tab !== k; });
       $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.setAttribute('aria-selected', t.dataset.tabBtn === k));
       if (k === 'planning') loadPlanning(planStart);
@@ -1672,8 +1871,17 @@
           showPicker(c.dataset.bk, host);
           host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         };
-        c.ondragstart = (e) => { e.dataTransfer.setData('text/plain', c.dataset.bk); e.dataTransfer.effectAllowed = 'move'; c.classList.add('dragging'); };
-        c.ondragend = () => c.classList.remove('dragging');
+        c.ondragstart = (e) => {
+          e.dataTransfer.setData('text/plain', c.dataset.bk); e.dataTransfer.effectAllowed = 'move'; c.classList.add('dragging');
+          // Pendant le glisser : les intervenantes libres à ce créneau s'allument, les autres se grisent.
+          const b = p.bookings.find((x) => String(x.id) === c.dataset.bk);
+          api('GET', `/api/admin/bookings/${c.dataset.bk}/candidates`).then((cand) => {
+            if (!c.classList.contains('dragging')) return;
+            const ok = new Set(cand.list.filter((w) => !w.refused).map((w) => String(w.user_id)));
+            box.querySelectorAll(`.pcell[data-day="${b.date}"][data-worker]:not([data-worker=""])`).forEach((td) => td.classList.add(ok.has(td.dataset.worker) ? 'can' : 'cannot'));
+          }).catch(() => {});
+        };
+        c.ondragend = () => { c.classList.remove('dragging'); box.querySelectorAll('.pcell.can, .pcell.cannot').forEach((td) => td.classList.remove('can', 'cannot')); };
       });
       box.querySelectorAll('.pcell[data-worker]:not([data-worker=""])').forEach((td) => {
         td.ondragover = (e) => { e.preventDefault(); td.classList.add('over'); };
@@ -1760,6 +1968,134 @@
   };
 
   // ---------- espace entreprises : bureaux, agences, syndics, conciergeries ----------
+  // ---- formulaire de devis réutilisable (entreprises, syndics, agences) ----
+  const devisBlock = (kind, title = 'Demander un devis') => `<section class="card stack" id="devis">
+        <h2>${title}</h2>
+        <p class="small muted">Réponse sous 24 h ouvrées, avec un prix ferme après une courte visite si nécessaire.</p>
+        <form id="devisForm" class="grid2" style="gap:12px">
+          <label>${kind === 'syndic' ? 'Syndic ou copropriété' : kind === 'agence' ? 'Agence' : 'Société'}<input name="company" required maxlength="120" autocomplete="organization"></label>
+          <label>Votre nom<input name="name" required maxlength="80" autocomplete="name"></label>
+          <label>E-mail professionnel<input type="email" name="email" required maxlength="120" autocomplete="email"></label>
+          <label>Téléphone<input type="tel" name="phone" maxlength="20" autocomplete="tel"></label>
+          <label>Code postal ${kind === 'syndic' ? 'de l\'immeuble' : 'des logements'}<input name="cp" inputmode="numeric" maxlength="5" required></label>
+          <input type="hidden" name="kind" value="${kind}">
+          <label>${kind === 'syndic' ? 'Surface des parties communes (m², environ)' : 'Nombre de logements par mois (environ)'}<input type="number" name="surface" min="0" max="100000"></label>
+          <label style="grid-column:1/-1">Fréquence souhaitée<input name="frequency" maxlength="60" placeholder="${kind === 'syndic' ? 'Ex. 2 passages par semaine' : 'Ex. 4 fins de bail par mois'}"></label>
+          <label style="grid-column:1/-1">Précisions (facultatif)<textarea name="message" rows="3" maxlength="1000" placeholder="${kind === 'syndic' ? 'Nombre d\'étages, ascenseur, vitres, local poubelles…' : 'Surfaces habituelles, remise des clés, délais avant état des lieux…'}"></textarea></label>
+          <button class="btn primary" style="grid-column:1/-1">Envoyer ma demande</button>
+        </form>
+        <p class="msg" id="devisDone"></p>
+      </section>`;
+  const bindDevis = () => {
+    const f = document.getElementById('devisForm');
+    if (!f) return;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      try { const r = await api('POST', '/api/quote-requests', formData(e.target)); const d = document.getElementById('devisDone'); d.className = 'msg ok'; d.textContent = r.message; e.target.hidden = true; } catch (err) { toast(err.message); }
+    };
+    document.querySelectorAll('[data-todevis]').forEach((a) => a.onclick = (e) => { e.preventDefault(); document.getElementById('devis').scrollIntoView({ behavior: 'smooth' }); });
+  };
+
+  // ---- syndics de copropriété ----
+  views['syndics'] = () => {
+    const P = PRICES();
+    $app.innerHTML = `
+      <section class="hello pro-hello">
+        <div class="hello-text">
+          <p class="hello-hi">Syndics et copropriétés</p>
+          <h1>Des parties communes nettes, sans relancer personne</h1>
+          <p class="hello-sub">Hall, escaliers, paliers, ascenseur, vitres des parties communes : un passage régulier à la fréquence convenue, la même intervenante, et la preuve de chaque passage.</p>
+          <a class="btn primary" href="#devis" data-todevis>Demander un devis</a>
+        </div>
+        <div class="hello-art" aria-hidden="true">${ART.services.grand}</div>
+      </section>
+      <div class="pro-grid">
+        <article class="card"><h3>Ce qui est fait</h3><ul class="ticks"><li>Hall d'entrée, boîtes aux lettres, portes vitrées</li><li>Escaliers, paliers, rampes</li><li>Cabine d'ascenseur</li><li>Vitres des parties communes accessibles</li><li>Liste de tâches propre à votre immeuble</li></ul></article>
+        <article class="card"><h3>Comment ça se passe</h3><ul class="ticks"><li>Fréquence fixée ensemble (chaque semaine, plusieurs fois par semaine…)</li><li>Une intervenante attitrée, remplacée si elle est absente</li><li>Tâches cochées et photos après passage, consultables en ligne</li><li>Un signalement en un clic si quelque chose ne va pas</li></ul></article>
+        <article class="card"><h3>Facturation</h3><ul class="ticks"><li>À partir de ${String(P.bureauHT).replace('.', ',')} € HT de l'heure</li><li>Une facture par passage, au nom du syndic, téléchargeable</li><li>Paiement en ligne sécurisé</li><li>Sans engagement de durée</li></ul></article>
+      </div>
+      ${devisBlock('syndic', 'Devis pour votre immeuble')}`;
+    bindDevis();
+  };
+
+  // ---- agences immobilières et gestionnaires ----
+  views['agences'] = () => {
+    const P = PRICES();
+    $app.innerHTML = `
+      <section class="hello pro-hello">
+        <div class="hello-text">
+          <p class="hello-hi">Agences immobilières et gestionnaires</p>
+          <h1>Des logements prêts pour l'état des lieux</h1>
+          <p class="hello-sub">Fins de bail, remises en état entre deux locataires, logements vides avant une visite : vous indiquez l'adresse et la date, on s'occupe du reste. Photos après le passage à joindre au dossier.</p>
+          <a class="btn primary" href="#devis" data-todevis>Demander un devis</a>
+        </div>
+        <div class="hello-art" aria-hidden="true">${ART.services.menage}</div>
+      </section>
+      <div class="pro-grid">
+        <article class="card"><h3>Fin de bail et relocation</h3><ul class="ticks"><li>Cuisine et électroménager, salle de bain, sols, vitres</li><li>Placards et rangements vidés nettoyés</li><li>Liste de tâches adaptée à chaque logement</li><li>Photos après le passage, pour l'état des lieux</li></ul></article>
+        <article class="card"><h3>Pensé pour plusieurs logements</h3><ul class="ticks"><li>Un seul compte pour toutes vos adresses (« Mes logements »)</li><li>Consignes d'accès et remise des clés notées une fois</li><li>Suivi en direct : en route, arrivée, terminé</li><li>Une facture par logement, au nom de l'agence</li></ul></article>
+        <article class="card"><h3>Prix</h3><ul class="ticks"><li>Grand nettoyage : ${String(P.grand).replace('.', ',')} € TTC de l'heure</li><li>Durée estimée avant de réserver, prix connu à l'avance</li><li>Pour un volume régulier, devis personnalisé</li><li>Annulation gratuite jusqu'à 24 h avant</li></ul></article>
+      </div>
+      ${devisBlock('agence', 'Devis pour vos logements')}`;
+    bindDevis();
+  };
+
+  // ---- recrutement des intervenantes ----
+  views['recrutement'] = async () => {
+    let info = { docs: { S: [], I: [] }, rate: { min: 15, max: 40 } };
+    try { info = await api('GET', '/api/recruitment'); } catch { /* liste par défaut */ }
+    const docs = (list) => list.map((d) => `<li>${esc(d.label)}${d.required ? '' : ' <span class="muted">(facultatif)</span>'}</li>`).join('');
+    $app.innerHTML = `
+      <section class="hello">
+        <div class="hello-text">
+          <p class="hello-hi">Rejoindre Proprigo</p>
+          <h1>Faites briller Paris, à votre rythme</h1>
+          <p class="hello-sub">Des ménages près de chez vous, des consignes claires, une application sur votre téléphone et une équipe joignable pendant chaque mission.</p>
+          <a class="btn primary" href="#/inscription-intervenante">Je postule</a>
+        </div>
+        <div class="hello-art" aria-hidden="true">${ART.services.menage}</div>
+      </section>
+      <div class="pro-grid">
+        <article class="card"><h3>Indépendante (micro-entreprise)</h3><ul class="ticks">
+          <li>Vous choisissez vos missions et pouvez refuser sans pénalité</li>
+          <li>Votre tarif horaire, entre ${info.rate.min} et ${info.rate.max} €, fixé avec nous</li>
+          <li>Virement chaque semaine pour les ménages terminés</li>
+          <li>Bonus qualité de 1 € de l'heure dès 4,8/5 de note moyenne</li></ul></article>
+        <article class="card"><h3>Salariée</h3><ul class="ticks">
+          <li>Proprigo vous emploie</li>
+          <li>Missions planifiées selon vos disponibilités</li>
+          <li>Formation et première mission accompagnée</li>
+          <li>Heures déclarées sur votre fiche de paie</li></ul></article>
+        <article class="card"><h3>Pour toutes</h3><ul class="ticks">
+          <li>Missions proches de chez vous</li>
+          <li>Notifications des nouvelles missions sur votre téléphone</li>
+          <li>Votre semaine en un coup d'œil, vos congés gérés en ligne</li>
+          <li>Un bouton pour prévenir l'équipe en cas de problème sur place</li></ul></article>
+      </div>
+      <section class="card">
+        <h2>Comment ça se passe</h2>
+        <ol class="steps-list">
+          <li><b>Inscription en ligne</b> : cinq minutes, sur ordinateur ou téléphone.</li>
+          <li><b>Confirmation de votre adresse e-mail</b> avec le lien reçu.</li>
+          <li><b>Vos documents</b>, en photo ou en PDF, depuis votre espace.</li>
+          <li><b>Un entretien</b> avec l'équipe.</li>
+          <li><b>Vos premières missions</b>, dès que votre dossier est validé.</li>
+        </ol>
+      </section>
+      <section class="card">
+        <h2>Documents demandés</h2>
+        <div class="grid2"><div><h3>Indépendante</h3><ul class="ticks">${docs(info.docs.I)}</ul></div><div><h3>Salariée</h3><ul class="ticks">${docs(info.docs.S)}</ul></div></div>
+      </section>
+      <section class="faq-home">
+        <h2>Questions fréquentes</h2>
+        <details class="faq"><summary>Combien vais-je gagner ?</summary><p>En indépendante : votre tarif horaire multiplié par les heures de ménage, avant vos cotisations. Par exemple, 3 h à 24 € de l'heure font 72 €. Vos gains s'affichent mois par mois dans votre espace.</p></details>
+        <details class="faq"><summary>Puis-je refuser une mission ?</summary><p>En indépendante, oui, sans pénalité : vous recevez des propositions et vous acceptez celles qui vous conviennent. En salariée, vos missions suivent les disponibilités que vous indiquez.</p></details>
+        <details class="faq"><summary>Que se passe-t-il si j'ai un problème chez un client ?</summary><p>Un bouton dans la mission prévient l'équipe immédiatement : accès impossible, objet abîmé, logement bien plus sale que prévu, ou si vous ne vous sentez pas en sécurité.</p></details>
+        <details class="faq"><summary>Faut-il du matériel ?</summary><p>Le client fournit en général aspirateur et produits. Il peut choisir l'option « matériel apporté » : c'est indiqué dans la mission.</p></details>
+      </section>
+      <section class="final"><h2>Prête à commencer ?</h2><a class="btn primary" href="#/inscription-intervenante">Je postule</a></section>`;
+  };
+
   views['pro'] = () => {
     $app.innerHTML = `
       <section class="hello pro-hello">
@@ -1773,7 +2109,7 @@
       </section>
       <div class="pro-grid">
         <article class="card"><span class="offer-art">${ART.services.bureau}</span><h3>Bureaux</h3><p>Avant l'ouverture ou après la fermeture, de 6 h à 22 h. Postes de travail, sanitaires, coin café, salles de réunion.</p><p class="offer-price"><b>35 €</b> HT de l'heure</p></article>
-        <article class="card"><span class="offer-art">${ART.services.grand}</span><h3>Agences et syndics</h3><p>Fins de bail prêtes pour l'état des lieux, remises en état avant relocation, entretien des parties communes.</p><p class="offer-price"><b>Sur devis</b></p></article>
+        <article class="card"><span class="offer-art">${ART.services.grand}</span><h3>Agences et syndics</h3><p class="small"><a href="#/syndics">Syndics de copropriété</a> · <a href="#/agences">Agences immobilières</a></p><p>Fins de bail prêtes pour l'état des lieux, remises en état avant relocation, entretien des parties communes.</p><p class="offer-price"><b>Sur devis</b></p></article>
         <article class="card"><span class="offer-art">${ART.services.airbnb}</span><h3>Conciergeries</h3><p>Ménage et linge après chaque départ, calendriers synchronisés, la même intervenante par logement, photos avant / après.</p><p class="offer-price"><b>dès ${String(PRICES().airbnb.studio).replace('.', ',')} €</b> le logement</p></article>
       </div>
       <section class="card">
@@ -1974,6 +2310,10 @@
         <p class="small muted">Les reçus de chaque ménage sont dans « Mes ménages ». L'attestation annuelle récapitule les ménages à domicile pour le crédit d'impôt.</p>
         <div class="actions" style="margin:0"><a class="btn ghost" href="/api/me/attestation?year=${year}" target="_blank" rel="noopener">Attestation ${year}</a><a class="btn ghost" href="/api/me/attestation?year=${year - 1}" target="_blank" rel="noopener">Attestation ${year - 1}</a></div>
       </section>` : ''}
+      ${me.role === 'client' ? '<section class="card stack" id="pushMine"></section>' : ''}
+      ${me.role === 'client' ? `<section class="card stack"><h2>Ne payer que 50 % ?</h2>
+        <p class="small muted">Avec l'avance immédiate de l'URSSAF, le crédit d'impôt est déduit directement : vous ne payez que la moitié du ménage à domicile. Proprigo prépare ce service.</p>
+        <label class="check"><input type="checkbox" id="wantAvance" ${me.wants_avance ? 'checked' : ''}> Prévenez-moi dès que c'est disponible</label></section>` : ''}
       ${me.role === 'intervenante' ? `<section class="card stack">
         <h2>Ma présentation aux clients</h2>
         <p class="small muted">Vos clients voient votre prénom, votre ancienneté, votre note et ce texte. Jamais votre nom de famille ni votre téléphone.</p>
@@ -2024,6 +2364,9 @@
         else { try { await navigator.clipboard.writeText(`${text} ${ref.link}`); toast('Message copié : collez-le dans un SMS ou WhatsApp.'); } catch { toast(ref.link); } }
       };
     }
+    paintPush(document.getElementById('pushMine'), 'Soyez prévenu quand votre intervenante est en route, et de tout changement sur vos ménages.');
+    const wa = document.getElementById('wantAvance');
+    if (wa) wa.onchange = async () => { try { const r = await api('POST', '/api/me/avance', { wants: wa.checked }); toast(r.message); me.wants_avance = wa.checked ? 1 : 0; } catch (e) { toast(e.message); } };
     const cf = document.getElementById('companyForm');
     if (cf) {
       api('GET', '/api/account/company').then((c) => {
@@ -2092,7 +2435,7 @@
     <h2>5. Modification et annulation</h2><p>La date, l'heure, la durée et l'adresse peuvent être modifiées jusqu'à 24 heures avant le début de la prestation, sous réserve de disponibilité ; le prix est recalculé. L'annulation est gratuite jusqu'à 24 heures avant ; ensuite, 50 % du prix reste dû. Si l'intervenante ne peut pas accéder au logement du fait du client, la prestation est due.</p>
     <h2>6. Droit de rétractation</h2><p>Pour une réservation faite à distance par un consommateur, le droit de rétractation de 14 jours s'applique. Si le client demande que la prestation commence avant la fin de ce délai, il le reconnaît expressément et reste redevable du montant correspondant au service fourni. [Rédaction à valider.]</p>
     <h2>7. Remplacement de l'intervenante</h2><p>En cas d'indisponibilité de l'intervenante prévue, Proprigo peut la remplacer par une autre intervenante vérifiée et en informe le client, qui peut choisir un autre créneau.</p>
-    <h2>8. Qualité et réclamations</h2><p>Toute réclamation doit être faite dans les [48] heures suivant la prestation depuis « Signaler un problème ». Proprigo propose une solution adaptée (nouveau passage, geste commercial).</p>
+    <h2>8. Qualité, garantie et réclamations</h2><p><b>Garantie « satisfait ou on revient »</b> : si une prestation terminée ne vous satisfait pas, signalez-le dans les 48 heures suivant sa fin, depuis la réservation (bouton « On revient »), en précisant les points concernés. Proprigo revient gratuitement reprendre ces points, à un créneau convenu avec vous. La garantie s'applique une fois par prestation et couvre les tâches prévues à la réservation. Toute autre réclamation se fait dans les mêmes 48 heures depuis « Signaler un problème » ; Proprigo propose alors une solution adaptée (nouveau passage, geste commercial).</p>
     <h2>9. Responsabilité et assurance</h2><p>Proprigo est assuré en responsabilité civile professionnelle auprès de [ASSUREUR]. Le client signale les objets fragiles ou de valeur. [Limites et exclusions à préciser avec l'assureur, notamment pour les vols.]</p>
     <h2>10. Photos et données personnelles</h2><p>Voir la <a href="#/confidentialite">politique de confidentialité</a>.</p>
     <h2>11. Médiation et droit applicable</h2><p>En cas de litige, le consommateur peut recourir gratuitement au médiateur : [NOM, ADRESSE, SITE]. Droit français.</p>`);
