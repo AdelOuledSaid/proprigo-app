@@ -333,7 +333,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
   .hello { grid-template-columns: 1fr; padding: 22px 20px; }
   .hello-art { position: absolute; right: 14px; top: 14px; width: 74px; opacity: .95; }
   .hello-text { padding-right: 70px; }
-  .hello .track, .hello-when, .hello .btn { margin-right: -70px; }
+  .hello .track, .hello-when, .hello-text > .btn { margin-right: -70px; }
+  .hello.refer .hello-text { padding-right: 0; }
 }
 
 /* raccourci de réservation */
@@ -763,3 +764,14 @@ ul.ticks { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 8
 ul.ticks li { position: relative; padding-left: 26px; line-height: 1.45; }
 ul.ticks li::before { content: ""; position: absolute; left: 2px; top: 5px; width: 14px; height: 8px; border-left: 2.5px solid var(--mint, #18b98a); border-bottom: 2.5px solid var(--mint, #18b98a); transform: rotate(-45deg); }
 ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; }
+
+/* lisibilité sur petit écran (téléphone, appli) */
+.ref-actions .btn { flex: 1 1 100%; }
+.ref-code span { white-space: nowrap; }
+@media (max-width: 560px) {
+  h1 { font-size: 30px; line-height: 1.12; }
+  .card h2 { font-size: 23px; line-height: 1.2; }
+  .hello h1 { font-size: 27px; }
+  .ref-code b { font-size: 22px; }
+  .card { padding: 18px; }
+}

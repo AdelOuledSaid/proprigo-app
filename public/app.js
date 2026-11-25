@@ -200,7 +200,7 @@
   const OPTIONABLE = ['menage', 'grand'];
   const LEASE = { studio: { label: 'Studio', hours: 4 }, T2: { label: '2 pièces', hours: 5 }, T3: { label: '3 pièces', hours: 7 }, maison: { label: 'Maison', hours: 8 } };
   const LEASE_TASKS = ['Cuisine : intérieur des placards, four, réfrigérateur, hotte, plaques', 'Salle de bain : calcaire, joints, robinetterie, miroir', 'WC : cuvette, abattant, sol, murs autour', 'Sols de toutes les pièces : aspirateur et serpillière', 'Plinthes, portes, poignées et interrupteurs', 'Intérieur des placards et penderies', 'Vitres intérieures accessibles', 'Traces sur les murs (quand c\'est possible)', 'Radiateurs et grilles de ventilation'];
-  const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge', bureau: 'Locaux professionnels, 35 € HT/h' };
+  const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge', bureau: 'Locaux professionnels' };
   const dateLong = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 
   // ---------- accueil ----------
@@ -570,7 +570,7 @@
   }
 
   // ---------- réservation en 4 étapes ----------
-  const STEP_NAMES = ['Votre ménage', 'Date et heure', 'Récapitulatif', 'Paiement'];
+  const STEP_NAMES = ['Ménage', 'Date', 'Résumé', 'Paiement'];
   const stepper = (n) => `<ol class="stepper" aria-label="Étape ${n} sur 4">${STEP_NAMES.map((t, i) => `<li class="${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}" ${i + 1 === n ? 'aria-current="step"' : ''}><span>${i + 1}</span>${t}</li>`).join('')}</ol>`;
 
   views['reserver'] = async (params) => {
@@ -620,7 +620,7 @@
                <p class="small muted" style="margin:0 0 8px">Choisissez la taille : la durée et la checklist de l'état des lieux sont réglées pour vous.</p>
                <div class="chips">${Object.entries(LEASE).map(([k, v]) => `<button type="button" data-lease="${k}" aria-pressed="${draft.lease === k}">${v.label} · ${String(v.hours).replace('.', ',')} h</button>`).join('')}</div></fieldset>` : ''}
              ${OPTIONABLE.includes(draft.service) ? `<fieldset class="box"><legend>Options</legend>
-               ${Object.entries(EXTRAS).map(([k, v]) => `<label class="check"><input type="checkbox" data-extra="${k}" ${draft.extras.includes(k) ? 'checked' : ''}> ${v.label} <span class="muted">(+${String(v.hours).replace('.', ',')} h · +${eur(v.hours * (draft.service === 'grand' ? 42 : 37))})</span></label>`).join('')}
+               ${Object.entries(EXTRAS).map(([k, v]) => `<label class="check"><input type="checkbox" data-extra="${k}" ${draft.extras.includes(k) ? 'checked' : ''}> <span>${v.label}<br><span class="muted small">+${String(v.hours).replace('.', ',')} h, soit +${eur(v.hours * (draft.service === 'grand' ? PRICES().grand : PRICES().menage))}</span></span></label>`).join('')}
              </fieldset>` : ''}`}
         <details class="box"><summary>Ce qui doit être fait (${t.length} tâches)</summary>
           <div id="tasks">${t.map((x, i) => `<label class="check"><input type="checkbox" data-task="${i}" checked> ${esc(x)}</label>`).join('')}</div>
@@ -1078,7 +1078,8 @@
   }
   // ---- appli Android / iPhone (Capacitor) : notifications natives ----
   const NATIVE = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() ? window.Capacitor : null;
-  const NPush = NATIVE && NATIVE.Plugins && NATIVE.Plugins.PushNotifications;
+  // le module natif peut être exposé de deux façons selon la version de Capacitor
+  const NPush = NATIVE ? ((NATIVE.Plugins && NATIVE.Plugins.PushNotifications) || (typeof NATIVE.registerPlugin === 'function' ? NATIVE.registerPlugin('PushNotifications') : null)) : null;
   let nativeToken = null;
   if (NPush) {
     NPush.addListener('registration', async (t) => {
@@ -1124,6 +1125,7 @@
   async function paintPush(box, intro) {
     if (!box) return;
     if (NPush) return paintNativePush(box, intro);
+    if (NATIVE) { box.innerHTML = '<h2>Notifications sur ce téléphone</h2><p class="small muted">Les notifications ne sont pas disponibles dans cette version de l\'application. Mettez-la à jour depuis le store.</p>'; return; }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
     const head = '<h2>Notifications sur ce téléphone</h2>';
@@ -1132,7 +1134,7 @@
       return;
     }
     let key; let reg; let sub;
-    try { key = await api('GET', '/api/push/key'); reg = await navigator.serviceWorker.ready; sub = await reg.pushManager.getSubscription(); } catch { box.innerHTML = `${head}<p class="small muted">Notifications indisponibles pour le moment.</p>`; return; }
+    try { key = await api('GET', '/api/push/key'); reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(new Error('sw')), 8000))]); sub = await reg.pushManager.getSubscription(); } catch { box.innerHTML = `${head}<p class="small muted">Notifications indisponibles pour le moment.</p>`; return; }
     const on = Boolean(sub) && Notification.permission === 'granted';
     box.innerHTML = `${head}<p class="small muted">${intro}</p>
       ${Notification.permission === 'denied' ? '<p class="msg warn">Les notifications sont bloquées pour Proprigo. Autorisez-les dans les réglages du navigateur (icône du cadenas à côté de l\'adresse), puis revenez ici.</p>'
@@ -2327,17 +2329,17 @@
     const year = new Date().getFullYear();
     $app.innerHTML = `
       <h1>Mon compte</h1>
-      ${ref ? `<section class="hello refer">
+      ${ref ? `<section class="hello refer" data-o="4">
         <div class="hello-text">
           <p class="hello-hi">Parrainage</p>
           <h1>Offrez ${ref.amount} €, recevez ${ref.amount} €</h1>
           <p class="hello-sub">Votre proche a ${ref.amount} € de réduction sur son premier ménage. Vous recevez ${ref.amount} € dès qu'il est fait.${ref.credit ? ` <b>Crédit disponible : ${eur(ref.credit)}</b>, déduit de votre prochaine réservation.` : ''}</p>
           <div class="ref-code"><span>Votre code</span><b>${esc(ref.code)}</b></div>
-          <div class="actions"><button class="btn primary" id="shareRef">Partager mon lien</button><button class="btn ghost light" id="copyRef">Copier le lien</button></div>
+          <div class="actions ref-actions"><button class="btn primary" id="shareRef">Partager mon lien</button><button class="btn ghost light" id="copyRef">Copier le lien</button></div>
           ${ref.friends ? `<p class="hello-sub" style="margin:10px 0 0">${ref.friends} proche${ref.friends > 1 ? 's' : ''} inscrit${ref.friends > 1 ? 's' : ''} avec votre code.</p>` : ''}
         </div>
       </section>
-      <details class="card stack" id="companyBox"><summary><b>Société (facultatif)</b> <span class="muted small">facture au nom de votre entreprise, remise selon le volume</span></summary>
+      <details class="card stack" id="companyBox" data-o="6"><summary><b>Société (facultatif)</b> <span class="muted small">facture au nom de votre entreprise, remise selon le volume</span></summary>
         <form id="companyForm" class="grid2" style="gap:12px;margin-top:12px">
           <label>Raison sociale<input name="company" maxlength="120" autocomplete="organization"></label>
           <label>SIRET (14 chiffres)<input name="siret" inputmode="numeric" maxlength="20"></label>
@@ -2347,20 +2349,20 @@
           <button class="btn blue" style="grid-column:1/-1">Enregistrer la société</button>
         </form>
       </details>
-      <section class="card stack"><h2>Crédit et cartes cadeaux</h2>
+      <section class="card stack" data-o="5"><h2>Crédit et cartes cadeaux</h2>
         <p style="margin:0">Crédit disponible : <b id="myCredit">${eur(ref.credit)}</b>, déduit automatiquement de vos prochains ménages.</p>
         <form id="redeem2" class="cp-row"><label>Code d'une carte cadeau<input name="code" maxlength="20" autocapitalize="characters" placeholder="PG-XXXX-XXXX" required></label><button class="btn ghost">Utiliser</button></form>
         <p class="small" style="margin:0"><a href="#/cadeau">Offrir un ménage ou acheter un pack d'heures</a></p>
       </section>
-      <section class="card stack"><h2>Mes documents</h2>
-        <p class="small muted">Les reçus de chaque ménage sont dans « Mes ménages ». L'attestation annuelle récapitule les ménages à domicile pour le crédit d'impôt.</p>
-        <div class="actions" style="margin:0"><a class="btn ghost" href="/api/me/attestation?year=${year}" target="_blank" rel="noopener">Attestation ${year}</a><a class="btn ghost" href="/api/me/attestation?year=${year - 1}" target="_blank" rel="noopener">Attestation ${year - 1}</a></div>
+      <section class="card stack" data-o="3"><h2>${sapOn() ? 'Mes documents' : 'Récapitulatif de mes ménages'}</h2>
+        <p class="small muted">${sapOn() ? "Les reçus de chaque ménage sont dans « Mes ménages ». L'attestation annuelle récapitule les ménages à domicile pour le crédit d'impôt." : "Les reçus de chaque ménage sont dans « Mes ménages ». Ici, le récapitulatif de l'année, pratique pour vos comptes."}</p>
+        <div class="actions" style="margin:0"><a class="btn ghost" href="/api/me/attestation?year=${year}" target="_blank" rel="noopener">${sapOn() ? 'Attestation' : 'Récapitulatif'} ${year}</a><a class="btn ghost" href="/api/me/attestation?year=${year - 1}" target="_blank" rel="noopener">${sapOn() ? 'Attestation' : 'Récapitulatif'} ${year - 1}</a></div>
       </section>` : ''}
-      ${me.role === 'client' ? '<section class="card stack" id="pushMine"></section>' : ''}
-      ${me.role === 'client' ? `<section class="card stack"><h2>Ne payer que 50 % ?</h2>
+      ${me.role === 'client' ? '<section class="card stack" id="pushMine" data-o="2"></section>' : ''}
+      ${me.role === 'client' && sapOn() ? `<section class="card stack" data-o="7"><h2>Ne payer que 50 % ?</h2>
         <p class="small muted">Avec l'avance immédiate de l'URSSAF, le crédit d'impôt est déduit directement : vous ne payez que la moitié du ménage à domicile. Proprigo prépare ce service.</p>
         <label class="check"><input type="checkbox" id="wantAvance" ${me.wants_avance ? 'checked' : ''}> Prévenez-moi dès que c'est disponible</label></section>` : ''}
-      ${me.role === 'intervenante' ? `<section class="card stack">
+      ${me.role === 'intervenante' ? `<section class="card stack" data-o="2">
         <h2>Ma présentation aux clients</h2>
         <p class="small muted">Vos clients voient votre prénom, votre ancienneté, votre note et ce texte. Jamais votre nom de famille ni votre téléphone.</p>
         <form id="wprof" class="stack">
@@ -2369,8 +2371,7 @@
           <button class="btn blue">Enregistrer ma présentation</button>
         </form>
       </section>` : ''}
-      <div class="grid2">
-        <section class="card stack">
+        <section class="card stack" data-o="1">
           <h2>Mes informations</h2>
           <form id="info" class="stack">
             <label>Nom<input type="text" name="name" autocomplete="name" maxlength="80" value="${esc(me.name)}" required></label>
@@ -2380,7 +2381,7 @@
             <button class="btn blue">Enregistrer</button>
           </form>
         </section>
-        <section class="card stack">
+        <section class="card stack" data-o="8">
           <h2>Mot de passe</h2>
           <form id="pw" class="stack">
             <label>Mot de passe actuel<input type="password" name="current" autocomplete="current-password" required></label>
@@ -2388,7 +2389,6 @@
             <button class="btn blue">Changer le mot de passe</button>
           </form>
         </section>
-      </div>
       <button type="button" class="btn ghost full" id="logout2">Se déconnecter</button>
       <section class="card stack">
         <h2>Mes données</h2>
@@ -2433,6 +2433,11 @@
     if (rd) rd.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/gifts/redeem', { code: rd.code.value }); toast(r.message); document.getElementById('myCredit').textContent = eur(r.credit); rd.reset(); } catch (err) { toast(err.message); } };
     const wp = document.getElementById('wprof');
     if (wp) wp.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/worker/profile', formData(wp)); toast(r.message); } catch (err) { toast(err.message); } };
+    { // ordre d'affichage : d'abord ce qu'on cherche le plus souvent
+      const tagged = [...$app.querySelectorAll(':scope > [data-o]')].sort((x, y) => Number(x.dataset.o) - Number(y.dataset.o));
+      const anchor = document.getElementById('logout2');
+      tagged.forEach((el) => $app.insertBefore(el, anchor));
+    }
     document.getElementById('logout2').onclick = async () => { await nativeForget(); await api('POST', '/api/logout', {}); me = null; renderNav(); go('#/'); route(); };
     document.getElementById('info').onsubmit = async (e) => {
       e.preventDefault();
