@@ -2478,6 +2478,7 @@
   const page = (title, body) => { $app.innerHTML = `<article class="card legal"><h1>${title}</h1>${body}</article>`; };
 
   views['aide'] = () => {
+    if (me && me.role === 'intervenante') return aideIntervenante();
     const faq = [
       ['Comment réserver ?', 'Cliquez sur « Réserver », choisissez le type de ménage, puis la date et l\'heure parmi les créneaux réellement libres. Vous voyez le prix total avant de payer.'],
       ['Puis-je annuler ?', "Oui, depuis « Mes réservations ». L'annulation est gratuite jusqu'à 24 h avant le ménage. Moins de 24 h avant, 50 % du prix est retenu, car l'intervenante a réservé ce créneau pour vous."],
@@ -2495,8 +2496,27 @@
       <h2>Faire une réclamation</h2>
       <ol><li>Ouvrez <a href="#/mes-reservations">Mes réservations</a>.</li><li>Sous le ménage concerné, cliquez sur « Signaler un problème » et décrivez la situation, avec une photo si possible.</li><li>Notre équipe vous répond dans la messagerie de la réservation, et par e-mail.</li></ol>
       <p>Si la réponse ne vous satisfait pas, vous pouvez saisir gratuitement le médiateur de la consommation : [NOM ET SITE DU MÉDIATEUR].</p>
-      <h2>Nous contacter</h2><p>E-mail : [ADRESSE E-MAIL DU SERVICE CLIENT] · Téléphone : [NUMÉRO] (du lundi au samedi, 9 h à 19 h)</p>`);
+      <h2>Nous contacter</h2><p>Le plus rapide : la messagerie de votre réservation. Sinon, par e-mail : <a href="mailto:contact@proprigo.fr">contact@proprigo.fr</a>.</p>`);
   };
+  // aide des intervenantes : leurs questions à elles, pas celles des clients
+  function aideIntervenante() {
+    const faq = [
+      ['Comment je reçois mes missions ?', "Indépendante : vous recevez des propositions dans « Missions », avec le prix, la date et le code postal. Vous acceptez celles qui vous conviennent ; refuser n'entraîne aucune pénalité. L'adresse exacte s'affiche après acceptation. Salariée : le planning Proprigo vous attribue les missions selon vos disponibilités."],
+      ['Comment être prévenue des nouvelles missions ?', "Activez les notifications dans « Missions », rubrique « Notifications ». Vous êtes prévenue sur votre téléphone, même l'application fermée."],
+      ['Comment indiquer mes horaires et mes congés ?', "Dans « Missions » : « Mes disponibilités » pour vos jours et horaires de travail, « Mes congés » pour vos absences. Vous ne recevez aucune mission en dehors de ces horaires ni pendant vos congés."],
+      ['Le jour de la mission, que dois-je faire ?', "Appuyez sur 🚶 « Je pars » en partant et indiquez dans combien de temps vous arrivez : le client est prévenu. Puis 📍 « Je suis arrivée », ▶ « Commencer le ménage », et ✅ « Terminer le ménage » à la fin. Cochez les tâches au fur et à mesure."],
+      ['Je vais être en retard, que faire ?', "Ouvrez 💬 « Messages » sur la mission et envoyez « J'aurai environ 15 min de retard ». Vous pouvez aussi changer l'heure d'arrivée prévue après « Je pars »."],
+      ['Il y a un problème chez le client', "Appuyez sur ⚠️ « Problème » sur la mission : accès impossible, objet cassé, logement bien plus sale que prévu, ou si vous ne vous sentez pas en sécurité. L'équipe est prévenue tout de suite. En cas de danger, appelez le 17."],
+      ['Les photos sont-elles obligatoires ?', "Seulement si le client les a acceptées. Dans ce cas, prenez au moins une 📷 « Photo après » avant de terminer. Sinon, aucune photo n'est demandée."],
+      ['Quand suis-je payée ?', "Indépendante : par virement chaque semaine pour les ménages terminés. Salariée : votre salaire figure sur votre fiche de paie. Dans les deux cas, « Mes gains » montre vos heures mois par mois."],
+      ['Je ne peux pas venir à une mission', "Prévenez l'équipe le plus tôt possible par e-mail à contact@proprigo.fr, en donnant la date et l'adresse de la mission. Une remplaçante sera cherchée pour le client. Pour une absence prévue, ajoutez-la dans « Mes congés »."],
+      ['Où envoyer mes documents ?', "Dans « Missions », rubrique « Mes documents ». Vous pouvez envoyer une photo ou un PDF depuis votre téléphone."],
+    ];
+    page('Aide', `
+      <p class="lead">Les réponses aux questions les plus fréquentes. Pour une mission précise, écrivez dans les 💬 messages de la mission.</p>
+      ${faq.map(([q, a]) => `<details class="faq"><summary>${q}</summary><p>${a}</p></details>`).join('')}
+      <h2>Contacter l'équipe</h2><p>Par la messagerie d'une mission, ou par e-mail : <a href="mailto:contact@proprigo.fr">contact@proprigo.fr</a>.</p>`);
+  }
 
   views['intervenantes-verifiees'] = () => page('Nos intervenantes', `
     <p class="lead">Une intervenante ne reçoit aucune mission avant d'avoir passé toutes les étapes de sélection.</p>
