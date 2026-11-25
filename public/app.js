@@ -474,8 +474,7 @@
   async function workerCard(id) {
     let c;
     try { c = await api('GET', `/api/workers/${id}/card`); } catch { return ''; }
-    const since = new Date(c.since + '-01T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-    const meta = [`Intervenante vérifiée depuis ${since}`, c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
+    const meta = ['Intervenante vérifiée', c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
     return `<div class="wcard">
       ${avatar(c.id, c.photo, c.firstName, 'wcard-av')}
       <div class="wcard-name">${esc(c.displayName || c.firstName)}${c.tier && c.tier.key !== 'bleu' ? ` <span class="tier-pill ${c.tier.key}">${c.tier.icon} Intervenante ${esc(c.tier.label)}</span>` : ''}</div>
@@ -2451,7 +2450,7 @@
         <label class="check"><input type="checkbox" id="wantAvance" ${me.wants_avance ? 'checked' : ''}> Prévenez-moi dès que c'est disponible</label></section>` : ''}
       ${me.role === 'intervenante' ? `<section class="card stack" data-o="2">
         <h2>Ma présentation aux clients</h2>
-        <p class="small muted">Vos clients voient votre photo, votre prénom et l'initiale de votre nom, votre ancienneté, votre note et ce texte. Jamais votre nom de famille complet ni votre téléphone.</p>
+        <p class="small muted">Vos clients voient votre photo, votre prénom et l'initiale de votre nom, votre nombre de ménages, votre note et ce texte. Jamais votre nom de famille complet ni votre téléphone.</p>
         <div class="av-edit">
           ${avatar(me.id, Boolean(card && card.avatar_status), me.name, 'lg')}
           <div>
