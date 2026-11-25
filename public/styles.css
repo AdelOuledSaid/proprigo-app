@@ -818,3 +818,7 @@ ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; 
   .wk-list { display: block; }
 }
 .bk-main .btn { white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+
+/* une petite image au-dessus de chaque étape */
+.track li .t-ico, .stepper li .t-ico { display: block; font-size: 18px; line-height: 1.2; font-style: normal; margin-bottom: 2px; }
+.track li:not(.done):not(.now) .t-ico, .stepper li:not(.done):not(.now) .t-ico { opacity: .55; filter: grayscale(.6); }

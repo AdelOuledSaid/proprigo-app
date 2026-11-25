@@ -434,12 +434,14 @@
 
   // ---------- accueil du client : prochain ménage ----------
   const TRACK = ['Réservé', 'Confirmé', 'En route', 'En cours', 'Terminé'];
+  const TRACK_ICON = ['📝', '👍', '🚶', '🧽', '✨']; // une image par étape : compréhensible même sans lire
   const trackIndex = (b) => (b.status === 'terminee' ? 4 : b.status === 'en_cours' ? 3 : b.status === 'attribuee' ? (b.on_way_at ? 2 : 1) : 0);
   function tracker(b) {
     const i = trackIndex(b);
     const labels = [...TRACK];
-    if (b.status === 'attribuee' && b.arrived_at) labels[2] = 'Arrivée';
-    return `<ol class="track five">${labels.map((t, k) => `<li class="${k < i ? 'done' : k === i ? 'now' : ''}">${t}</li>`).join('')}</ol>`;
+    const icons = [...TRACK_ICON];
+    if (b.status === 'attribuee' && b.arrived_at) { labels[2] = 'Arrivée'; icons[2] = '📍'; }
+    return `<ol class="track five">${labels.map((t, k) => `<li class="${k < i ? 'done' : k === i ? 'now' : ''}"><span class="t-ico" aria-hidden="true">${icons[k]}</span>${t}</li>`).join('')}</ol>`;
   }
   // fiche de l'intervenante (prénom, ancienneté, note réelle, langues, présentation)
   async function workerCard(id) {
@@ -571,7 +573,8 @@
 
   // ---------- réservation en 4 étapes ----------
   const STEP_NAMES = ['Ménage', 'Date', 'Résumé', 'Paiement'];
-  const stepper = (n) => `<ol class="stepper" aria-label="Étape ${n} sur 4">${STEP_NAMES.map((t, i) => `<li class="${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}" ${i + 1 === n ? 'aria-current="step"' : ''}><span>${i + 1}</span>${t}</li>`).join('')}</ol>`;
+  const STEP_ICONS = ['🧹', '📅', '📋', '💳'];
+  const stepper = (n) => `<ol class="stepper" aria-label="Étape ${n} sur 4">${STEP_NAMES.map((t, i) => `<li class="${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}" ${i + 1 === n ? 'aria-current="step"' : ''}><span>${i + 1}</span><i class="t-ico" aria-hidden="true">${STEP_ICONS[i]}</i>${t}</li>`).join('')}</ol>`;
 
   views['reserver'] = async (params) => {
     if (!me) { sessionStorage.setItem('after', `#/reserver${params && params.get('again') ? `?again=${params.get('again')}` : ''}`); return go('#/inscription'); }
@@ -749,7 +752,7 @@
         </div>
         <label class="check"><input type="checkbox" id="cgv" ${draft.cgv ? 'checked' : ''}> J'accepte les <a href="#/cgv" target="_blank" rel="noopener">conditions générales de vente</a> et la <a href="#/confidentialite" target="_blank" rel="noopener">politique de confidentialité</a>.</label>
         <p class="err" id="err4"></p>
-        <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="pay">${q.total > 0 ? `Payer ${eur(q.total)}` : 'Confirmer : réglé par mon crédit'}</button></div>`, 4);
+        <div class="nav2"><button class="btn ghost" id="back">Retour</button><button class="btn primary" id="pay">${q.total > 0 ? `💳 Payer ${eur(q.total)}` : '✅ Confirmer : réglé par mon crédit'}</button></div>`, 4);
       const modeInput = document.getElementById('payment_mode');
       if (modeInput) modeInput.onchange = (e) => { draft.payment_mode = e.target.value; };
       document.getElementById('cgv').onchange = (e) => { draft.cgv = e.target.checked; };
@@ -887,7 +890,7 @@
           ${b.guarantee_open ? `<div class="guarantee"><span><b>Pas satisfait ?</b> Dites-le-nous dans les 48 h : on revient gratuitement.</span><button class="btn ghost" data-guarantee="${b.id}">On revient</button></div><div id="guar-${b.id}"></div>` : ''}
           ${b.status === 'terminee' && !b.rating ? `<p style="margin:10px 0 0"><b>Comment s'est passé le ménage ?</b></p><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div>` : ''}
           ${b.rating ? `<p class="small muted" style="margin:8px 0 0">Votre note : ${'★'.repeat(b.rating)}</p>` : ''}
-          ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">Payer cette intervention</button>` : ''}
+          ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">💳 Payer cette intervention</button>` : ''}
         </article>`;
     };
     $app.innerHTML = `
@@ -1255,8 +1258,8 @@
           ${b.checklist.length ? `${shine(b)}<fieldset class="box"><legend>À faire</legend>${b.checklist.map((t, i) => `<label class="check"><input type="checkbox" data-check="${b.id}" data-index="${i}" ${t.done ? 'checked' : ''}> ${esc(t.task)}</label>`).join('')}</fieldset>` : ''}
           ${b.photo_consent ? `<div class="box stack"><b>Photos avant / après</b>
             ${b.photos.length ? `<div class="photos">${b.photos.map((ph) => `<figure><img src="/api/photos/${ph.id}" alt="Photo ${ph.kind}" loading="lazy"><figcaption>${ph.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
-            ${b.status === 'en_cours' ? `<div class="row" style="justify-content:flex-start"><label class="btn ghost">Photo avant<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="avant" hidden></label>
-              <label class="btn ghost">Photo après<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="apres" hidden></label></div>
+            ${b.status === 'en_cours' ? `<div class="row" style="justify-content:flex-start"><label class="btn ghost">📷 Photo avant<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="avant" hidden></label>
+              <label class="btn ghost">📷 Photo après<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="apres" hidden></label></div>
               <p class="small muted">Au moins une photo « après » est demandée pour terminer.</p>` : '<p class="small muted">Le client a accepté les photos : vous pourrez les prendre une fois le ménage commencé.</p>'}
           </div>` : '<p class="small muted">Pas de photos pour ce ménage (le client ne l\'a pas demandé).</p>'}
           ${act(b)}
@@ -1286,7 +1289,7 @@
           <div class="row"><h3>${esc(label(b))}</h3><span class="pill">${eur(b.earn)}</span></div>
           <p class="muted" style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · ${esc(b.cp)} · ${String(b.hours).replace('.', ',')} h${b.kit ? ' · apporter le kit matériel' : ''}</p>
           <p class="small muted">L'adresse exacte s'affiche après acceptation.</p>
-          <div class="row" style="justify-content:flex-start"><button class="btn ghost" data-act="refuse" data-id="${b.id}">Refuser</button><button class="btn primary" data-act="accept" data-id="${b.id}">Accepter</button></div>
+          <div class="row" style="justify-content:flex-start"><button class="btn ghost" data-act="refuse" data-id="${b.id}">✖️ Refuser</button><button class="btn primary" data-act="accept" data-id="${b.id}">✅ Accepter</button></div>
         </article>`).join('') : '<p class="card muted">Aucune proposition pour le moment.</p>'}` : ''}
       ${today.length ? `<h2 style="margin-top:20px">Aujourd'hui</h2>${today.map(card).join('')}` : '<p class="card muted" style="margin-top:20px">Pas de mission aujourd\'hui.</p>'}
       ${later.length ? `<h2 style="margin-top:20px">À venir</h2>${(() => { const one = (b) => `<details class="card later"><summary><b>${dateFr(b.date)} ${esc(b.time)}</b> · ${esc(label(b))} · ${esc(b.cp)} ${pill(b.status)}</summary>${card(b)}</details>`; return later.slice(0, 5).map(one).join('') + (later.length > 5 ? `<details class="more"><summary>Voir les ${later.length - 5} autres missions</summary>${later.slice(5).map(one).join('')}</details>` : ''); })()}` : ''}
