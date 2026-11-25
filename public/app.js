@@ -433,7 +433,7 @@
   };
 
   // ---------- accueil du client : prochain ménage ----------
-  const TRACK = ['Réservé', 'Confirmée', 'En route', 'En cours', 'Terminé'];
+  const TRACK = ['Réservé', 'Confirmé', 'En route', 'En cours', 'Terminé'];
   const trackIndex = (b) => (b.status === 'terminee' ? 4 : b.status === 'en_cours' ? 3 : b.status === 'attribuee' ? (b.on_way_at ? 2 : 1) : 0);
   function tracker(b) {
     const i = trackIndex(b);
@@ -868,15 +868,17 @@
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
           ${b.checklist.length && ['en_cours', 'terminee'].includes(b.status) ? shine(b) : ''}${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
-          <div class="row" style="justify-content:flex-start;margin-top:10px">
-            ${active && hoursLeft(b) >= 24 ? `<button class="btn ghost" data-edit="${b.id}">Modifier</button>` : ''}
-            ${active ? `<button class="btn ghost" data-cancel="${b.id}">${hoursLeft(b) >= 24 ? 'Annuler' : 'Annuler (50 % retenus)'}</button>` : ''}
-            ${b.paid || b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">Facture</a>` : ''}
-            ${showStop ? `<button class="btn ghost" data-stop="${b.series_id}">Arrêter la récurrence</button>` : ''}
-            ${b.status !== 'annulee' ? `<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button>` : ''}
-            ${['en_cours', 'terminee'].includes(b.status) ? `<button class="btn ghost" data-report="${b.id}">Signaler un problème</button>` : ''}
+          <div class="bk-main">
+            ${b.status !== 'annulee' ? `<button class="btn ghost" data-thread="${b.id}">💬 Messages${b.messages ? ` (${b.messages})` : ''}</button>` : ''}
+            ${b.paid || b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">🧾 Facture</a>` : ''}
+            ${['en_cours', 'terminee'].includes(b.status) ? `<button class="btn ghost" data-report="${b.id}">⚠️ Signaler un problème</button>` : ''}
           </div>
-          ${active && hoursLeft(b) < 24 ? '<p class="small muted">Moins de 24 h avant le ménage : pour un changement, écrivez-nous dans les messages.</p>' : ''}
+          ${active || showStop ? `<div class="bk-more">
+            ${active && hoursLeft(b) >= 24 ? `<button type="button" class="linkish" data-edit="${b.id}">Modifier la date ou l'heure</button>` : ''}
+            ${showStop ? `<button type="button" class="linkish" data-stop="${b.series_id}">Arrêter la récurrence</button>` : ''}
+            ${active ? `<button type="button" class="linkish danger-link" data-cancel="${b.id}">Annuler le ménage</button>` : ''}
+          </div>` : ''}
+          ${active && hoursLeft(b) < 24 ? '<p class="small muted" style="margin:6px 0 0">Ménage dans moins de 24 h : pour un changement, écrivez-nous dans les messages. En cas d\'annulation, la moitié du prix est retenue.</p>' : ''}
           ${active && b.preferred_id && b.worker_id !== b.preferred_id ? `<div class="notice"><b>${esc(b.preferred_name)}, votre intervenante préférée, n'est pas disponible à ce créneau.</b> Une autre intervenante vérifiée Proprigo viendra à sa place.
             ${hoursLeft(b) >= 24 ? `<br>Vous préférez ${esc(b.preferred_name)} ? <button class="btn ghost" data-prefslots="${b.id}">Voir quand ${esc(b.preferred_name)} est libre</button><div id="pref-${b.id}"></div>` : ''}</div>` : ''}
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
@@ -931,7 +933,7 @@
       const b = list.find((x) => String(x.id) === btn.dataset.cancel);
       const retained = b && hoursLeft(b) < 24 ? Number(b.total) * 0.5 : 0;
       const refund = b && b.paid ? Math.max(0, Number(b.total) - retained) : 0;
-      if (!confirm(`Annuler ma réservation n° ${btn.dataset.cancel} ?\nMontant retenu : ${eur(retained)}\nRemboursement prévu : ${eur(refund)}\nLe montant définitif est confirmé par le serveur.`)) return;
+      if (!confirm(retained ? `Annuler ce ménage ?\n\nIl a lieu dans moins de 24 h : ${eur(retained)} sont retenus.\nVous serez remboursé de ${eur(refund)}.` : `Annuler ce ménage ?\n\nL'annulation est gratuite${refund ? ` : vous serez remboursé de ${eur(refund)}` : ''}.`)) return;
       try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
     act('[data-stop]', async (btn) => { try { const r = await api('POST', `/api/series/${btn.dataset.stop}/stop`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
@@ -1101,13 +1103,16 @@
     try { await api('POST', '/api/push/native/remove', { token: nativeToken }); } catch { /* sans effet */ }
     loadMe.nativeDone = false;
   }
+  // une fois activées : une phrase simple ; le test reste réservé aux intervenantes et à l'équipe, en lien discret
+  const pushOnHtml = (extra = '') => `<p class="push-ok">✓ C'est activé : vous serez prévenu sur ${NATIVE ? 'ce téléphone' : 'cet appareil'}.</p>
+      ${me && me.role !== 'client' ? '<button type="button" class="linkish small" id="pushTest">Vérifier que ça marche</button>' : ''}${extra}`;
   async function paintNativePush(box, intro) {
-    const head = '<h2>Notifications sur ce téléphone</h2>';
+    const head = '<h2>Notifications</h2>';
     let perm = 'prompt';
     try { perm = (await NPush.checkPermissions()).receive; } catch { /* inconnu */ }
     box.innerHTML = `${head}<p class="small muted">${intro}</p>
       ${perm === 'denied' ? '<p class="msg warn">Les notifications sont bloquées. Autorisez-les dans les Réglages du téléphone, rubrique Proprigo.</p>'
-        : perm === 'granted' ? '<p><span class="pill ok">Activées sur ce téléphone</span></p><button class="btn ghost" id="pushTest">Envoyer une notification de test</button>'
+        : perm === 'granted' ? pushOnHtml()
           : '<button class="btn blue" id="pushOn">Activer les notifications</button>'}`;
     const onBtn = document.getElementById('pushOn');
     if (onBtn) onBtn.onclick = async () => {
@@ -1125,10 +1130,10 @@
   async function paintPush(box, intro) {
     if (!box) return;
     if (NPush) return paintNativePush(box, intro);
-    if (NATIVE) { box.innerHTML = '<h2>Notifications sur ce téléphone</h2><p class="small muted">Les notifications ne sont pas disponibles dans cette version de l\'application. Mettez-la à jour depuis le store.</p>'; return; }
+    if (NATIVE) { box.innerHTML = '<h2>Notifications</h2><p class="small muted">Les notifications ne sont pas disponibles dans cette version de l\'application. Mettez-la à jour depuis le store.</p>'; return; }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-    const head = '<h2>Notifications sur ce téléphone</h2>';
+    const head = '<h2>Notifications</h2>';
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
       box.innerHTML = `${head}<p class="small muted">${ios && !standalone ? 'Sur iPhone : touchez Partager puis « Sur l\'écran d\'accueil », ouvrez Proprigo depuis la nouvelle icône, et revenez ici pour activer les notifications.' : 'Ce navigateur ne gère pas les notifications. Essayez avec Chrome ou Firefox, ou installez Proprigo sur l\'écran d\'accueil.'}</p>`;
       return;
@@ -1138,7 +1143,7 @@
     const on = Boolean(sub) && Notification.permission === 'granted';
     box.innerHTML = `${head}<p class="small muted">${intro}</p>
       ${Notification.permission === 'denied' ? '<p class="msg warn">Les notifications sont bloquées pour Proprigo. Autorisez-les dans les réglages du navigateur (icône du cadenas à côté de l\'adresse), puis revenez ici.</p>'
-        : on ? '<p><span class="pill ok">Activées sur cet appareil</span></p><div class="row" style="justify-content:flex-start;gap:8px"><button class="btn ghost" id="pushTest">Envoyer une notification de test</button><button class="btn ghost" id="pushOff">Désactiver</button></div>'
+        : on ? pushOnHtml(' <button type="button" class="linkish small" id="pushOff">Ne plus être prévenu</button>')
           : '<button class="btn blue" id="pushOn">Activer les notifications</button>'}`;
     const b64 = (s) => { const p = '='.repeat((4 - (s.length % 4)) % 4); const raw = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, (c) => c.charCodeAt(0)); };
     const onBtn = document.getElementById('pushOn');

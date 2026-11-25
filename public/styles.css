@@ -775,3 +775,20 @@ ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; 
   .ref-code b { font-size: 22px; }
   .card { padding: 18px; }
 }
+
+/* notifications activées : une phrase, pas de jargon */
+.push-ok { margin: 4px 0 0; color: var(--mint, #18b98a); font-weight: 600; }
+.linkish { background: none; border: 0; padding: 6px 0; margin-right: 14px; color: var(--muted); text-decoration: underline; cursor: pointer; font: inherit; }
+
+/* carte de réservation : actions principales en gros boutons, le reste en liens */
+.bk-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 14px; }
+.bk-main:empty { display: none; }
+.bk-main .btn { width: 100%; }
+.bk-more { display: flex; flex-wrap: wrap; gap: 0 4px; margin-top: 8px; }
+.linkish.danger-link { color: #e5484d; }
+/* boutons secondaires bien visibles, aussi en mode sombre */
+.btn.ghost { border: 1.5px solid color-mix(in srgb, var(--ink) 28%, transparent); }
+/* suivi du ménage : 5 étapes sur une ligne */
+.track { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.track li { line-height: 1.25; }
+@media (max-width: 560px) { .track { font-size: 11px; gap: 4px; } }
