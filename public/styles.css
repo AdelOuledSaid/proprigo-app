@@ -792,3 +792,29 @@ ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; 
 .track { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .track li { line-height: 1.25; }
 @media (max-width: 560px) { .track { font-size: 11px; gap: 4px; } }
+
+/* intervenante : une seule grande action à la fois */
+.next-step { margin-top: 14px; }
+.next-step .btn.full { min-height: 56px; font-size: 18px; }
+.step-done { margin: 0 0 8px; color: var(--mint, #18b98a); font-weight: 600; }
+.next-hint { margin: 8px 0 0; }
+.next-hint .linkish { padding: 0; margin: 0; }
+/* disponibilités repliées */
+.avail-box > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.avail-box > summary::-webkit-details-marker { display: none; }
+.avail-box > summary h2 { margin: 0; }
+.avail-box > summary .small { text-decoration: underline; }
+/* semaine : liste jour par jour sur téléphone, grille sur grand écran */
+.wk-list { display: none; list-style: none; padding: 0; margin: 4px 0 0; }
+.wk-list li { padding: 10px 0; border-top: 1px solid var(--line); }
+.wk-list li.today .wk-l-head b { color: var(--blue, #1f4fff); }
+.wk-l-head { display: flex; justify-content: space-between; gap: 8px; text-transform: capitalize; }
+.wk-l-head .small { text-transform: none; }
+.wk-l-item { display: flex; gap: 10px; align-items: baseline; margin-top: 6px; padding: 10px 12px; border-radius: 12px; background: var(--blue, #1f4fff); color: #fff; text-decoration: none; }
+.wk-l-item.offre { background: transparent; color: var(--coral, #ff6a3d); border: 1.5px dashed var(--coral, #ff6a3d); }
+.wk-l-item em { margin-left: auto; font-style: normal; font-size: 13px; }
+@media (max-width: 640px) {
+  .wk-scroll, .wk-note { display: none; }
+  .wk-list { display: block; }
+}
+.bk-main .btn { white-space: nowrap; padding-left: 10px; padding-right: 10px; }

@@ -1075,7 +1075,9 @@
           <div class="wk-col">${d.off ? '<span class="wk-off">Congé</span>' : d.avail ? `<i class="wk-avail" style="top:${top(d.avail.start)}px;height:${top(d.avail.end) - top(d.avail.start)}px" title="Disponible ${esc(d.avail.start)} – ${esc(d.avail.end)}"></i>` : '<span class="wk-off">Indisponible</span>'}
           ${d.items.map((x) => `<a class="wk-item ${x.kind} ${x.status || ''}" href="#/intervenante" style="top:${Math.max(0, top(x.time))}px;height:${Math.max(28, x.hours * PX - 3)}px" title="${esc(x.service)} · ${esc(x.time)} · ${esc(x.cp)}"><b>${esc(x.time)}</b> ${esc(x.cp)}<small>${x.kind === 'offre' ? 'À accepter' : x.status === 'terminee' ? 'Terminée' : esc(x.service)}</small></a>`).join('')}</div></div>`).join('')}
       </div></div>
-      <p class="small muted" style="margin:8px 0 0">Zone claire : vos disponibilités. Les missions et propositions apparaissent dans la journée.</p>`;
+      <p class="small muted wk-note" style="margin:8px 0 0">Zone claire : vos disponibilités. Les missions et propositions apparaissent dans la journée.</p>
+      <ul class="wk-list">${w.days.map((d) => `<li class="${d.today ? 'today' : ''}"><div class="wk-l-head"><b>${dayName(d.date)}</b><span class="small muted">${d.off ? 'Congé' : d.avail ? `Dispo ${esc(d.avail.start)}–${esc(d.avail.end)}` : 'Indisponible'}</span></div>
+        ${d.items.length ? d.items.map((x) => `<a class="wk-l-item ${x.kind}" href="#/intervenante"><b>${esc(x.time)}</b><span>${esc(x.service)} · ${esc(x.cp)} · ${String(x.hours).replace('.', ',')} h</span>${x.kind === 'offre' ? '<em>à accepter</em>' : ''}</a>`).join('') : ''}</li>`).join('')}</ul>`;
     box.querySelectorAll('[data-wk]').forEach((b) => b.onclick = () => { weekStart = b.dataset.wk || null; paintWeek(b.dataset.wk || undefined); });
   }
   // ---- appli Android / iPhone (Capacitor) : notifications natives ----
@@ -1209,7 +1211,7 @@
     const cal = {};
     for (const a of r.availability) cal[a.weekday] = a;
     const calendar = `
-      <section class="card stack"><h2>Mes disponibilités</h2>
+      <details class="card stack avail-box"><summary><h2>Mes disponibilités</h2><span class="small muted">${Object.keys(cal).length ? `${Object.keys(cal).length} jour${Object.keys(cal).length > 1 ? 's' : ''} par semaine · modifier` : 'À remplir'}</span></summary>
         <p class="small muted">Vous ne recevez des missions que pendant ces horaires.</p>
         <form id="cal" class="stack"><div class="avail">${[1, 2, 3, 4, 5, 6, 0].map((d) => `
           <div class="day ${cal[d] ? '' : 'off'}" data-day="${d}">
@@ -1221,7 +1223,7 @@
             </div>
           </div>`).join('')}</div>
           <button class="btn blue full">Enregistrer mes disponibilités</button></form>
-      </section>
+      </details>
       <section class="card stack"><h2>Mes congés</h2>
         ${r.timeoff.length ? `<ul>${r.timeoff.map((t) => `<li>Du ${dateFr(t.start_date)} au ${dateFr(t.end_date)} <button class="btn ghost" data-deloff="${t.id}">Supprimer</button></li>`).join('')}</ul>` : '<p class="small muted">Aucun congé prévu.</p>'}
         <form id="off" class="grid2" style="gap:12px;align-items:end"><label>Du<input type="date" name="start_date" min="${todayParis()}" required></label><label>Au<input type="date" name="end_date" min="${todayParis()}" required></label><button class="btn blue">Ajouter le congé</button></form>
@@ -1257,19 +1259,23 @@
               <label class="btn ghost">Photo après<input type="file" accept="image/*" capture="environment" data-photo="${b.id}" data-kind="apres" hidden></label></div>
               <p class="small muted">Au moins une photo « après » est demandée pour terminer.</p>` : '<p class="small muted">Le client a accepté les photos : vous pourrez les prendre une fois le ménage commencé.</p>'}
           </div>` : '<p class="small muted">Pas de photos pour ce ménage (le client ne l\'a pas demandé).</p>'}
-          <div class="row" style="justify-content:flex-start">${act(b)}<button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button>${['attribuee', 'en_cours'].includes(b.status) && b.date === todayParis() ? `<button class="btn ghost warn-ghost" data-problem="${b.id}">Problème sur place</button>` : ''}</div>
+          ${act(b)}
+          <div class="bk-main"><button class="btn ghost" data-thread="${b.id}">💬 Messages${b.messages ? ` (${b.messages})` : ''}</button>${['attribuee', 'en_cours'].includes(b.status) && b.date === todayParis() ? `<button class="btn ghost warn-ghost" data-problem="${b.id}">⚠️ Problème</button>` : ''}</div>
           <div id="problem-${b.id}"></div>
           <div id="thread-${b.id}"></div>
         </article>`;
     // le jour J : je pars → je suis arrivée → commencer → terminer
+    // le jour J, une seule grande action à la fois : je pars → je suis arrivée → commencer → terminer
     const act = (b) => {
-      if (b.status !== 'attribuee') return `<button class="btn primary full" data-act="finish" data-id="${b.id}">Terminer la mission</button>`;
-      const isToday = b.date === todayParis();
-      const steps = isToday ? `<div class="dayflow">
-          <button class="btn ${b.on_way_at ? 'ghost' : 'blue'}" data-act="onway" data-id="${b.id}" ${b.arrived_at ? 'disabled' : ''}>${b.on_way_at ? (b.eta_at ? `✓ En route · vers ${hhmm(b.eta_at)} (changer)` : '✓ En route (heure d\'arrivée)') : 'Je pars'}</button>
-          <button class="btn ${b.arrived_at ? 'ghost done' : b.on_way_at ? 'blue' : 'ghost'}" data-act="arrived" data-id="${b.id}" ${b.arrived_at ? 'disabled' : ''}>${b.arrived_at ? '✓ Arrivée' : 'Je suis arrivée'}</button>
-        </div>` : '';
-      return `${steps}<button class="btn primary full" data-act="start" data-id="${b.id}" ${isToday ? '' : 'disabled'}>Commencer le ménage</button>${isToday ? '' : '<p class="small muted" style="margin:4px 0 0">Les boutons du jour J s\'activent le jour de la mission.</p>'}`;
+      if (b.status === 'en_cours') return `<div class="next-step"><button class="btn primary full" data-act="finish" data-id="${b.id}">✅ Terminer le ménage</button></div>`;
+      if (b.status !== 'attribuee') return '';
+      if (b.date !== todayParis()) return '<p class="small muted next-hint">Les boutons « Je pars », « Je suis arrivée » et « Commencer » apparaîtront le jour de la mission.</p>';
+      if (!b.on_way_at && !b.arrived_at) return `<div class="next-step"><button class="btn blue full" data-act="onway" data-id="${b.id}">🚶 Je pars</button>
+        <p class="small muted next-hint">Le client est prévenu de votre arrivée. Déjà sur place ? <button type="button" class="linkish" data-act="start" data-id="${b.id}">Commencer le ménage</button></p></div>`;
+      if (!b.arrived_at) return `<div class="next-step"><p class="step-done">✓ En route${b.eta_at ? `, arrivée prévue vers ${hhmm(b.eta_at)}` : ''} · <button type="button" class="linkish" data-act="onway" data-id="${b.id}">changer l'heure</button></p>
+        <button class="btn blue full" data-act="arrived" data-id="${b.id}">📍 Je suis arrivée</button>
+        <p class="small muted next-hint"><button type="button" class="linkish" data-act="start" data-id="${b.id}">Commencer directement le ménage</button></p></div>`;
+      return `<div class="next-step"><p class="step-done">✓ Arrivée chez le client</p><button class="btn primary full" data-act="start" data-id="${b.id}">▶ Commencer le ménage</button></div>`;
     };
     const routeLinks = (b) => { const dest = encodeURIComponent(`${b.address}, ${b.cp}, France`); return `<div class="route-links"><a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=transit" target="_blank" rel="noopener">Itinéraire Google Maps</a><a href="https://citymapper.com/directions?endaddress=${dest}" target="_blank" rel="noopener">Citymapper</a></div>`; };
     $app.innerHTML = `${head}
@@ -1302,7 +1308,7 @@
         box = document.createElement('div');
         box.className = 'eta-pick';
         box.innerHTML = `<p class="small" style="margin:8px 0 6px"><b>J'arrive dans…</b></p><div class="chips">${[10, 15, 20, 30, 45, 60].map((m) => `<button type="button" data-eta="${m}">${m} min</button>`).join('')}</div>`;
-        btn.parentElement.after(box);
+        (btn.closest('.next-step') || btn.parentElement).after(box);
         box.querySelectorAll('[data-eta]').forEach((c) => c.onclick = async () => {
           try { const r = await api('POST', `/api/worker/missions/${btn.dataset.id}/onway`, { eta: Number(c.dataset.eta) }); toast(r.message); route(); } catch (e) { toast(e.message); }
         });
