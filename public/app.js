@@ -252,6 +252,14 @@
         <li>${ico('back')}<span><b>Satisfait ou on revient</b>Gratuitement, si vous le signalez sous 48 h</span></li>
       </ul>
 
+      <section class="live-band" aria-labelledby="liveT">
+        <div class="live-head"><h2 id="liveT">Suivez votre ménage en direct</h2><p>Vous êtes prévenu à chaque étape, jusqu'à la fin du ménage.</p></div>
+        <ol class="live-steps">
+          ${[['📝', 'Réservé', 'En ligne, en 2 min'], ['👍', 'Confirmé', 'Intervenante choisie'], ['🚶', 'En route', "Heure d'arrivée"], ['🧽', 'En cours', 'Tâches cochées'], ['✨', 'Terminé', 'Photos et avis']]
+            .map(([e, t, d], i) => `<li style="--i:${i}"><span class="live-dot" aria-hidden="true">${e}</span><b>${t}</b><small>${d}</small></li>`).join('')}
+        </ol>
+      </section>
+
       <a class="gift-band" href="#/cadeau"><span class="gift-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="9" width="17" height="11" rx="2"/><path d="M3.5 13h17M12 9v11M12 9S10.5 4 8 4.5 7 9 12 9zM12 9s1.5-5 4-4.5S17 9 12 9z"/></svg></span><span><b>Pour Noël, offrez un ménage</b><span>Cartes cadeaux de 50 à 200 €, envoyées par e-mail</span></span><span class="gift-go">Offrir</span></a>
 
       <section class="offers" aria-labelledby="offersT">

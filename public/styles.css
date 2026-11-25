@@ -822,3 +822,33 @@ ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; 
 /* une petite image au-dessus de chaque étape */
 .track li .t-ico, .stepper li .t-ico { display: block; font-size: 18px; line-height: 1.2; font-style: normal; margin-bottom: 2px; }
 .track li:not(.done):not(.now) .t-ico, .stepper li:not(.done):not(.now) .t-ico { opacity: .55; filter: grayscale(.6); }
+
+/* bandeau « suivez votre ménage » de l'accueil */
+.live-band { margin: 36px 0 0; padding: 26px 24px 24px; border-radius: 26px; background: var(--raised); box-shadow: var(--lift); }
+.live-head h2 { margin: 0; }
+.live-head p { margin: 6px 0 0; color: var(--muted); }
+.live-steps { --n: 5; position: relative; list-style: none; padding: 0; margin: 26px 0 0; display: grid; grid-template-columns: repeat(var(--n), 1fr); }
+/* le fil qui relie les étapes, puis sa partie colorée qui avance une fois */
+.live-steps::before, .live-steps::after { content: ""; position: absolute; top: 25px; left: 10%; height: 4px; border-radius: 4px; }
+.live-steps::before { right: 10%; background: var(--line); }
+.live-steps::after { width: 0; background: linear-gradient(90deg, var(--blue), var(--coral)); animation: live-fill 2.4s .3s cubic-bezier(.4, 0, .2, 1) forwards; }
+@keyframes live-fill { to { width: 80%; } }
+.live-steps li { position: relative; z-index: 1; display: grid; justify-items: center; text-align: center; gap: 4px; padding: 0 4px; }
+.live-dot { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 50%; font-size: 24px; background: var(--raised); border: 3px solid var(--line); margin-bottom: 6px;
+  animation: live-pop .45s calc(.3s + var(--i) * .5s) both; }
+@keyframes live-pop { from { border-color: var(--line); transform: scale(.9); } to { border-color: var(--blue); transform: scale(1); } }
+.live-steps li:last-child .live-dot { animation-name: live-pop-end; }
+@keyframes live-pop-end { from { border-color: var(--line); transform: scale(.9); } to { border-color: var(--coral); transform: scale(1.06); } }
+.live-steps b { font-size: 15px; }
+.live-steps small { color: var(--muted); font-size: 13px; line-height: 1.3; }
+@media (max-width: 560px) {
+  .live-band { padding: 20px 14px; }
+  .live-steps::before, .live-steps::after { top: 20px; }
+  .live-dot { width: 42px; height: 42px; font-size: 19px; border-width: 2.5px; }
+  .live-steps b { font-size: 12px; }
+  .live-steps small { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-steps::after { animation: none; width: 80%; }
+  .live-dot { animation: none; border-color: var(--blue); }
+}
