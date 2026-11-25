@@ -227,7 +227,7 @@
           <h1>Chez vous, tout brille.</h1>
           <p class="lead">Ménage à domicile, logements Airbnb, grand nettoyage et bureaux à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
           <form class="card stack choose" id="start">
-            <div class="svc svc4">${['menage', 'airbnb', 'grand', 'bureau'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: `${eu(P.menage)} € / h`, airbnb: `dès ${eu(P.airbnb.studio)} €`, grand: `${eu(P.grand)} € / h`, bureau: `${eu(P.bureauHT)} € HT / h` }[k]}</span></button>`).join('')}</div>
+            <div class="svc svc4">${['menage', 'airbnb', 'grand', 'bureau'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: `${eu(P.menage)} € / h`, airbnb: `dès ${eu(P.airbnb.studio)} €`, grand: `${eu(P.grand)} € / h`, bureau: CONFIG.franchiseTVA ? `${eu(P.bureau)} € / h` : `${eu(P.bureauHT)} € HT / h` }[k]}</span></button>`).join('')}</div>
             <div class="cp-row">
               <label>Code postal du logement<input type="text" name="cp" inputmode="numeric" maxlength="5" autocomplete="postal-code" value="${esc(draft.cp)}" placeholder="Ex. 75011" required></label>
               <button class="btn primary">Voir les créneaux</button>
@@ -244,6 +244,8 @@
         </figure>
       </section>
 
+      <div class="live-mini" aria-label="Les étapes de votre ménage">${liveSteps(true)}</div>
+
       <ul class="promises">
         <li>${ico('lock')}<span><b>Paiement sécurisé</b>Par carte, avec Stripe</span></li>
         <li>${ico('clock')}<span><b>Annulation gratuite</b>Jusqu'à 24 h avant</span></li>
@@ -254,10 +256,7 @@
 
       <section class="live-band" aria-labelledby="liveT">
         <div class="live-head"><h2 id="liveT">Suivez votre ménage en direct</h2><p>Vous êtes prévenu à chaque étape, jusqu'à la fin du ménage.</p></div>
-        <ol class="live-steps">
-          ${[['📝', 'Réservé', 'En ligne, en 2 min'], ['👍', 'Confirmé', 'Intervenante choisie'], ['🚶', 'En route', "Heure d'arrivée"], ['🧽', 'En cours', 'Tâches cochées'], ['✨', 'Terminé', 'Photos et avis']]
-            .map(([e, t, d], i) => `<li style="--i:${i}"><span class="live-dot" aria-hidden="true">${e}</span><b>${t}</b><small>${d}</small></li>`).join('')}
-        </ol>
+        ${liveSteps()}
       </section>
 
       <a class="gift-band" href="#/cadeau"><span class="gift-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="9" width="17" height="11" rx="2"/><path d="M3.5 13h17M12 9v11M12 9S10.5 4 8 4.5 7 9 12 9zM12 9s1.5-5 4-4.5S17 9 12 9z"/></svg></span><span><b>Pour Noël, offrez un ménage</b><span>Cartes cadeaux de 50 à 200 €, envoyées par e-mail</span></span><span class="gift-go">Offrir</span></a>
@@ -442,6 +441,9 @@
 
   // ---------- accueil du client : prochain ménage ----------
   const TRACK = ['Réservé', 'Confirmé', 'En route', 'En cours', 'Terminé'];
+  // bande des 5 étapes de l'accueil (version courte sous la photo, version complète plus bas)
+  const liveSteps = (mini = false) => `<ol class="live-steps${mini ? ' mini' : ''}">${[['📝', 'Réservé', 'En ligne, en 2 min'], ['👍', 'Confirmé', 'Intervenante choisie'], ['🚶', 'En route', "Heure d'arrivée"], ['🧽', 'En cours', 'Tâches cochées'], ['✨', 'Terminé', 'Photos et avis']]
+    .map(([e, t, d], i) => `<li style="--i:${i}"><span class="live-dot" aria-hidden="true">${e}</span><b>${t}</b>${mini ? '' : `<small>${d}</small>`}</li>`).join('')}</ol>`;
   const TRACK_ICON = ['📝', '👍', '🚶', '🧽', '✨']; // une image par étape : compréhensible même sans lire
   const trackIndex = (b) => (b.status === 'terminee' ? 4 : b.status === 'en_cours' ? 3 : b.status === 'attribuee' ? (b.on_way_at ? 2 : 1) : 0);
   function tracker(b) {
@@ -459,7 +461,7 @@
     const meta = [`Intervenante vérifiée depuis ${since}`, c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
     return `<div class="wcard">
       <div class="wcard-av" aria-hidden="true">${esc(c.firstName.slice(0, 1))}</div>
-      <div class="wcard-name">${esc(c.firstName)}</div>
+      <div class="wcard-name">${esc(c.firstName)}${c.tier && c.tier.key !== 'bleu' ? ` <span class="tier-pill ${c.tier.key}">${c.tier.icon} Intervenante ${esc(c.tier.label)}</span>` : ''}</div>
       <div class="wcard-meta">${esc(meta)}${c.languages ? `<br>Parle ${esc(c.languages)}` : ''}</div>
       ${c.bio ? `<p class="wcard-bio">${esc(c.bio)}</p>` : ''}
       ${c.reviews.length ? `<p class="wcard-rev">« ${esc(c.reviews[0].review)} »</p>` : ''}
@@ -1068,6 +1070,23 @@
   // ---------- espace intervenante ----------
   // ---- planning de la semaine de l'intervenante ----
   let weekStart = null;
+  // niveau de l'intervenante : Bleu, Or, Platine, et ce qu'il reste pour monter
+  function levelCard(g) {
+    const t = g.tier;
+    if (!t) return '';
+    const perks = { bleu: 'Bienvenue chez Proprigo !', or: 'Vous êtes prioritaire sur les missions proches.', platine: `Prioritaire sur les missions et +${eur(t.bonus)} de l'heure.` };
+    const bar = (have, need) => `<span class="lv-bar"><i style="width:${Math.min(100, Math.round((have / need) * 100))}%"></i></span>`;
+    const n = t.next;
+    const ratingOk = t.rated >= n?.minRatings && t.rating >= n?.rating;
+    return `<div class="level ${t.key}">
+        <div class="lv-head"><span class="lv-badge" aria-hidden="true">${t.icon}</span><div><small>Mon niveau</small><b>${esc(t.label)}</b><p>${perks[t.key]}</p></div></div>
+        ${n ? `<div class="lv-next"><p><b>Pour passer ${n.icon} ${esc(n.label)}</b>${n.key === 'or' ? ' : priorité sur les missions' : n.bonus ? ` : +${eur(n.bonus)} de l'heure` : ''}</p>
+          <div class="lv-row"><span>🧽 Ménages terminés</span><span>${t.missions} / ${n.missions}</span></div>${bar(t.missions, n.missions)}
+          <div class="lv-row"><span>⭐ Note moyenne</span><span>${t.rating ? String(t.rating).replace('.', ',') : '–'} / ${String(n.rating).replace('.', ',')}${ratingOk ? ' ✓' : ''}</span></div>${bar(t.rating || 0, n.rating)}
+          ${t.rated < n.minRatings ? `<p class="small muted" style="margin:6px 0 0">La note compte à partir de ${n.minRatings} avis (vous en avez ${t.rated}).</p>` : ''}</div>`
+        : '<p class="small" style="margin:10px 0 0">Vous avez atteint le plus haut niveau. Merci pour votre travail !</p>'}
+      </div>`;
+  }
   async function paintWeek(start) {
     const box = document.getElementById('week');
     if (!box) return;
@@ -1349,7 +1368,7 @@
       const val = (x) => (g.statut === 'I' ? eur(x.eur) : `${String(x.h).replace('.', ',')} h`);
       const mname = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', timeZone: 'UTC' });
       const max = Math.max(1, ...g.history.map((h) => h.h));
-      el.innerHTML = `<h2>Mes gains</h2>
+      el.innerHTML = `${levelCard(g)}<h2>Mes gains</h2>
         <div class="gain-grid">
           <div class="gain main"><span>Ce mois-ci</span><b>${val(g.month)}</b><small>${g.month.n} ménage${g.month.n > 1 ? 's' : ''} terminé${g.month.n > 1 ? 's' : ''}</small></div>
           <div class="gain"><span>Mois dernier</span><b>${val(g.lastMonth)}</b><small>${g.lastMonth.n} ménage${g.lastMonth.n > 1 ? 's' : ''}</small></div>
@@ -1363,7 +1382,7 @@
           ${g.statut === 'I' ? '<p class="small muted">« Versé » : virements reçus ce mois-là (ils peuvent porter sur des ménages du mois précédent).</p>' : ''}</details>` : ''}
         ${g.statut === 'I' ? `<div class="pay-box">
           <div><span>En attente de versement</span><b>${eur(g.pending)}</b><small>Versé chaque semaine par virement.</small></div>
-          <div class="${g.bonus.eligible ? 'on' : ''}"><span>Bonus qualité</span><b>${g.bonus.eligible ? `+${eur(g.bonus.perHour)} / h` : 'Pas encore'}</b><small>${g.bonus.eligible ? `Note moyenne ${String(g.bonus.avg).replace('.', ',')} sur vos ${g.bonus.count} derniers avis.` : `Note moyenne de 4,8 sur 5 avis au moins${g.bonus.avg ? ` (vous : ${String(g.bonus.avg).replace('.', ',')} sur ${g.bonus.count})` : ''}.`}</small></div>
+          <div class="${g.bonus.eligible ? 'on' : ''}"><span>Bonus de niveau</span><b>${g.bonus.eligible ? `+${eur(g.bonus.perHour)} / h` : 'Pas encore'}</b><small>${g.bonus.eligible ? 'Ajouté à chaque versement.' : 'Au niveau Platine.'}</small></div>
         </div>
         ${g.paid.length ? `<ul class="plain small">${g.paid.map((p) => `<li><span>Semaine du ${dateFr(p.week_start)}</span><b>${eur(p.amount)}</b></li>`).join('')}</ul>` : ''}` : ''}`;
     }).catch(() => {});
@@ -1519,7 +1538,7 @@
         </details>` : ''}
         <div class="grid2" style="gap:12px">${r.workers.map((w) => `
           <div class="card" style="margin:0">
-            <div class="row"><b>${esc(w.name)}</b><span class="row" style="gap:6px"><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span><button class="btn ghost small-btn" data-wfile="${w.user_id}">Fiche</button></span></div>
+            <div class="row"><b>${esc(w.name)}</b><span class="row" style="gap:6px"><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span>${w.tier ? `<span class="tier-pill ${w.tier.key}" title="Niveau">${w.tier.icon} ${esc(w.tier.label)}</span>` : ''}<button class="btn ghost small-btn" data-wfile="${w.user_id}">Fiche</button></span></div>
             <span class="small muted">${esc(w.cp)}${w.rate ? ' · ' + eur(w.rate) + '/h' : ''} · ${esc(w.email)}</span>
             <div class="prog"><i style="width:${(w.step / (w.steps.length - 1)) * 100}%"></i></div>
             ${w.docs && !w.active && !w.rejected ? `<p class="small" style="margin:6px 0 0">Pièces : ${w.docs.valid}/${w.docs.required} validées${w.docs.toCheck ? ` · <span class="pill warn">${w.docs.toCheck} à vérifier</span>` : ''}</p>` : ''}
@@ -1785,6 +1804,29 @@
         try { const r2 = await api('POST', `/api/admin/reviews/${b.dataset.revhide}`, { hidden: b.dataset.hidden === '1' }); toast(r2.message); paintReviews(); } catch (e) { toast(e.message); }
       });
     };
+    // ---- niveaux des intervenantes : Bleu, Or, Platine ----
+    const paintTiers = async () => {
+      const box = document.getElementById('tierBox');
+      if (!box) return;
+      let d;
+      try { d = await api('GET', '/api/admin/tiers'); } catch (e) { box.innerHTML = `<h2>Niveaux des intervenantes</h2><p class="err">${esc(e.message)}</p>`; return; }
+      const row = (k, icon, label, perk) => `<fieldset class="tier-set"><legend>${icon} ${label} <span class="muted small">· ${d.counts[k]} intervenante${d.counts[k] > 1 ? 's' : ''}</span></legend>
+          <label>Ménages terminés<input type="number" name="${k}.missions" min="1" max="10000" value="${d[k].missions}" required></label>
+          <label>Note moyenne minimum<input type="number" name="${k}.rating" min="1" max="5" step="0.1" value="${d[k].rating}" required></label>
+          <label>Bonus (€ de l'heure)<input type="number" name="${k}.bonus" min="0" max="20" step="0.5" value="${d[k].bonus}" required></label>
+          <p class="small muted" style="grid-column:1/-1;margin:0">${perk}</p></fieldset>`;
+      box.innerHTML = `<h2>Niveaux des intervenantes</h2>
+        <p class="small muted">🔵 Bleu au départ. On monte avec le nombre de ménages terminés et la note moyenne des avis (comptée à partir de ${d.minRatings} avis, la plus mauvaise note étant mise de côté : un client difficile ne fait pas perdre un niveau). Avantages : badge visible des clients, priorité sur les missions à distance comparable (${d.priorityKm} km d'avance pour l'Or, ${d.priorityKm * 2} km pour le Platine), et le bonus ci-dessous.</p>
+        <p class="small muted">🔵 Bleu : ${d.counts.bleu} intervenante${d.counts.bleu > 1 ? 's' : ''}</p>
+        <form id="tierForm" class="stack">${row('or', '🥇', 'Or', 'Priorité sur les missions.')}${row('platine', '💎', 'Platine', "Priorité sur les missions et bonus à chaque heure. Pour une salariée, le bonus est à ajouter sur sa fiche de paie.")}
+          <button class="btn blue">Enregistrer les niveaux</button></form>`;
+      document.getElementById('tierForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const f = e.target.elements;
+        const v = (k) => ({ missions: Number(f[`${k}.missions`].value), rating: Number(f[`${k}.rating`].value), bonus: Number(f[`${k}.bonus`].value) });
+        try { const r2 = await api('POST', '/api/admin/tiers', { or: v('or'), platine: v('platine') }); toast(r2.message); paintTiers(); } catch (err) { toast(err.message); }
+      };
+    };
     // ---- services à la personne : déclaration, crédit d'impôt, avance immédiate ----
     const paintSap = async () => {
       const box = document.getElementById('sapBox');
@@ -1886,13 +1928,14 @@
         <section class="card" data-tab="suivi" id="nudgeBox"><h2>Relances des clients</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="paiements" id="payBox"><h2>Paiements et remboursements</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="tarifs" id="priceBox"><h2>Tarifs et zones</h2><p class="muted small">Chargement…</p></section>
+        <section class="card" data-tab="tarifs" id="tierBox"><h2>Niveaux des intervenantes</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="tarifs" id="sapBox"><h2>Services à la personne et crédit d'impôt</h2><p class="muted small">Chargement…</p></section>`);
     }
     const showTab = (k) => {
       sessionStorage.setItem('adminTab', k);
       if (k === 'chiffres' && owner) paintStats();
       if (k === 'paiements' && owner) paintPayments();
-      if (k === 'tarifs' && owner) { paintPricing(); paintSap(); }
+      if (k === 'tarifs' && owner) { paintPricing(); paintSap(); paintTiers(); }
       if (k === 'suivi' && owner) { paintReviews(); paintNudges(); }
       $app.querySelectorAll('[data-tab]').forEach((el) => { el.hidden = el.dataset.tab !== k; });
       $app.querySelectorAll('[data-tab-btn]').forEach((t) => t.setAttribute('aria-selected', t.dataset.tabBtn === k));
@@ -2130,7 +2173,7 @@
           <li>Vous choisissez vos missions et pouvez refuser sans pénalité</li>
           <li>Votre tarif horaire, entre ${info.rate.min} et ${info.rate.max} €, fixé avec nous</li>
           <li>Virement chaque semaine pour les ménages terminés</li>
-          <li>Bonus qualité de 1 € de l'heure dès 4,8/5 de note moyenne</li></ul></article>
+          <li>Niveaux 🔵 Bleu, 🥇 Or (priorité sur les missions) et 💎 Platine (+1 € de l'heure)</li></ul></article>
         <article class="card"><h3>Salariée</h3><ul class="ticks">
           <li>Proprigo vous emploie</li>
           <li>Missions planifiées selon vos disponibilités</li>

@@ -13,6 +13,7 @@ const mailer = require('./mailer');
 const seo = require('./seo');
 const backups = require('./backup');
 const push = require('./push');
+const tiers = require('./tiers');
 const nativePush = require('./native-push');
 const VERSION = require('../package.json').version;
 const os = require('node:os');
@@ -1310,6 +1311,21 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     try { return { declared: false, numero: '', ...JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'sap'").get()?.value || '{}') }; } catch { return { declared: false, numero: '' }; }
   };
   const sapOn = () => { const st = sapSettings(); return Boolean(st.declared && /^SAP\d{9}$/.test(st.numero)); };
+  route('GET', '/api/admin/tiers', ({ user }) => {
+    need(user, 'admin');
+    const counts = { bleu: 0, or: 0, platine: 0 };
+    for (const w of db.prepare('SELECT user_id FROM workers').all()) counts[tiers.tierOf(db, w.user_id).key] += 1;
+    return { ...tiers.settings(db), minRatings: tiers.MIN_RATINGS, priorityKm: tiers.PRIORITY_KM, counts };
+  });
+  route('POST', '/api/admin/tiers', ({ user, body }) => {
+    need(user, 'admin');
+    if (!isOwner(user)) throw new HttpError(403, 'Réservé au responsable.');
+    let v;
+    try { v = tiers.clean(body); } catch (e) { throw new HttpError(400, e.message); }
+    db.prepare("INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('tiers', ?, datetime('now'), ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by").run(JSON.stringify(v), user.id);
+    db_.log(db, `Niveaux des intervenantes modifiés par ${user.name}.`);
+    return { ok: true, message: 'Niveaux enregistrés.', ...v };
+  });
   route('GET', '/api/admin/sap', ({ user }) => {
     need(user, 'admin');
     return { ...sapSettings(), active: sapOn(), interested: db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client' AND wants_avance = 1").get().n };
@@ -1377,12 +1393,11 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   });
 
   // ----- versements aux indépendantes, chaque semaine, avec bonus qualité -----
-  const BONUS_PER_HOUR = 1; // 1 € de plus par heure pour une note moyenne d'au moins 4,8 sur les 10 derniers avis (5 au moins)
+  // bonus de niveau (Platine par défaut : +1 € de l'heure), réglable dans l'admin
   const mondayOf = (d) => { const t = new Date(d + 'T12:00:00Z'); const wd = (t.getUTCDay() + 6) % 7; return new Date(t.getTime() - wd * 864e5).toISOString().slice(0, 10); };
   const bonusOf = (wid) => {
-    const r = db.prepare("SELECT rating FROM bookings WHERE worker_id = ? AND status = 'terminee' AND rating IS NOT NULL ORDER BY date DESC, id DESC LIMIT 10").all(wid);
-    const avg = r.length ? r.reduce((t, x) => t + x.rating, 0) / r.length : 0;
-    return { eligible: r.length >= 5 && avg >= 4.8, avg: r.length ? Math.round(avg * 10) / 10 : null, count: r.length, perHour: BONUS_PER_HOUR };
+    const t = tiers.tierOf(db, wid);
+    return { eligible: t.bonus > 0, avg: t.rating, count: t.rated, perHour: t.bonus, tier: t.key };
   };
   const paidIds = () => new Set(db.prepare('SELECT booking_ids FROM payouts').all().flatMap((p) => JSON.parse(p.booking_ids)));
   const owedFor = (wid) => {
@@ -1458,7 +1473,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const months = db.prepare("SELECT substr(date, 1, 7) AS m, COUNT(*) AS n, SUM(hours) AS h FROM bookings WHERE worker_id = ? AND status = 'terminee' GROUP BY m ORDER BY m DESC LIMIT 12").all(user.id);
     const paidByMonth = w.statut === 'I' ? Object.fromEntries(db.prepare("SELECT substr(paid_at, 1, 7) AS m, SUM(amount) AS s FROM payouts WHERE worker_id = ? AND paid_at IS NOT NULL GROUP BY m").all(user.id).map((r) => [r.m, Math.round(r.s * 100) / 100])) : {};
     return {
-      statut: w.statut, rate: w.rate,
+      statut: w.statut, rate: w.rate, tier: tiers.tierOf(db, user.id),
       month: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", m0)),
       lastMonth: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", prev)),
       upcoming: pack(sum("status IN ('attribuee','en_cours') AND date >= ?", pricing.todayParis(now()))),
@@ -1605,7 +1620,8 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     if (!w) throw new HttpError(404, 'Fiche introuvable.');
     const st = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS avg, COUNT(rating) AS rated FROM bookings WHERE worker_id = ? AND status = 'terminee'").get(id);
     const reviews = db.prepare("SELECT rating, review, date FROM bookings WHERE worker_id = ? AND status = 'terminee' AND review IS NOT NULL AND rating >= 4 ORDER BY date DESC LIMIT 3").all(id);
-    return { id, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
+    const tier = tiers.tierOf(db, id);
+    return { id, tier: { key: tier.key, label: tier.label, icon: tier.icon }, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
   });
   route('POST', '/api/worker/profile', ({ user, body }) => {
     need(user, 'intervenante');
@@ -2468,7 +2484,8 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
       .map((w) => {
         const d = docsOf(w.user_id);
         const toCheck = db.prepare("SELECT COUNT(*) AS n FROM worker_docs WHERE worker_id = ? AND status = 'a_verifier'").get(w.user_id).n;
-        return { ...w, steps: db_.STEPS[w.statut], active: engine.isActive(w), rejected: Boolean(w.rejected_at),
+        const t = tiers.tierOf(db, w.user_id);
+        return { ...w, tier: { key: t.key, label: t.label, icon: t.icon }, steps: db_.STEPS[w.statut], active: engine.isActive(w), rejected: Boolean(w.rejected_at),
           docs: d ? { required: d.list.filter((k) => k.required).length, valid: d.list.filter((k) => k.required && k.latest?.status === 'valide').length, toCheck } : null };
       });
     let ca = 0; let marge = 0;

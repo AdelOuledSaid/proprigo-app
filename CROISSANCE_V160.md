@@ -23,3 +23,11 @@
 
 ## Variables facultatives
 - VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY : sinon générées automatiquement et gardées en base.
+
+# v1.8.0 — niveaux des intervenantes
+- 🔵 Bleu au départ, 🥇 Or (25 ménages, note 4,6) : priorité sur les missions, 💎 Platine (75 ménages, note 4,8) : priorité + 1 € de l'heure.
+- La note compte à partir de 5 avis ; la plus mauvaise note est mise de côté.
+- Priorité : à distance comparable (3 km d'avance pour l'Or, 6 km pour le Platine).
+- Badge visible des clients sur la fiche de l'intervenante ; carte « Mon niveau » avec la progression dans l'espace intervenante.
+- Réglages (seuils et bonus) dans l'admin, onglet Tarifs et zones. Le bonus Platine remplace l'ancien « bonus qualité ».
+- Salariées : le bonus Platine est à ajouter sur la fiche de paie (le site l'indique, il ne fait pas la paie).

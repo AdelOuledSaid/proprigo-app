@@ -1,4 +1,5 @@
 'use strict';
+const tiers = require('./tiers');
 // Attribution des missions.
 // 1. Salariée active, disponible, la plus proche : la mission lui est attribuée.
 // 2. Sinon, proposition aux 3 indépendantes les plus proches : libres d'accepter ou de refuser,
@@ -49,6 +50,9 @@ function isActive(w) {
   return w.step === STEPS[w.statut].length - 1;
 }
 
+// réglages des niveaux lus une seule fois par calcul
+const cfgCache = new WeakMap();
+const cfgFor = (db, key) => { if (!cfgCache.has(key)) cfgCache.set(key, tiers.settings(db)); return cfgCache.get(key); };
 function candidates(db, booking, { withRefused = false } = {}) {
   const refused = new Set(db.prepare("SELECT worker_id FROM offers WHERE booking_id = ? AND state = 'refused'").all(booking.id).map((r) => r.worker_id));
   const workers = db.prepare('SELECT w.*, u.name FROM workers w JOIN users u ON u.id = w.user_id WHERE w.absent = 0').all();
@@ -85,7 +89,9 @@ function candidates(db, booking, { withRefused = false } = {}) {
     .filter(isFree)
     .map((w) => ({ ...w, d: distance(w.cp, booking.cp) }))
     .filter((w) => w.d < MAX_DISTANCE)
-    .sort((x, y) => x.d - y.d);
+    // à distance comparable, priorité aux niveaux Or puis Platine (quelques km d'avance seulement)
+    .map((w, _i, all) => ({ ...w, rank: tiers.rankFor(db, w.user_id, cfgFor(db, all)) }))
+    .sort((x, y) => (x.d - x.rank * tiers.PRIORITY_KM) - (y.d - y.rank * tiers.PRIORITY_KM) || x.d - y.d);
 }
 
 function assign(db, bookingId) {
