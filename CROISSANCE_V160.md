@@ -31,3 +31,10 @@
 - Badge visible des clients sur la fiche de l'intervenante ; carte « Mon niveau » avec la progression dans l'espace intervenante.
 - Réglages (seuils et bonus) dans l'admin, onglet Tarifs et zones. Le bonus Platine remplace l'ancien « bonus qualité ».
 - Salariées : le bonus Platine est à ajouter sur la fiche de paie (le site l'indique, il ne fait pas la paie).
+
+# v1.8.1 — photos des intervenantes
+- Chaque intervenante peut ajouter sa photo (Compte › Ma présentation aux clients). Recadrée en carré, affichée en petit cercle.
+- La photo n'est montrée aux clients qu'après accord de l'équipe (admin › Équipe : ✅ Accepter / ✖️ Refuser, e-mail aux responsables à chaque nouvelle photo).
+- Seuls les clients qui ont une réservation avec elle voient sa photo.
+- Les clients voient « Prénom + initiale » (ex. Fatima K.), jamais le nom de famille complet, y compris dans les données envoyées.
+- Bande des étapes déplacée tout en haut de l'accueil, sous le titre.

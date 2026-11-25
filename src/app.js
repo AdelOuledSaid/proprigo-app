@@ -195,6 +195,11 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db.prepare('INSERT INTO sessions (token, user_id, expires) VALUES (?, ?, ?)').run(token, userId, Date.now() + SESSION_DAYS * 864e5);
     return sessionCookie(token, SESSION_DAYS * 86400);
   };
+  // ce que voit un client : prénom et initiale du nom, jamais le nom complet
+  const displayName = (name) => { const [first, ...rest] = String(name || '').trim().split(/\s+/); const last = rest.join(' '); return last ? `${first} ${last[0].toUpperCase()}.` : first; };
+  // photo de profil des intervenantes
+  for (const [c, t] of [['avatar', 'TEXT'], ['avatar_status', 'TEXT'], ['avatar_at', 'TEXT']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  const hasAvatar = (wid) => Boolean(wid && db.prepare("SELECT 1 FROM workers WHERE user_id = ? AND avatar IS NOT NULL AND avatar_status = 'valide'").get(wid));
   const bookingView = (b) => {
     const w = b.worker_id ? db.prepare('SELECT name FROM users WHERE id = ?').get(b.worker_id) : null;
     const photos = db.prepare('SELECT id, kind FROM photos WHERE booking_id = ? ORDER BY id').all(b.id);
@@ -202,7 +207,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const inc = db.prepare('SELECT COUNT(*) AS n FROM incidents WHERE booking_id = ? AND resolved = 0').get(b.id).n;
     let list = [];
     try { list = JSON.parse(b.checklist || '[]'); } catch { list = []; }
-    return { ...b, worker_name: w ? w.name : null, checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
+    return { ...b, worker_name: w ? w.name : null, worker_display: w ? displayName(w.name) : null, worker_photo: hasAvatar(b.worker_id), checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
   };
   const nowParisHM = () => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false }).format(now());
   const hoursBefore = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.parse(`${pricing.todayParis(now())}T${nowParisHM()}:00`)) / 36e5;
@@ -1025,7 +1030,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   route('GET', '/api/bookings/mine', ({ user }) => {
     need(user, 'client');
     return db.prepare("SELECT * FROM bookings WHERE client_id = ? AND NOT (status = 'annulee' AND payment_status = 'paiement_echoue' AND paid = 0) ORDER BY date DESC, time DESC").all(user.id).map((b) => {
-      const v = bookingView(b);
+      const v = { ...bookingView(b) };
+      v.worker_name = v.worker_display; // le client ne reçoit pas le nom de famille
       const pid = engine.preferredIds(db, b)[0];
       return pid ? { ...v, preferred_id: pid, preferred_name: engine.firstName(db, pid) } : v;
     });
@@ -1621,7 +1627,62 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     const st = db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS avg, COUNT(rating) AS rated FROM bookings WHERE worker_id = ? AND status = 'terminee'").get(id);
     const reviews = db.prepare("SELECT rating, review, date FROM bookings WHERE worker_id = ? AND status = 'terminee' AND review IS NOT NULL AND rating >= 4 ORDER BY date DESC LIMIT 3").all(id);
     const tier = tiers.tierOf(db, id);
-    return { id, tier: { key: tier.key, label: tier.label, icon: tier.icon }, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
+    const own = user.id === id || user.role === 'admin';
+    return { id, photo: hasAvatar(id), ...(own ? { avatar_status: db.prepare('SELECT avatar_status FROM workers WHERE user_id = ?').get(id).avatar_status || null } : {}), displayName: displayName(w.name), tier: { key: tier.key, label: tier.label, icon: tier.icon }, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
+  });
+  // ----- photo de profil des intervenantes (validée par l'équipe avant d'être montrée aux clients) -----
+  const AVATARS = path.join(PHOTOS, 'avatars');
+  fs.mkdirSync(AVATARS, { recursive: true });
+  const dropAvatarFile = (f) => { if (f) try { fs.unlinkSync(path.join(AVATARS, path.basename(f))); } catch { /* déjà supprimée */ } };
+  route('POST', '/api/worker/avatar', ({ user, body }) => {
+    need(user, 'intervenante');
+    const m = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.data || ''));
+    if (!m) throw new HttpError(400, 'Photo invalide (JPEG ou PNG).');
+    const buf = Buffer.from(m[2], 'base64');
+    const isJpeg = buf[0] === 0xff && buf[1] === 0xd8;
+    const isPng = buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    if (!(isJpeg || isPng) || buf.length > 1_500_000) throw new HttpError(400, 'Photo invalide ou trop lourde.');
+    const old = db.prepare('SELECT avatar FROM workers WHERE user_id = ?').get(user.id);
+    if (!old) throw new HttpError(404, 'Profil introuvable.');
+    const file = `${user.id}-${crypto.randomBytes(8).toString('hex')}.${isJpeg ? 'jpg' : 'png'}`;
+    fs.writeFileSync(path.join(AVATARS, file), buf);
+    db.prepare("UPDATE workers SET avatar = ?, avatar_status = 'a_verifier', avatar_at = datetime('now') WHERE user_id = ?").run(file, user.id);
+    dropAvatarFile(old.avatar);
+    db_.log(db, `Nouvelle photo de profil à vérifier : ${user.name}.`);
+    for (const to of ownerEmails()) mailer.send(to, `Photo de profil à vérifier : ${user.name}`, 'Une photo de profil attend votre accord', [`${user.name} a envoyé une photo de profil.`, 'Vérifiez-la dans l\'admin, onglet Équipe : visage bien visible, photo nette et correcte. Elle ne sera montrée aux clients qu\'après votre accord.'], null);
+    return { ok: true, message: 'Photo envoyée. Elle sera visible des clients après vérification par l\'équipe.' };
+  });
+  route('POST', '/api/worker/avatar/remove', ({ user }) => {
+    need(user, 'intervenante');
+    const old = db.prepare('SELECT avatar FROM workers WHERE user_id = ?').get(user.id);
+    db.prepare('UPDATE workers SET avatar = NULL, avatar_status = NULL, avatar_at = NULL WHERE user_id = ?').run(user.id);
+    if (old) dropAvatarFile(old.avatar);
+    return { ok: true, message: 'Photo supprimée.' };
+  });
+  route('GET', '/api/workers/:id/avatar', ({ user, id, res }) => {
+    need(user);
+    const w = db.prepare('SELECT avatar, avatar_status FROM workers WHERE user_id = ?').get(id);
+    const self = user.id === id || user.role === 'admin';
+    const client = w && w.avatar_status === 'valide' && db.prepare("SELECT 1 FROM bookings WHERE client_id = ? AND worker_id = ? AND status IN ('attribuee','en_cours','terminee')").get(user.id, id);
+    if (!w || !w.avatar || !(self || client)) throw new HttpError(404, 'Photo introuvable.');
+    res.writeHead(200, { 'Content-Type': w.avatar.endsWith('.png') ? 'image/png' : 'image/jpeg', 'Cache-Control': 'private, max-age=300' });
+    fs.createReadStream(path.join(AVATARS, path.basename(w.avatar))).on('error', () => res.end()).pipe(res);
+    return { streamed: true };
+  });
+  route('POST', '/api/admin/workers/:id/avatar', ({ user, id, body }) => {
+    needStaff(user);
+    const w = db.prepare('SELECT w.avatar, u.name, u.email FROM workers w JOIN users u ON u.id = w.user_id WHERE w.user_id = ?').get(id);
+    if (!w || !w.avatar) throw new HttpError(404, 'Pas de photo à vérifier.');
+    if (body.ok) {
+      db.prepare("UPDATE workers SET avatar_status = 'valide' WHERE user_id = ?").run(id);
+      db_.log(db, `Photo de profil de ${w.name} acceptée par ${user.name}.`);
+      return { ok: true, message: 'Photo acceptée : les clients la verront.' };
+    }
+    db.prepare('UPDATE workers SET avatar = NULL, avatar_status = NULL WHERE user_id = ?').run(id);
+    dropAvatarFile(w.avatar);
+    mailer.send(w.email, 'Votre photo de profil', 'Merci d\'envoyer une autre photo', ['Votre photo de profil n\'a pas pu être acceptée.', 'Envoyez une photo nette de votre visage, de face, sans lunettes de soleil, depuis « Compte », rubrique « Ma présentation aux clients ».'], null);
+    db_.log(db, `Photo de profil de ${w.name} refusée par ${user.name}.`);
+    return { ok: true, message: 'Photo refusée : l\'intervenante est invitée à en envoyer une autre.' };
   });
   route('POST', '/api/worker/profile', ({ user, body }) => {
     need(user, 'intervenante');

@@ -401,3 +401,45 @@ test('auto-entrepreneur : factures sans TVA (293 B) et alerte avant le seuil de 
     assert.match(h.tva, /franchise \(293 B\)/);
   } finally { app.server.close(); }
 });
+
+test('photo de profil : vérifiée avant d\'être montrée, le client voit le prénom et l\'initiale', async () => {
+  const a = await start();
+  try {
+    const fatima = a.db.prepare("SELECT id FROM users WHERE email = 'fatima@proprigo.test'").get().id;
+    const bid = mkBooking(a.db, { worker_id: fatima, status: 'attribuee', date: '2026-12-01' });
+    const w = await a.session('fatima@proprigo.test', 'demo-proprigo');
+    const claire = await a.session('claire@proprigo.test', 'demo-proprigo');
+    const admin = await a.session('admin@proprigo.test', 'admin-test-123');
+    // un JPEG minimal
+    const jpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]).toString('base64');
+    assert.equal((await w('POST', '/api/worker/avatar', { data: 'data:image/gif;base64,R0lGOD' })).status, 400);
+    assert.equal((await w('POST', '/api/worker/avatar', { data: jpeg })).status, 200);
+    // pas encore validée : le client ne la voit pas, l'intervenante si
+    let card = (await claire('GET', `/api/workers/${fatima}/card`)).data;
+    assert.equal(card.photo, false);
+    assert.equal(card.avatar_status, undefined, 'le client ne voit pas l\'état de validation');
+    assert.equal((await claire('GET', `/api/workers/${fatima}/avatar`)).status, 404);
+    assert.equal((await w('GET', `/api/workers/${fatima}/avatar`)).status, 200);
+    assert.equal((await w('GET', `/api/workers/${fatima}/card`)).data.avatar_status, 'a_verifier');
+    // l'équipe accepte
+    assert.equal((await admin('POST', `/api/admin/workers/${fatima}/avatar`, { ok: true })).status, 200);
+    card = (await claire('GET', `/api/workers/${fatima}/card`)).data;
+    assert.equal(card.photo, true);
+    assert.equal((await claire('GET', `/api/workers/${fatima}/avatar`)).status, 200);
+    // le client ne reçoit jamais le nom de famille complet
+    const mine = (await claire('GET', '/api/bookings/mine')).data.find((b) => b.id === bid);
+    a.db.prepare("UPDATE users SET name = 'Fatima Koné Diallo' WHERE id = ?").run(fatima);
+    const again = (await claire('GET', '/api/bookings/mine')).data.find((b) => b.id === bid);
+    assert.equal(again.worker_name, 'Fatima K.');
+    assert.equal((await claire('GET', `/api/workers/${fatima}/card`)).data.displayName, 'Fatima K.');
+    assert.doesNotMatch(JSON.stringify(again), /Koné|Diallo/);
+    assert.equal(mine.worker_photo, true);
+    // un autre client, sans réservation avec elle, ne voit pas la photo
+    const other = await a.session('admin@proprigo.test', 'admin-test-123');
+    void other;
+    // refus : la photo disparaît
+    assert.equal((await w('POST', '/api/worker/avatar', { data: jpeg })).status, 200);
+    assert.equal((await admin('POST', `/api/admin/workers/${fatima}/avatar`, { ok: false })).status, 200);
+    assert.equal((await claire('GET', `/api/workers/${fatima}/card`)).data.photo, false);
+  } finally { a.close(); }
+});

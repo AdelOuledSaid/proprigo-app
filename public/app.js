@@ -186,6 +186,24 @@
     });
   }
 
+  // photo de profil : recadrée en carré au centre, 480 px
+  function squareShrink(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const c = document.createElement('canvas'); c.width = c.height = Math.min(480, side);
+        c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(img.src);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => reject(new Error('Image illisible.'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  const avatar = (id, has, name, cls = '') => has
+    ? `<img class="av ${cls}" src="/api/workers/${id}/avatar" alt="Photo de ${esc(name)}" loading="lazy">`
+    : `<span class="av ${cls}" aria-hidden="true">${esc(String(name || '?').slice(0, 1))}</span>`;
   const tomorrowParis = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date(Date.now() + 864e5));
   const DRAFT0 = () => ({ step: 1, service: 'menage', size: 'T2', hours: 3, kit: false, extras: [], lease: null, cp: '', address: '', date: tomorrowParis(), time: null, urgent: false, repeat: '0', occurrences: 8, photoConsent: false, tasks: null, tasksService: null, home_id: null, cgv: false, payment_mode: 'all' });
   let draft = DRAFT0();
@@ -226,6 +244,7 @@
         <div class="hero2-text">
           <h1>Chez vous, tout brille.</h1>
           <p class="lead">Ménage à domicile, logements Airbnb, grand nettoyage et bureaux à Paris et en Île-de-France. Des intervenantes vérifiées, un prix connu avant de payer.</p>
+          <div class="live-mini" aria-label="Les étapes de votre ménage">${liveSteps(true)}</div>
           <form class="card stack choose" id="start">
             <div class="svc svc4">${['menage', 'airbnb', 'grand', 'bureau'].map((k) => `<button type="button" data-pick="${k}" aria-pressed="${draft.service === k}"><span class="svc-art">${ART.services[k]}</span><b>${k === 'menage' ? 'À domicile' : SERVICE[k]}</b><span>${{ menage: `${eu(P.menage)} € / h`, airbnb: `dès ${eu(P.airbnb.studio)} €`, grand: `${eu(P.grand)} € / h`, bureau: CONFIG.franchiseTVA ? `${eu(P.bureau)} € / h` : `${eu(P.bureauHT)} € HT / h` }[k]}</span></button>`).join('')}</div>
             <div class="cp-row">
@@ -243,8 +262,6 @@
           <figcaption><span>Avant</span><b>Faites glisser pour faire briller</b><span>Après</span></figcaption>
         </figure>
       </section>
-
-      <div class="live-mini" aria-label="Les étapes de votre ménage">${liveSteps(true)}</div>
 
       <ul class="promises">
         <li>${ico('lock')}<span><b>Paiement sécurisé</b>Par carte, avec Stripe</span></li>
@@ -460,8 +477,8 @@
     const since = new Date(c.since + '-01T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
     const meta = [`Intervenante vérifiée depuis ${since}`, c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
     return `<div class="wcard">
-      <div class="wcard-av" aria-hidden="true">${esc(c.firstName.slice(0, 1))}</div>
-      <div class="wcard-name">${esc(c.firstName)}${c.tier && c.tier.key !== 'bleu' ? ` <span class="tier-pill ${c.tier.key}">${c.tier.icon} Intervenante ${esc(c.tier.label)}</span>` : ''}</div>
+      ${avatar(c.id, c.photo, c.firstName, 'wcard-av')}
+      <div class="wcard-name">${esc(c.displayName || c.firstName)}${c.tier && c.tier.key !== 'bleu' ? ` <span class="tier-pill ${c.tier.key}">${c.tier.icon} Intervenante ${esc(c.tier.label)}</span>` : ''}</div>
       <div class="wcard-meta">${esc(meta)}${c.languages ? `<br>Parle ${esc(c.languages)}` : ''}</div>
       ${c.bio ? `<p class="wcard-bio">${esc(c.bio)}</p>` : ''}
       ${c.reviews.length ? `<p class="wcard-rev">« ${esc(c.reviews[0].review)} »</p>` : ''}
@@ -874,7 +891,7 @@
           <p class="muted" style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · ${esc(b.address)} · ${esc(b.cp)} · <b>${b.payment_status === 'garantie' ? 'Gratuit (garantie)' : eur(b.total)}</b>${b.kit ? ' · matériel fourni' : ''}</p>
           ${b.payment_status === 'garantie' ? '<p class="small" style="margin:6px 0 0"><span class="pill ok">Retour gratuit</span> Nous revenons reprendre les points que vous avez signalés.</p>' : ''}
           ${b.status === 'attribuee' && b.on_way_at && !b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est en route${b.eta_at ? `, arrivée estimée vers ${hhmm(b.eta_at)}` : ''}.</p>` : ''}
-          ${b.worker_name ? `<p style="margin:8px 0 0">Intervenante vérifiée : <b>${esc(b.worker_name)}</b>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
+          ${b.worker_name ? `<p class="who-line">${avatar(b.worker_id, b.worker_photo, b.worker_name, 'sm')}<span>Intervenante vérifiée : <b>${esc(b.worker_name)}</b></span>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
           ${b.source === 'ical' ? '<p class="small muted" style="margin:6px 0 0">Créé automatiquement depuis le calendrier de votre annonce.</p>' : ''}
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
           <p class="small muted" style="margin:6px 0 0">${esc(paymentLabel(b))}</p>
@@ -1538,8 +1555,9 @@
         </details>` : ''}
         <div class="grid2" style="gap:12px">${r.workers.map((w) => `
           <div class="card" style="margin:0">
-            <div class="row"><b>${esc(w.name)}</b><span class="row" style="gap:6px"><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span>${w.tier ? `<span class="tier-pill ${w.tier.key}" title="Niveau">${w.tier.icon} ${esc(w.tier.label)}</span>` : ''}<button class="btn ghost small-btn" data-wfile="${w.user_id}">Fiche</button></span></div>
+            <div class="row"><span class="who-line" style="margin:0">${avatar(w.user_id, Boolean(w.avatar), w.name, 'sm')}<b>${esc(w.name)}</b></span><span class="row" style="gap:6px"><span class="pill">${w.statut === 'S' ? 'Salariée' : 'Indépendante'}</span>${w.tier ? `<span class="tier-pill ${w.tier.key}" title="Niveau">${w.tier.icon} ${esc(w.tier.label)}</span>` : ''}<button class="btn ghost small-btn" data-wfile="${w.user_id}">Fiche</button></span></div>
             <span class="small muted">${esc(w.cp)}${w.rate ? ' · ' + eur(w.rate) + '/h' : ''} · ${esc(w.email)}</span>
+            ${w.avatar_status === 'a_verifier' ? `<div class="av-check"><img src="/api/workers/${w.user_id}/avatar" alt="Photo envoyée par ${esc(w.name)}"><div><b>📷 Nouvelle photo à vérifier</b><p class="small muted" style="margin:2px 0 6px">Visage net, de face, photo correcte ?</p><span class="row" style="gap:6px;justify-content:flex-start"><button class="btn blue small-btn" data-avok="${w.user_id}">✅ Accepter</button><button class="btn ghost small-btn" data-avno="${w.user_id}">✖️ Refuser</button></span></div></div>` : ''}
             <div class="prog"><i style="width:${(w.step / (w.steps.length - 1)) * 100}%"></i></div>
             ${w.docs && !w.active && !w.rejected ? `<p class="small" style="margin:6px 0 0">Pièces : ${w.docs.valid}/${w.docs.required} validées${w.docs.toCheck ? ` · <span class="pill warn">${w.docs.toCheck} à vérifier</span>` : ''}</p>` : ''}
             <div class="row"><span class="small">${w.rejected ? '<span class="pill">Candidature refusée</span>' : w.active ? (w.absent ? '<span class="pill warn">Absente</span>' : '<span class="pill ok">Active</span>') : 'À valider : ' + esc(w.steps[w.step + 1])}</span>
@@ -1661,6 +1679,10 @@
     };
     $app.querySelectorAll('[data-cfile]').forEach((b) => b.onclick = () => openFile('client', Number(b.dataset.cfile)));
     $app.querySelectorAll('[data-wfile]').forEach((b) => b.onclick = () => openFile('worker', Number(b.dataset.wfile)));
+    $app.querySelectorAll('[data-avok], [data-avno]').forEach((b) => b.onclick = async () => {
+      const id = b.dataset.avok || b.dataset.avno;
+      try { const r2 = await api('POST', `/api/admin/workers/${id}/avatar`, { ok: Boolean(b.dataset.avok) }); toast(r2.message); route(); } catch (e) { toast(e.message); }
+    });
     const od = document.getElementById('openDevis');
     if (od) od.onclick = async () => {
       let dlg = document.getElementById('fileDlg');
@@ -2429,7 +2451,16 @@
         <label class="check"><input type="checkbox" id="wantAvance" ${me.wants_avance ? 'checked' : ''}> Prévenez-moi dès que c'est disponible</label></section>` : ''}
       ${me.role === 'intervenante' ? `<section class="card stack" data-o="2">
         <h2>Ma présentation aux clients</h2>
-        <p class="small muted">Vos clients voient votre prénom, votre ancienneté, votre note et ce texte. Jamais votre nom de famille ni votre téléphone.</p>
+        <p class="small muted">Vos clients voient votre photo, votre prénom et l'initiale de votre nom, votre ancienneté, votre note et ce texte. Jamais votre nom de famille complet ni votre téléphone.</p>
+        <div class="av-edit">
+          ${avatar(me.id, Boolean(card && card.avatar_status), me.name, 'lg')}
+          <div>
+            <p style="margin:0"><b>📷 Ma photo</b> ${card && card.avatar_status === 'valide' ? '<span class="pill ok">Visible des clients</span>' : card && card.avatar_status === 'a_verifier' ? '<span class="pill warn">En cours de vérification</span>' : ''}</p>
+            <p class="small muted" style="margin:4px 0 8px">Une photo nette de votre visage, de face, avec le sourire. Elle est vérifiée par l'équipe avant d'être montrée.</p>
+            <label class="btn ghost">${card && card.avatar_status ? 'Changer la photo' : 'Ajouter ma photo'}<input type="file" accept="image/*" id="avIn" hidden></label>
+            ${card && card.avatar_status ? '<button type="button" class="linkish" id="avDel">Supprimer</button>' : ''}
+          </div>
+        </div>
         <form id="wprof" class="stack">
           <label>Quelques mots sur vous<textarea name="bio" rows="3" maxlength="300" placeholder="Ex. Sept ans d'expérience, j'aime les intérieurs nets et je fais attention aux objets fragiles.">${esc(card ? card.bio : '')}</textarea></label>
           <label>Langues parlées<input type="text" name="languages" maxlength="120" value="${esc(card ? card.languages : '')}" placeholder="Ex. français, arabe"></label>
@@ -2496,6 +2527,13 @@
     }
     const rd = document.getElementById('redeem2');
     if (rd) rd.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/gifts/redeem', { code: rd.code.value }); toast(r.message); document.getElementById('myCredit').textContent = eur(r.credit); rd.reset(); } catch (err) { toast(err.message); } };
+    const avIn = document.getElementById('avIn');
+    if (avIn) avIn.onchange = async () => {
+      const f = avIn.files[0]; if (!f) return;
+      try { toast('Envoi de la photo…'); const r = await api('POST', '/api/worker/avatar', { data: await squareShrink(f) }); toast(r.message); route(); } catch (e) { toast(e.message); }
+    };
+    const avDel = document.getElementById('avDel');
+    if (avDel) avDel.onclick = async () => { if (!confirm('Supprimer votre photo ?')) return; try { const r = await api('POST', '/api/worker/avatar/remove', {}); toast(r.message); route(); } catch (e) { toast(e.message); } };
     const wp = document.getElementById('wprof');
     if (wp) wp.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/worker/profile', formData(wp)); toast(r.message); } catch (err) { toast(err.message); } };
     { // ordre d'affichage : d'abord ce qu'on cherche le plus souvent

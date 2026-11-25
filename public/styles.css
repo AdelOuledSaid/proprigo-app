@@ -875,9 +875,19 @@ ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; 
 .tier-set { align-items: end; }
 
 /* version courte, juste sous la photo avant/après */
-.live-mini { margin: 22px auto 0; max-width: 620px; }
+.live-mini { margin: 18px 0 18px; max-width: 560px; }
 .live-steps.mini { margin: 0; }
 .live-steps.mini::before, .live-steps.mini::after { top: 21px; }
 .live-steps.mini .live-dot { width: 44px; height: 44px; font-size: 20px; border-width: 2.5px; margin-bottom: 4px; }
 .live-steps.mini b { font-size: 13px; font-weight: 600; }
 @media (max-width: 560px) { .live-steps.mini::before, .live-steps.mini::after { top: 18px; } .live-steps.mini .live-dot { width: 38px; height: 38px; font-size: 17px; } .live-steps.mini b { font-size: 11.5px; } }
+
+/* photos de profil des intervenantes : petits cercles */
+.av { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex: none; background: #1f4fff; color: #fff; font-family: Outfit, sans-serif; font-weight: 800; font-size: 18px; border: 2px solid var(--raised); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 35%, transparent); }
+.av.sm { width: 34px; height: 34px; font-size: 14px; }
+.av.lg { width: 84px; height: 84px; font-size: 32px; }
+.wcard .av.wcard-av { width: 64px; height: 64px; border-radius: 50%; font-size: 24px; }
+.who-line { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; }
+.av-edit { display: flex; gap: 16px; align-items: center; margin: 6px 0 14px; }
+.av-check { display: flex; gap: 12px; align-items: center; margin: 10px 0; padding: 10px; border-radius: 14px; background: color-mix(in srgb, var(--coral) 12%, transparent); }
+.av-check img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; flex: none; }
