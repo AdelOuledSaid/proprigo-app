@@ -8,7 +8,9 @@
   // ---------- outils ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const eur = (n) => { const v = Number(n); return v.toLocaleString('fr-FR', Number.isInteger(v) ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\u00a0€'; };
-  const dateFr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const dayFr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const LOC = () => (window.PROPRIGO_I18N ? window.PROPRIGO_I18N.locale() : 'fr-FR'); // langue choisie par l'intervenante
+  const dateFr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
   const todayParis = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date());
   const SIZE = { studio: 'Studio', T2: 'T2', T3: 'T3', maison: 'Maison' };
   const SERVICE = { menage: 'Ménage', grand: 'Grand nettoyage', airbnb: 'Ménage Airbnb', bureau: 'Nettoyage de bureaux' };
@@ -134,6 +136,7 @@
     const vEl = document.getElementById('appVersion');
     if (vEl && window.__proprigoVersion) vEl.textContent = `Version ${window.__proprigoVersion}`;
     if (me && !loadMe.nativeDone) { loadMe.nativeDone = true; try { nativeRefresh(); } catch { /* appli web */ } }
+    applyLang();
   }
 
   const views = {};
@@ -204,6 +207,7 @@
   const avatar = (id, has, name, cls = '') => has
     ? `<img class="av ${cls}" src="/api/workers/${id}/avatar" alt="Photo de ${esc(name)}" loading="lazy">`
     : `<span class="av ${cls}" aria-hidden="true">${esc(String(name || '?').slice(0, 1))}</span>`;
+  const addDaysFront = (d, n) => new Date(Date.parse(d + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
   const tomorrowParis = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date(Date.now() + 864e5));
   const DRAFT0 = () => ({ step: 1, service: 'menage', size: 'T2', hours: 3, kit: false, extras: [], lease: null, cp: '', address: '', date: tomorrowParis(), time: null, urgent: false, repeat: '0', occurrences: 8, photoConsent: false, tasks: null, tasksService: null, home_id: null, cgv: false, payment_mode: 'all' });
   let draft = DRAFT0();
@@ -687,6 +691,7 @@
           <label>Date<input type="date" id="date" min="${todayParis()}" value="${esc(draft.date)}" required></label>
         </div>
         <label>Adresse<input type="text" id="address" autocomplete="street-address" value="${esc(draft.address)}" placeholder="Numéro, rue, étage, code d'accès" required></label>
+        <fieldset class="box" id="whoBox" hidden></fieldset>
         <fieldset class="box"><legend>Heure d'arrivée</legend><div id="slots"><p class="muted small">Chargement des créneaux proposés…</p></div><div id="prefNote"></div></fieldset>
         ${draft.date === todayParis() ? `<label class="check"><input type="checkbox" id="urgent" ${draft.urgent ? 'checked' : ''}> Urgence : arrivée dans les 3 prochaines heures (+25 %)</label>` : ''}
         <fieldset class="box"><legend>Fréquence</legend>
@@ -708,8 +713,19 @@
       const box = document.getElementById('slots');
       const pref = document.getElementById('prefNote');
       let r = { slots: [], preferred: null };
+      // « avec qui ? » : une intervenante déjà venue chez le client, ou peu importe
+      const whoBox = document.getElementById('whoBox');
+      const mwr = me && me.role === 'client' ? await api('GET', '/api/my-workers').catch(() => null) : null;
+      if (mwr && mwr.list.length && whoBox) {
+        if (draft.want === undefined) draft.want = mwr.favorite || mwr.list[0].id;
+        whoBox.hidden = false;
+        whoBox.innerHTML = `<legend>Avec qui ?</legend><div class="who-pick">${mwr.list.map((w) => `<button type="button" data-want="${w.id}" aria-pressed="${draft.want === w.id}">${avatar(w.id, w.photo, w.name, 'sm')}<span><b>${esc(w.name)}</b>${mwr.favorite === w.id ? ' ★' : ''}<small>${w.n} ménage${w.n > 1 ? 's' : ''} chez vous</small></span></button>`).join('')}
+          <button type="button" data-want="" aria-pressed="${!draft.want}"><span class="av sm" aria-hidden="true">👥</span><span><b>Peu importe</b><small>La première disponible</small></span></button></div>`;
+        whoBox.querySelectorAll('[data-want]').forEach((b) => b.onclick = () => { save(); draft.want = b.dataset.want ? Number(b.dataset.want) : null; draft.time = null; step2(); });
+      }
       if (/^\d{5}$/.test(draft.cp)) {
-        r = await api('GET', `/api/slots?date=${encodeURIComponent(draft.date)}&cp=${encodeURIComponent(draft.cp)}&hours=${draftHours(draft)}&service=${draft.service}${draft.home_id ? `&home_id=${draft.home_id}` : ''}`);
+        r = await api('GET', `/api/slots?date=${encodeURIComponent(draft.date)}&cp=${encodeURIComponent(draft.cp)}&hours=${draftHours(draft)}&service=${draft.service}${draft.home_id ? `&home_id=${draft.home_id}` : ''}${draft.want ? `&worker_id=${draft.want}` : ''}`);
+        if (draft.want === null) r.preferred = null;
         if (draft.time && !r.slots.includes(draft.time)) draft.time = null;
         const paintSlots = () => {
           const p = r.preferred;
@@ -787,7 +803,7 @@
         if (!draft.cgv) { document.getElementById('err4').textContent = 'Merci d\'accepter les conditions générales.'; return; }
         e.target.disabled = true;
         try {
-          const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined });
+          const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined, want_worker_id: draft.want || undefined });
           if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
           if (r.paidByCredit) toast('Réglé avec votre crédit Proprigo : rien à payer.');
           $app.innerHTML = `<section class="card wizard done-card">
@@ -897,6 +913,11 @@
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
           ${b.checklist.length && ['en_cours', 'terminee'].includes(b.status) ? shine(b) : ''}${b.checklist.length ? `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
+          ${b.status === 'terminee' && b.worker_id ? (b.tip ? `<p class="tip-done">💝 Merci ! Pourboire de ${eur(b.tip)} envoyé à ${esc((b.worker_name || '').split(' ')[0])}.</p>`
+            : b.date >= addDaysFront(todayParis(), -30) ? `<details class="tip-box"><summary>💝 Laisser un pourboire à ${esc((b.worker_name || '').split(' ')[0])}</summary>
+              <p class="small muted" style="margin:6px 0 8px">Il lui est reversé en entier.</p>
+              <div class="chips">${[2, 5, 10].map((n) => `<button type="button" data-tip="${b.id}" data-amount="${n}">${n} €</button>`).join('')}
+              <button type="button" data-tip="${b.id}" data-amount="other">Autre</button></div></details>` : '') : ''}
           <div class="bk-main">
             ${b.status !== 'annulee' ? `<button class="btn ghost" data-thread="${b.id}">💬 Messages${b.messages ? ` (${b.messages})` : ''}</button>` : ''}
             ${b.paid || b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">🧾 Facture</a>` : ''}
@@ -954,6 +975,13 @@
         try { const r = await api('POST', `/api/bookings/${id}/guarantee`, { text: e.target.text.value }); toast(r.message); route(); } catch (err) { toast(err.message); }
       };
       box.querySelector('textarea').focus();
+    });
+    act('[data-tip]', async (btn) => {
+      let n = btn.dataset.amount;
+      if (n === 'other') { n = prompt('Montant du pourboire, en euros (1 à 50) :', '3'); if (n === null) return; }
+      n = Math.round(Number(String(n).replace(',', '.')));
+      if (!(n >= 1 && n <= 50)) { toast('Choisissez un montant entre 1 et 50 €.'); return; }
+      try { const r = await api('POST', `/api/bookings/${btn.dataset.tip}/tip`, { amount: n }); if (r.url) location.href = r.url; else { toast(r.message); route(); } } catch (e) { toast(e.message); }
     });
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
@@ -1099,6 +1127,7 @@
         ${n ? `<div class="lv-next"><p><b>Pour passer ${n.icon} ${esc(n.label)}</b>${n.key === 'or' ? ' : priorité sur les missions' : n.bonus ? ` : +${eur(n.bonus)} de l'heure` : ''}</p>
           <div class="lv-row"><span>🧽 Ménages terminés</span><span>${t.missions} / ${n.missions}</span></div>${bar(t.missions, n.missions)}
           <div class="lv-row"><span>⭐ Note moyenne</span><span>${t.rating ? String(t.rating).replace('.', ',') : '–'} / ${String(n.rating).replace('.', ',')}${ratingOk ? ' ✓' : ''}</span></div>${bar(t.rating || 0, n.rating)}
+          ${n.key === 'platine' ? `<div class="lv-row"><span>📅 Aucune absence non prévenue (6 mois)</span><span>${t.absences ? `${t.absences} ✗` : '✓'}</span></div>` : ''}
           ${t.rated < n.minRatings ? `<p class="small muted" style="margin:6px 0 0">La note compte à partir de ${n.minRatings} avis (vous en avez ${t.rated}).</p>` : ''}</div>`
         : '<p class="small" style="margin:10px 0 0">Vous avez atteint le plus haut niveau. Merci pour votre travail !</p>'}
       </div>`;
@@ -1111,7 +1140,7 @@
     weekStart = w.start;
     const H0 = 7; const H1 = 21; const PX = 34; // une heure = 34 px
     const top = (t) => (Number(t.slice(0, 2)) + Number(t.slice(3, 5)) / 60 - H0) * PX;
-    const dayName = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
+    const dayName = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
     const range = `${new Date(w.days[0].date + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', timeZone: 'UTC' })} – ${new Date(w.days[6].date + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', timeZone: 'UTC' })}`;
     box.innerHTML = `<div class="row"><h2>Ma semaine</h2><span class="row" style="gap:6px"><button class="btn ghost small-btn" data-wk="${w.prev}" aria-label="Semaine précédente">‹</button><button class="btn ghost small-btn" data-wk="" aria-label="Cette semaine">Aujourd'hui</button><button class="btn ghost small-btn" data-wk="${w.next}" aria-label="Semaine suivante">›</button></span></div>
       <p class="small muted" style="margin:4px 0 10px">${range} · ${String(w.hours).replace('.', ',')} h de missions${w.days.some((d) => d.items.some((x) => x.kind === 'offre')) ? ' · <span class="wk-legend offre">proposition à accepter</span>' : ''}</p>
@@ -1217,12 +1246,14 @@
     let d;
     try { d = await api('GET', '/api/worker/documents'); } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
     box.innerHTML = `${box.closest('details') ? '' : '<h2>Mes documents</h2>'}
+      ${d.expired && d.expired.length ? `<p class="msg warn">⚠️ Document expiré : ${d.expired.map(esc).join(' ; ')}. Vous ne recevez plus de nouvelles missions tant que la nouvelle version n'est pas validée.</p>` : ''}
       <p class="small muted">${d.complete ? 'Toutes les pièces obligatoires sont validées. Merci !' : 'Déposez chaque pièce en PDF ou en photo bien nette (5 Mo maximum). Seule l\'équipe Proprigo les voit.'}</p>
       <ul class="plain doc-list">${d.list.map((k) => {
         const st = k.latest ? DOC_STATUS[k.latest.status] : null;
         return `<li><span><b>${esc(k.label)}</b>${k.required ? '' : ' <span class="muted small">(facultatif)</span>'}<br>
-          ${st ? `<span class="pill ${st[1]}">${st[0]}</span>${k.latest.status === 'refuse' && k.latest.note ? ` <span class="small">${esc(k.latest.note)}</span>` : ''} <a class="small" href="/api/documents/${k.latest.id}" target="_blank" rel="noopener">Voir</a>` : '<span class="small muted">Pas encore déposé</span>'}</span>
-          ${k.latest && k.latest.status === 'valide' ? '' : `<label class="btn ghost small-btn">${k.latest ? 'Remplacer' : 'Déposer'}<input type="file" accept="application/pdf,image/jpeg,image/png" data-doc="${k.kind}" hidden></label>`}</li>`;
+          ${st ? `<span class="pill ${st[1]}">${st[0]}</span>${k.latest.status === 'refuse' && k.latest.note ? ` <span class="small">${esc(k.latest.note)}</span>` : ''} <a class="small" href="/api/documents/${k.latest.id}" target="_blank" rel="noopener">Voir</a>` : '<span class="small muted">Pas encore déposé</span>'}
+          ${k.valid_until ? `<br><span class="small ${k.expired ? 'err' : k.soon ? 'warn-text' : 'muted'}">${k.expired ? `⚠️ Expiré depuis le ${dayFr(k.valid_until)}` : `Valable jusqu'au ${dayFr(k.valid_until)}${k.soon ? ` : plus que ${k.days_left} jour${k.days_left > 1 ? 's' : ''}` : ''}`}</span>` : ''}</span>
+          ${k.latest && k.latest.status === 'valide' && !k.soon && !k.expired ? '' : `<span class="doc-up">${k.expiring && !(k.latest && k.latest.status === 'a_verifier') ? `<label class="small">Valable jusqu'au<input type="date" data-exp="${k.kind}"></label>` : ''}<label class="btn ghost small-btn">${k.latest && k.latest.status === 'valide' ? 'Envoyer la nouvelle version' : k.latest ? 'Remplacer' : 'Déposer'}<input type="file" accept="application/pdf,image/jpeg,image/png" data-doc="${k.kind}" hidden></label></span>`}</li>`;
       }).join('')}</ul>`;
     box.querySelectorAll('[data-doc]').forEach((inp) => inp.onchange = async () => {
       const f = inp.files && inp.files[0];
@@ -1234,7 +1265,8 @@
           data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(new Error('Fichier illisible.')); fr.readAsDataURL(f); });
         } else data = await shrink(f);
         toast('Envoi en cours…');
-        const r = await api('POST', '/api/worker/documents', { kind: inp.dataset.doc, data });
+        const exp = box.querySelector(`[data-exp="${inp.dataset.doc}"]`);
+        const r = await api('POST', '/api/worker/documents', { kind: inp.dataset.doc, data, expires_on: exp && exp.value ? exp.value : undefined });
         toast(r.message);
         paintDocs();
       } catch (e) { toast(e.message); }
@@ -1251,6 +1283,7 @@
           <p class="hello-hi">Bonjour ${esc(p.name.split(' ')[0])}</p>
           <h1>${!r.active ? 'Votre candidature' : nToday ? `${nToday} mission${nToday > 1 ? 's' : ''} aujourd'hui` : 'Pas de mission aujourd\'hui'}</h1>
           <p class="hello-sub">${isI ? 'Indépendante' : 'Salariée'} · secteur ${esc(p.cp)}</p>
+          ${langPicker()}
         </div>
         <div class="hello-art" aria-hidden="true">${nToday ? ART.services.grand : ART.empty}</div>
       </section>`;
@@ -1296,7 +1329,8 @@
           <p style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · <b>${esc(b.address)}</b>, ${esc(b.cp)}</p>
           <p class="muted" style="margin:4px 0 0">Client : ${esc(b.client_name.split(' ')[0])}${b.home_name ? ` · ${esc(b.home_name)}` : ''}</p>
           ${['attribuee', 'en_cours'].includes(b.status) ? routeLinks(b) : ''}
-          ${b.instructions ? `<div class="box"><b>Consignes du logement</b><p style="margin:4px 0 0;white-space:pre-line">${esc(b.instructions)}</p></div>` : ''}
+          ${b.team_notes && b.team_notes.length ? `<div class="box team-note"><b>📝 À savoir (équipe Proprigo)</b>${b.team_notes.map((n) => `<p class="instructions" style="margin:4px 0 0;white-space:pre-line">${esc(n.text)}</p>`).join('')}</div>` : ''}
+          ${b.instructions ? `<div class="box"><b>Consignes du logement</b><p class="instructions" style="margin:4px 0 0;white-space:pre-line">${esc(b.instructions)}</p></div>` : ''}
           ${b.kit ? '<p><span class="pill warn">Apporter le kit matériel et produits</span></p>' : ''}
           ${b.checklist.length ? `${shine(b)}<fieldset class="box"><legend>À faire</legend>${b.checklist.map((t, i) => `<label class="check"><input type="checkbox" data-check="${b.id}" data-index="${i}" ${t.done ? 'checked' : ''}> ${esc(t.task)}</label>`).join('')}</fieldset>` : ''}
           ${b.photo_consent ? `<div class="box stack"><b>Photos avant / après</b>
@@ -1323,6 +1357,13 @@
         <p class="small muted next-hint"><button type="button" class="linkish" data-act="start" data-id="${b.id}">Commencer directement le ménage</button></p></div>`;
       return `<div class="next-step"><p class="step-done">✓ Arrivée chez le client</p><button class="btn primary full" data-act="start" data-id="${b.id}">▶ Commencer le ménage</button></div>`;
     };
+    // itinéraire de la journée : toutes les adresses du jour dans l'ordre, depuis l'endroit où elle se trouve
+    const dayRoute = (list) => {
+      const stops = list.filter((b) => ['attribuee', 'en_cours'].includes(b.status) && b.date === tday).sort((x, y) => x.time.localeCompare(y.time));
+      if (stops.length < 2) return '';
+      const url = `https://www.google.com/maps/dir//${stops.map((b) => encodeURIComponent(`${b.address}, ${b.cp}, France`)).join('/')}`;
+      return `<a class="btn ghost day-route" href="${url}" target="_blank" rel="noopener">🗺️ Itinéraire de la journée <span class="small muted">(${stops.length} adresses, dans l'ordre)</span></a>`;
+    };
     const routeLinks = (b) => { const dest = encodeURIComponent(`${b.address}, ${b.cp}, France`); return `<div class="route-links"><a href="https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=transit" target="_blank" rel="noopener">Itinéraire Google Maps</a><a href="https://citymapper.com/directions?endaddress=${dest}" target="_blank" rel="noopener">Citymapper</a></div>`; };
     $app.innerHTML = `${head}
       ${p.absent ? '<p class="card"><span class="pill warn">Absente</span> Vos missions sont confiées à d\'autres intervenantes.</p>' : ''}
@@ -1334,7 +1375,7 @@
           <p class="small muted">L'adresse exacte s'affiche après acceptation.</p>
           <div class="row" style="justify-content:flex-start"><button class="btn ghost" data-act="refuse" data-id="${b.id}">✖️ Refuser</button><button class="btn primary" data-act="accept" data-id="${b.id}">✅ Accepter</button></div>
         </article>`).join('') : '<p class="card muted">Aucune proposition pour le moment.</p>'}` : ''}
-      ${today.length ? `<h2 style="margin-top:20px">Aujourd'hui</h2>${today.map(card).join('')}` : '<p class="card muted" style="margin-top:20px">Pas de mission aujourd\'hui.</p>'}
+      ${today.length ? `<h2 style="margin-top:20px">Aujourd'hui</h2>${dayRoute(today)}${today.map(card).join('')}` : '<p class="card muted" style="margin-top:20px">Pas de mission aujourd\'hui.</p>'}
       ${later.length ? `<h2 style="margin-top:20px">À venir</h2>${(() => { const one = (b) => `<details class="card later"><summary><b>${dateFr(b.date)} ${esc(b.time)}</b> · ${esc(label(b))} · ${esc(b.cp)} ${pill(b.status)}</summary>${card(b)}</details>`; return later.slice(0, 5).map(one).join('') + (later.length > 5 ? `<details class="more"><summary>Voir les ${later.length - 5} autres missions</summary>${later.slice(5).map(one).join('')}</details>` : ''); })()}` : ''}
       <section class="card" id="week"><h2>Ma semaine</h2><p class="muted small">Chargement…</p></section>
       <section class="card" id="pushBox"></section>
@@ -1382,9 +1423,9 @@
       const el = document.getElementById('gains');
       if (!el) return;
       const val = (x) => (g.statut === 'I' ? eur(x.eur) : `${String(x.h).replace('.', ',')} h`);
-      const mname = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', timeZone: 'UTC' });
+      const mname = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', timeZone: 'UTC' });
       const max = Math.max(1, ...g.history.map((h) => h.h));
-      el.innerHTML = `${levelCard(g)}<h2>Mes gains</h2>
+      el.innerHTML = `${levelCard(g)}<h2>Mes gains</h2>${g.tipsMonth ? `<p class="tip-done" style="margin:0 0 10px">💝 ${eur(g.tipsMonth)} de pourboires ce mois-ci</p>` : ''}
         <div class="gain-grid">
           <div class="gain main"><span>Ce mois-ci</span><b>${val(g.month)}</b><small>${g.month.n} ménage${g.month.n > 1 ? 's' : ''} terminé${g.month.n > 1 ? 's' : ''}</small></div>
           <div class="gain"><span>Mois dernier</span><b>${val(g.lastMonth)}</b><small>${g.lastMonth.n} ménage${g.lastMonth.n > 1 ? 's' : ''}</small></div>
@@ -1393,8 +1434,8 @@
         ${g.history.length ? `<div class="gain-bars" aria-label="Heures des derniers mois">${g.history.slice().reverse().map((h) => `<div><i style="height:${Math.max(6, Math.round((h.h / max) * 70))}px"></i><span>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'short', timeZone: 'UTC' })}</span></div>`).join('')}</div>` : ''}
         <p class="small muted" style="margin:8px 0 0">${g.statut === 'I' ? `Calculé avec votre tarif de ${eur(g.rate)}/h, avant vos cotisations.` : 'Heures de ménage réalisées. Le salaire figure sur votre fiche de paie.'}</p>
         ${g.history.length ? `<details class="gain-history"><summary>Historique mois par mois</summary><div class="table-wrap"><table class="stats" style="min-width:0">
-          <thead><tr><th>Mois</th><th class="n">Ménages</th><th class="n">Heures</th>${g.statut === 'I' ? '<th class="n">Gagné</th><th class="n">Versé</th>' : ''}</tr></thead>
-          <tbody>${g.history.map((h) => `<tr><td>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</td><td class="n">${h.n}</td><td class="n">${String(h.h).replace('.', ',')}</td>${g.statut === 'I' ? `<td class="n">${eur(h.eur)}</td><td class="n">${h.paid === null ? '–' : eur(h.paid)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+          <thead><tr><th>Mois</th><th class="n">Ménages</th><th class="n">Heures</th>${g.statut === 'I' ? '<th class="n">Gagné</th><th class="n">Versé</th>' : ''}<th></th></tr></thead>
+          <tbody>${g.history.map((h) => `<tr><td>${new Date(h.month + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' })}</td><td class="n">${h.n}</td><td class="n">${String(h.h).replace('.', ',')}</td>${g.statut === 'I' ? `<td class="n">${eur(h.eur)}</td><td class="n">${h.paid === null ? '–' : eur(h.paid)}</td>` : ''}<td><a class="small" href="/api/worker/statement?month=${h.month}" target="_blank" rel="noopener">📄 Relevé</a></td></tr>`).join('')}</tbody></table></div>
           ${g.statut === 'I' ? '<p class="small muted">« Versé » : virements reçus ce mois-là (ils peuvent porter sur des ménages du mois précédent).</p>' : ''}</details>` : ''}
         ${g.statut === 'I' ? `<div class="pay-box">
           <div><span>En attente de versement</span><b>${eur(g.pending)}</b><small>Versé chaque semaine par virement.</small></div>
@@ -1513,7 +1554,7 @@
         <thead><tr><th>N°</th><th>Prestation</th><th>Date</th><th>Code postal</th><th>Intervenante</th><th>État</th><th class="n">Prix TTC</th><th>Paiement</th><th></th></tr></thead>
         <tbody>${r.bookings.map((b) => `<tr class="bkrow"><td data-l="N°"><b>n° ${b.id}</b></td><td data-l="Prestation">${esc(label(b))}${b.kit ? ' <span class="pill">matériel</span>' : ''}</td><td data-l="Date">${dateFr(b.date)} ${esc(b.time)}</td><td data-l="Code postal">${esc(b.cp)}</td>
           <td data-l="Intervenante">${b.worker_name ? esc(b.worker_name) : '<span class="muted">–</span>'}</td><td data-l="État">${pill(b.status)}${b.rating ? ' ' + '★'.repeat(b.rating) : ''}</td><td class="n" data-l="Prix TTC">${eur(b.total)}</td><td class="small" data-l="Paiement">${PAY[b.payment_status] || ''}</td>
-          <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) && b.paid ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${owner && b.payment_status === 'a_rembourser' ? `<button class="btn blue" data-srefund="${b.id}" data-amount="${eur(b.refund_amount ?? b.total)}">Rembourser ${eur(b.refund_amount ?? b.total)}</button><button class="btn ghost" data-refund="${b.id}">Déjà remboursé dans Stripe</button>` : ''}<button class="btn ghost" data-cfile="${b.client_id}">Fiche client</button><button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
+          <td class="acts">${['en_attente', 'proposee', 'attribuee'].includes(b.status) && b.paid ? `<button class="btn ghost" data-pick="${b.id}">Choisir l'intervenante</button>` : ''}${b.worker_id && ['attribuee', 'en_cours'].includes(b.status) && b.date <= todayParis() ? `<button class="btn ghost warn-ghost" data-noshow="${b.id}">Absence non prévenue</button>` : ''}${owner && b.payment_status === 'a_rembourser' ? `<button class="btn blue" data-srefund="${b.id}" data-amount="${eur(b.refund_amount ?? b.total)}">Rembourser ${eur(b.refund_amount ?? b.total)}</button><button class="btn ghost" data-refund="${b.id}">Déjà remboursé dans Stripe</button>` : ''}<button class="btn ghost" data-cfile="${b.client_id}">Fiche client</button><button class="btn ghost" data-thread="${b.id}">Messages${b.messages ? ` (${b.messages})` : ''}</button></td></tr><tr class="threadrow"><td colspan="9" style="padding:0;border:0"><div id="thread-${b.id}"></div></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Aucune réservation.</td></tr>'}</tbody>
       </table></div></section>
       ${r.incidents.length ? `<section class="card" id="sec-incidents" data-tab="todo"><h2>Problèmes signalés par les clients</h2>${r.incidents.map((x) => `
         <div class="row box" style="margin-top:8px"><div><b>Réservation n° ${x.booking_id}</b> · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}<br>${esc(x.text)}</div>
@@ -1621,8 +1662,9 @@
       let d;
       try { d = await api('GET', kind === 'client' ? `/api/admin/clients/${id}` : `/api/admin/workers/${id}/file`); } catch (e) { dlg.innerHTML = `<p class="err">${esc(e.message)}</p><button class="btn ghost" data-close>Fermer</button>`; dlg.querySelector('[data-close]').onclick = () => dlg.close(); return; }
       const notes = `<h3>Notes de l'équipe</h3>
-        <form class="note-form"><textarea name="text" rows="2" maxlength="1000" placeholder="Ex. préfère le matin, code d'accès changé…" aria-label="Nouvelle note"></textarea><button class="btn blue">Ajouter</button></form>
-        <ul class="plain small">${d.notes.map((n) => `<li><span>${esc(n.text)}<br><span class="muted">${esc(n.author)} · ${new Date(n.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span></span></li>`).join('') || '<li class="muted">Aucune note.</li>'}</ul>`;
+        <form class="note-form"><textarea name="text" rows="2" maxlength="1000" placeholder="Ex. préfère le matin, code d'accès changé…" aria-label="Nouvelle note"></textarea>
+          ${kind === 'client' ? '<label class="check small"><input type="checkbox" name="share"> Montrer aussi à l\'intervenante de ses ménages (jamais au client)</label>' : ''}<button class="btn blue">Ajouter</button></form>
+        <ul class="plain small">${d.notes.map((n) => `<li><span>${esc(n.text)}<br><span class="muted">${esc(n.author)} · ${new Date(n.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span>${kind === 'client' ? ` · <button type="button" class="linkish small" data-nshare="${n.id}" data-on="${n.share ? 0 : 1}">${n.share ? '👁️ Visible par l\'intervenante · masquer' : 'Équipe seulement · montrer à l\'intervenante'}</button>` : ''}</span></li>`).join('') || '<li class="muted">Aucune note.</li>'}</ul>`;
       if (kind === 'client') {
         const c = d.client;
         dlg.innerHTML = `<div class="dlg-head"><h2>${esc(c.name)}</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
@@ -1639,12 +1681,12 @@
           <h3>Prochaines missions</h3><ul class="plain small">${d.upcoming.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}</span></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>
           ${d.rejected ? `<p class="msg warn">Candidature refusée le ${new Date(d.rejected.at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${d.rejected.reason ? ` : ${esc(d.rejected.reason)}` : ''}.</p>` : ''}
           ${d.documents ? `<h3>Pièces justificatives</h3>
-            <p class="small ${d.documents.complete ? '' : 'muted'}">${d.documents.complete ? '<span class="pill ok">Toutes les pièces obligatoires sont validées</span>' : `Manque encore : ${d.documents.missing.map(esc).join(' ; ')}.`}</p>
+            <p class="small ${d.documents.complete ? '' : 'muted'}">${d.documents.complete ? '<span class="pill ok">Toutes les pièces obligatoires sont validées</span>' : (d.documents.missing.length ? `Manque encore : ${d.documents.missing.map(esc).join(' ; ')}.` : '')}${d.documents.expired && d.documents.expired.length ? ` <span class="pill warn">Expiré : ${d.documents.expired.map(esc).join(' ; ')} · plus de nouvelles missions</span>` : ''}</p>
             <ul class="plain small doc-list">${d.documents.list.map((k) => `<li><span><b>${esc(k.label)}</b>${k.required ? '' : ' (facultatif)'}<br>${k.latest
-              ? `<span class="pill ${DOC_STATUS[k.latest.status][1]}">${DOC_STATUS[k.latest.status][0]}</span> déposé le ${new Date(k.latest.uploaded_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${k.latest.note ? ` · ${esc(k.latest.note)}` : ''}`
+              ? `<span class="pill ${DOC_STATUS[k.latest.status][1]}">${DOC_STATUS[k.latest.status][0]}</span> déposé le ${new Date(k.latest.uploaded_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${k.latest.note ? ` · ${esc(k.latest.note)}` : ''}${k.valid_until ? `<br><span class="${k.expired ? 'err' : k.soon ? 'warn-text' : 'muted'}">${k.expired ? '⚠️ Expiré' : 'Valable'} jusqu'au ${dayFr(k.valid_until)}</span>` : ''}`
               : '<span class="muted">Pas encore déposé</span>'}</span>
               ${k.latest ? `<span class="row" style="gap:6px;flex-wrap:wrap"><a class="btn ghost small-btn" href="/api/documents/${k.latest.id}" target="_blank" rel="noopener">Ouvrir</a>
-                ${k.latest.status !== 'valide' ? `<button class="btn blue small-btn" data-docok="${k.latest.id}">Valider</button>` : ''}${k.latest.status !== 'refuse' ? `<button class="btn ghost small-btn" data-docko="${k.latest.id}">Refuser</button>` : ''}</span>` : ''}</li>`).join('')}</ul>
+                ${k.latest.status !== 'valide' ? `${k.expiring ? `<label class="small">Valable jusqu'au<input type="date" data-docexp="${k.latest.id}" value="${esc(k.latest.expires_on || '')}"></label>` : ''}<button class="btn blue small-btn" data-docok="${k.latest.id}">Valider</button>` : ''}${k.latest.status !== 'refuse' ? `<button class="btn ghost small-btn" data-docko="${k.latest.id}">Refuser</button>` : ''}</span>` : ''}</li>`).join('')}</ul>
             <form class="stack" id="docRefuse" hidden><label>Raison du refus (envoyée à l'intervenante)<input name="note" maxlength="300" placeholder="Ex. photo floue, attestation de plus de 6 mois" required></label>
               <div class="row" style="justify-content:flex-start"><button class="btn blue">Refuser ce document</button><button type="button" class="btn ghost" data-cancelref>Annuler</button></div></form>` : ''}
           ${d.documents && !d.rejected && w.step < w.steps.length - 1 ? `<details class="card" style="margin-top:12px;padding:14px"><summary>Refuser la candidature</summary>
@@ -1655,7 +1697,8 @@
       }
       dlg.querySelector('[data-close]').onclick = () => dlg.close();
       dlg.querySelectorAll('[data-docok]').forEach((b) => b.onclick = async () => {
-        try { const r2 = await api('POST', `/api/admin/documents/${b.dataset.docok}/review`, { decision: 'valide' }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
+        const exp = dlg.querySelector(`[data-docexp="${b.dataset.docok}"]`);
+        try { const r2 = await api('POST', `/api/admin/documents/${b.dataset.docok}/review`, { decision: 'valide', expires_on: exp && exp.value ? exp.value : undefined }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
       });
       const refForm = dlg.querySelector('#docRefuse');
       dlg.querySelectorAll('[data-docko]').forEach((b) => b.onclick = () => { refForm.hidden = false; refForm.dataset.doc = b.dataset.docko; refForm.note.focus(); });
@@ -1666,6 +1709,9 @@
           try { const r2 = await api('POST', `/api/admin/documents/${refForm.dataset.doc}/review`, { decision: 'refuse', note: refForm.note.value }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
         };
       }
+      dlg.querySelectorAll('[data-nshare]').forEach((b) => b.onclick = async () => {
+        try { const r2 = await api('POST', `/api/admin/notes/${b.dataset.nshare}/share`, { share: b.dataset.on === '1' }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
+      });
       const rej = dlg.querySelector('#rejectForm');
       if (rej) rej.onsubmit = async (e) => {
         e.preventDefault();
@@ -1673,7 +1719,7 @@
       };
       dlg.querySelector('.note-form').onsubmit = async (e) => {
         e.preventDefault();
-        try { await api('POST', '/api/admin/notes', { kind: kind === 'client' ? 'client' : 'worker', target_id: id, text: e.target.text.value }); toast('Note enregistrée.'); openFile(kind, id); } catch (err) { toast(err.message); }
+        try { const r2 = await api('POST', '/api/admin/notes', { kind: kind === 'client' ? 'client' : 'worker', target_id: id, text: e.target.text.value, share: Boolean(e.target.share && e.target.share.checked) }); toast(r2.message); openFile(kind, id); } catch (err) { toast(err.message); }
       };
     };
     $app.querySelectorAll('[data-cfile]').forEach((b) => b.onclick = () => openFile('client', Number(b.dataset.cfile)));
@@ -1698,10 +1744,22 @@
       const d = await api('GET', '/api/admin/payouts').catch(() => null);
       if (!d || !pb) return;
       pb.innerHTML = `<h2>À verser aux indépendantes</h2>
-        <p class="small muted">Ménages terminés, par semaine, au tarif de chaque indépendante, bonus qualité compris. Faites le virement depuis votre banque, puis marquez-le ici : l'intervenante est prévenue par e-mail.</p>
-        ${d.owed.length ? `<p style="margin:0 0 6px"><b>Total à verser : ${eur(d.total)}</b></p><ul class="plain">${d.owed.map((o) => `<li><span><b>${esc(o.name)}</b> · semaine du ${dateFr(o.week_start)}${o.weekOver ? '' : ' <span class="pill">en cours</span>'}<br><span class="small muted">${String(o.hours).replace('.', ',')} h × ${eur(o.rate)}${o.bonus_rate ? ` + bonus ${eur(o.bonus_rate)}/h` : ''} = <b>${eur(o.amount)}</b></span></span>
+        <p class="small muted">Ménages terminés, par semaine, au tarif de chaque indépendante, bonus Platine et pourboires compris. Faites le virement depuis votre banque, puis marquez-le ici : l'intervenante est prévenue par e-mail.</p>
+        ${d.owed.some((o) => o.weekOver && o.iban) ? `<div class="row" style="justify-content:flex-start;gap:8px;flex-wrap:wrap;margin:0 0 10px">
+          <a class="btn blue" href="/api/admin/payouts/sepa.xml" download>⬇️ Fichier de virements groupés (SEPA)</a>
+          <button class="btn ghost" id="sepaDone">J'ai fait le virement : tout marquer versé</button></div>
+          <p class="small muted" style="margin:0 0 10px">Importez le fichier dans votre banque en ligne (rubrique « virements groupés » ou « remise de virements »), validez-le, puis marquez les versements comme faits. Seules les semaines terminées avec un IBAN sont dans le fichier.</p>` : ''}
+        ${d.owed.length ? `<p style="margin:0 0 6px"><b>Total à verser : ${eur(d.total)}</b></p><ul class="plain">${d.owed.map((o) => `<li><span><b>${esc(o.name)}</b> ${o.iban ? `<span class="small muted">${esc(o.iban)}</span>` : '<span class="pill warn">pas d\'IBAN</span>'}${o.tips ? ` <span class="small">💝 dont ${eur(o.tips)} de pourboires</span>` : ''} · semaine du ${dateFr(o.week_start)}${o.weekOver ? '' : ' <span class="pill">en cours</span>'}<br><span class="small muted">${String(o.hours).replace('.', ',')} h × ${eur(o.rate)}${o.bonus_rate ? ` + bonus ${eur(o.bonus_rate)}/h` : ''} = <b>${eur(o.amount)}</b></span></span>
           <form class="pay-form" data-w="${o.worker_id}" data-week="${o.week_start}"><input name="reference" maxlength="60" placeholder="Réf. du virement" aria-label="Référence du virement"><button class="btn blue small-btn">Marquer versé</button></form></li>`).join('')}</ul>` : '<p class="msg ok">Rien à verser pour le moment.</p>'}
         ${d.history.length ? `<h3>Derniers versements</h3><ul class="plain small">${d.history.map((h) => `<li><span>${esc(h.name)} · semaine du ${dateFr(h.week_start)}${h.reference ? ` · ${esc(h.reference)}` : ''}</span><b>${eur(h.amount)}</b></li>`).join('')}</ul>` : ''}`;
+      const sd = document.getElementById('sepaDone');
+      if (sd) sd.onclick = async () => {
+        const ready = d.owed.filter((o) => o.weekOver && o.iban && o.amount > 0);
+        if (!confirm(`Marquer ${ready.length} versement(s) comme faits, pour ${eur(ready.reduce((t, o) => t + o.amount, 0))} ? Chaque intervenante reçoit un e-mail.`)) return;
+        const ref = `Virement groupé du ${new Date().toLocaleDateString('fr-FR')}`;
+        for (const o of ready) { try { await api('POST', '/api/admin/payouts', { worker_id: o.worker_id, week_start: o.week_start, reference: ref }); } catch (err) { toast(err.message); } }
+        toast('Versements marqués comme faits.'); paintPayouts();
+      };
       pb.querySelectorAll('.pay-form').forEach((f) => f.onsubmit = async (e) => {
         e.preventDefault();
         try { const r = await api('POST', '/api/admin/payouts', { worker_id: Number(f.dataset.w), week_start: f.dataset.week, reference: f.reference.value }); toast(r.message); paintPayouts(); } catch (err) { toast(err.message); }
@@ -1799,8 +1857,9 @@
         <div class="row" style="justify-content:flex-start;align-items:end;gap:10px;flex-wrap:wrap"><label>Mois<input type="month" id="payMonth" value="${esc(d.month)}"></label>
           <a class="btn ghost" href="/api/admin/payments.csv?month=${esc(d.month)}" download>Paiements (CSV)</a>
           <a class="btn ghost" href="/api/admin/invoices.csv?month=${esc(d.month)}" download>Factures et avoirs (CSV)</a>
-          <a class="btn ghost" href="/api/admin/invoices/print?month=${esc(d.month)}" target="_blank" rel="noopener">Toutes les factures du mois (PDF)</a></div>
-        <p class="small muted" style="margin:6px 0 0">Pour le comptable : le tableau des factures et avoirs, et toutes les pièces du mois sur une page à enregistrer en un seul PDF.</p>
+          <a class="btn ghost" href="/api/admin/invoices/print?month=${esc(d.month)}" target="_blank" rel="noopener">Toutes les factures du mois (PDF)</a>
+          <a class="btn ghost" href="/api/admin/payroll.csv?month=${esc(d.month)}" download>Paie des salariées (CSV)</a></div>
+        <p class="small muted" style="margin:6px 0 0">Pour le comptable : le tableau des factures et avoirs, toutes les pièces du mois sur une page à enregistrer en un seul PDF, et le tableau de paie des salariées (heures, dimanches et fériés, prime Platine, pourboires, absences, congés).</p>
         <div class="kpis"><div class="kpi"><span>Encaissé par carte</span><b>${cents(d.totals.encaisse)}</b></div><div class="kpi"><span>Crédit Proprigo utilisé</span><b>${cents(d.totals.credit)}</b></div>
           <div class="kpi"><span>Remboursé</span><b>${cents(d.totals.rembourse)}</b></div><div class="kpi"><span>Net encaissé</span><b>${cents(d.totals.net)}</b></div><div class="kpi"><span>Dont TVA (factures − avoirs)</span><b>${cents(d.totals.tva)}</b></div></div>
         ${d.rows.length ? `<div class="table-wrap"><table class="stats"><thead><tr><th>Date</th><th>Type</th><th>Pièce</th><th>Client</th><th class="n">Réserv.</th><th class="n">Montant</th><th>Détail</th></tr></thead><tbody>
@@ -1839,7 +1898,7 @@
       box.innerHTML = `<h2>Niveaux des intervenantes</h2>
         <p class="small muted">🔵 Bleu au départ. On monte avec le nombre de ménages terminés et la note moyenne des avis (comptée à partir de ${d.minRatings} avis, la plus mauvaise note étant mise de côté : un client difficile ne fait pas perdre un niveau). Avantages : badge visible des clients, priorité sur les missions à distance comparable (${d.priorityKm} km d'avance pour l'Or, ${d.priorityKm * 2} km pour le Platine), et le bonus ci-dessous.</p>
         <p class="small muted">🔵 Bleu : ${d.counts.bleu} intervenante${d.counts.bleu > 1 ? 's' : ''}</p>
-        <form id="tierForm" class="stack">${row('or', '🥇', 'Or', 'Priorité sur les missions.')}${row('platine', '💎', 'Platine', "Priorité sur les missions et bonus à chaque heure. Pour une salariée, le bonus est à ajouter sur sa fiche de paie.")}
+        <form id="tierForm" class="stack">${row('or', '🥇', 'Or', 'Priorité sur les missions.')}${row('platine', '💎', 'Platine', "Priorité sur les missions et bonus à chaque heure. Exige aussi aucune absence non prévenue sur les 6 derniers mois. Pour une salariée, le bonus est à ajouter sur sa fiche de paie.")}
           <button class="btn blue">Enregistrer les niveaux</button></form>`;
       document.getElementById('tierForm').onsubmit = async (e) => {
         e.preventDefault();
@@ -2060,6 +2119,11 @@
       const box = document.getElementById(`thread-${btn.dataset.thread}`);
       if (box.innerHTML) { box.innerHTML = ''; return; }
       openThread(box, btn.dataset.thread).catch((e) => toast(e.message));
+    });
+    $app.querySelectorAll('[data-noshow]').forEach((b) => b.onclick = async () => {
+      const note = prompt("Absence non prévenue de l'intervenante : la mission repart à attribuer et l'absence compte pour son niveau (pas de Platine pendant 6 mois).\n\nNote interne (facultatif) :", '');
+      if (note === null) return;
+      try { const r2 = await api('POST', `/api/admin/bookings/${b.dataset.noshow}/no-show`, { note }); toast(r2.message); route(); } catch (e) { toast(e.message); }
     });
     // Liste de choix directe : intervenantes libres, de la plus proche à la plus éloignée.
     async function showPicker(id, host) {
@@ -2448,6 +2512,7 @@
       ${me.role === 'client' && sapOn() ? `<section class="card stack" data-o="7"><h2>Ne payer que 50 % ?</h2>
         <p class="small muted">Avec l'avance immédiate de l'URSSAF, le crédit d'impôt est déduit directement : vous ne payez que la moitié du ménage à domicile. Proprigo prépare ce service.</p>
         <label class="check"><input type="checkbox" id="wantAvance" ${me.wants_avance ? 'checked' : ''}> Prévenez-moi dès que c'est disponible</label></section>` : ''}
+      ${me.role === 'intervenante' ? `<section class="card stack" data-o="3" id="ibanBox"><h2>🏦 Mon compte bancaire</h2><p class="small muted">Chargement…</p></section>` : ''}
       ${me.role === 'intervenante' ? `<section class="card stack" data-o="2">
         <h2>Ma présentation aux clients</h2>
         <p class="small muted">Vos clients voient votre photo, votre prénom et l'initiale de votre nom, votre nombre de ménages, votre note et ce texte. Jamais votre nom de famille complet ni votre téléphone.</p>
@@ -2526,6 +2591,15 @@
     }
     const rd = document.getElementById('redeem2');
     if (rd) rd.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/gifts/redeem', { code: rd.code.value }); toast(r.message); document.getElementById('myCredit').textContent = eur(r.credit); rd.reset(); } catch (err) { toast(err.message); } };
+    const ibanBox = document.getElementById('ibanBox');
+    if (ibanBox) api('GET', '/api/worker/iban').then((ib) => {
+      ibanBox.innerHTML = `<h2>🏦 Mon compte bancaire</h2>
+        <p class="small muted">Pour recevoir vos versements. ${ib.iban ? `Compte enregistré : <b data-notr>${esc(ib.iban)}</b>${ib.name ? ` (${esc(ib.name)})` : ''}.` : 'Aucun compte enregistré.'} L'équipe est prévenue à chaque changement.</p>
+        <form id="ibanForm" class="stack"><label>IBAN<input name="iban" autocomplete="off" inputmode="text" placeholder="FR76 …" required></label>
+          <label>Titulaire du compte<input name="name" maxlength="70" value="${esc(ib.name || me.name)}" required></label>
+          <button class="btn blue">${ib.iban ? 'Changer de compte' : 'Enregistrer mon IBAN'}</button></form>`;
+      document.getElementById('ibanForm').onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/worker/iban', formData(e.target)); toast(r.message); route(); } catch (err) { toast(err.message); } };
+    }).catch(() => {});
     const avIn = document.getElementById('avIn');
     if (avIn) avIn.onchange = async () => {
       const f = avIn.files[0]; if (!f) return;
@@ -2586,6 +2660,17 @@
       <p>Si la réponse ne vous satisfait pas, vous pouvez saisir gratuitement le médiateur de la consommation : [NOM ET SITE DU MÉDIATEUR].</p>
       <h2>Nous contacter</h2><p>Le plus rapide : la messagerie de votre réservation. Sinon, par e-mail : <a href="mailto:contact@proprigo.fr">contact@proprigo.fr</a>.</p>`);
   };
+  // choix de la langue de l'espace intervenante
+  const langPicker = () => window.PROPRIGO_I18N ? `<label class="lang-pick"><span>🌐 Langue</span><select id="langPick" data-notr>${window.PROPRIGO_I18N.LANGS.map(([k, n]) => `<option value="${k}" ${(me && me.lang || 'fr') === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>` : '';
+  document.addEventListener('change', async (e) => {
+    if (!e.target || e.target.id !== 'langPick') return;
+    const lang = e.target.value;
+    try { await api('POST', '/api/me/lang', { lang }); me.lang = lang; applyLang(); route(); } catch (err) { toast(err.message); }
+  });
+  function applyLang() {
+    if (!window.PROPRIGO_I18N) return;
+    window.PROPRIGO_I18N.set(me && me.role === 'intervenante' ? (me.lang || 'fr') : 'fr');
+  }
   // aide des intervenantes : leurs questions à elles, pas celles des clients
   function aideIntervenante() {
     const faq = [

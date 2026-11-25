@@ -55,7 +55,8 @@ const cfgCache = new WeakMap();
 const cfgFor = (db, key) => { if (!cfgCache.has(key)) cfgCache.set(key, tiers.settings(db)); return cfgCache.get(key); };
 function candidates(db, booking, { withRefused = false } = {}) {
   const refused = new Set(db.prepare("SELECT worker_id FROM offers WHERE booking_id = ? AND state = 'refused'").all(booking.id).map((r) => r.worker_id));
-  const workers = db.prepare('SELECT w.*, u.name FROM workers w JOIN users u ON u.id = w.user_id WHERE w.absent = 0').all();
+  // pas de nouvelle mission si une pièce obligatoire a expiré (titre de séjour, attestation URSSAF…)
+  const workers = db.prepare('SELECT w.*, u.name FROM workers w JOIN users u ON u.id = w.user_id WHERE w.absent = 0 AND COALESCE(w.docs_expired, 0) = 0').all();
   // missions du jour : confirmées, et aussi celles qu'on lui propose déjà (une indépendante ne peut pas en accepter deux en même temps)
   const sameDay = db.prepare(`SELECT time, hours, cp FROM bookings WHERE date = ? AND id != ? AND (
       (worker_id = ? AND status IN ('attribuee','en_cours'))
@@ -110,6 +111,7 @@ function assign(db, bookingId) {
 /** Intervenantes préférées, dans l'ordre : celle de la récurrence, celle du logement, la préférée du client. */
 function preferredIds(db, b) {
   const ids = [];
+  if (b.want_worker_id) ids.push(b.want_worker_id); // demandée par le client pour ce ménage
   const series = b.series_id ? db.prepare('SELECT worker_id FROM series WHERE id = ?').get(b.series_id) : null;
   if (series && series.worker_id) ids.push(series.worker_id);
   const home = b.home_id ? db.prepare('SELECT preferred_worker_id FROM homes WHERE id = ?').get(b.home_id) : null;

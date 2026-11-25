@@ -47,7 +47,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const addCol = (table, col, type) => { if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); };
     for (const [c, t] of [['eta_at', 'TEXT'], ['finished_at', 'TEXT'], ['review_public', 'INTEGER NOT NULL DEFAULT 0'], ['review_hidden', 'INTEGER NOT NULL DEFAULT 0'],
       ['guarantee_at', 'TEXT'], ['guarantee_text', 'TEXT'], ['guarantee_status', 'TEXT'], ['guarantee_of', 'INTEGER'], ['guarantee_visit_id', 'INTEGER']]) addCol('bookings', c, t);
-    for (const [c, t] of [['marketing_optout', 'INTEGER NOT NULL DEFAULT 0'], ['last_nudge_at', 'TEXT'], ['wants_avance', 'INTEGER NOT NULL DEFAULT 0']]) addCol('users', c, t);
+    for (const [c, t] of [['marketing_optout', 'INTEGER NOT NULL DEFAULT 0'], ['last_nudge_at', 'TEXT'], ['wants_avance', 'INTEGER NOT NULL DEFAULT 0'], ['lang', 'TEXT']]) addCol('users', c, t);
   }
   // Compte responsable : ADMIN_EMAIL donne sa vraie adresse (connexion + alertes : nouvelles réservations, contestations, pannes).
   // L'ancien compte « admin@proprigo.test » prend cette adresse ; sans aucun responsable, il est créé.
@@ -178,7 +178,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!t) return null;
     const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(t);
     if (!s || s.expires < Date.now()) return null;
-    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance FROM users WHERE id = ?').get(s.user_id) || null;
+    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance, lang FROM users WHERE id = ?').get(s.user_id) || null;
   };
   const need = (user, role) => {
     if (!user) throw new HttpError(401, 'Connectez-vous pour continuer.');
@@ -197,6 +197,10 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   };
   // ce que voit un client : prénom et initiale du nom, jamais le nom complet
   const displayName = (name) => { const [first, ...rest] = String(name || '').trim().split(/\s+/); const last = rest.join(' '); return last ? `${first} ${last[0].toUpperCase()}.` : first; };
+  // intervenante demandée par le client au moment de réserver
+  if (!db.prepare('PRAGMA table_info(bookings)').all().some((x) => x.name === 'want_worker_id')) db.exec('ALTER TABLE bookings ADD COLUMN want_worker_id INTEGER');
+  // le client ne peut demander qu'une intervenante déjà venue chez lui
+  const pastWorker = (clientId, wid) => Boolean(wid && db.prepare("SELECT 1 FROM bookings WHERE client_id = ? AND worker_id = ? AND status = 'terminee'").get(clientId, Number(wid)));
   // photo de profil des intervenantes
   for (const [c, t] of [['avatar', 'TEXT'], ['avatar_status', 'TEXT'], ['avatar_at', 'TEXT']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
   const hasAvatar = (wid) => Boolean(wid && db.prepare("SELECT 1 FROM workers WHERE user_id = ? AND avatar IS NOT NULL AND avatar_status = 'valide'").get(wid));
@@ -207,7 +211,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const inc = db.prepare('SELECT COUNT(*) AS n FROM incidents WHERE booking_id = ? AND resolved = 0').get(b.id).n;
     let list = [];
     try { list = JSON.parse(b.checklist || '[]'); } catch { list = []; }
-    return { ...b, worker_name: w ? w.name : null, worker_display: w ? displayName(w.name) : null, worker_photo: hasAvatar(b.worker_id), checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
+    const tipRow = b.status === 'terminee' ? db.prepare("SELECT amount_cents FROM tips WHERE booking_id = ? AND status = 'paye'").get(b.id) : null;
+    return { ...b, tip: tipRow ? tipRow.amount_cents / 100 : null, worker_name: w ? w.name : null, worker_display: w ? displayName(w.name) : null, worker_photo: hasAvatar(b.worker_id), checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
   };
   const nowParisHM = () => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false }).format(now());
   const hoursBefore = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.parse(`${pricing.todayParis(now())}T${nowParisHM()}:00`)) / 36e5;
@@ -572,7 +577,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     let preferred = null;
     if (user && user.role === 'client') {
       const homeId = Number(query.get('home_id')) || null;
-      const pid = engine.preferredIds(db, { client_id: user.id, home_id: homeId, series_id: null })[0];
+      const asked = pastWorker(user.id, query.get('worker_id')) ? Number(query.get('worker_id')) : null;
+      const pid = asked || engine.preferredIds(db, { client_id: user.id, home_id: homeId, series_id: null })[0];
       if (pid) preferred = { id: pid, name: engine.firstName(db, pid), slots: engine.slotsFor(db, pid, { date, cp, hours }).filter(later) };
     }
     return { slots, preferred };
@@ -921,6 +927,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
         user.id, q.service, q.size, q.hours, body.cp, address, date, time, k === 0 && body.urgent ? 1 : 0, body.kit ? 1 : 0, qk.total, q.zone, seriesId, tasks, consent, home ? home.id : null);
       const id = Number(r.lastInsertRowid);
+      if (pastWorker(user.id, body.want_worker_id)) db.prepare('UPDATE bookings SET want_worker_id = ? WHERE id = ?').run(Number(body.want_worker_id), id);
       if (discount) db.prepare('UPDATE bookings SET discount = ? WHERE id = ?').run(discount, id);
       if (q.extras && q.extras.length) db.prepare('UPDATE bookings SET extras = ? WHERE id = ?').run(JSON.stringify(q.extras), id);
       // entièrement réglé par le crédit : rien à payer
@@ -1153,7 +1160,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const safeOffers = offers.map(({ address, ...rest }) => ({ ...rest, earn: w.statut === 'I' ? Math.round(w.rate * rest.hours * 100) / 100 : null }));
     const cal = db.prepare('SELECT weekday, start, end FROM availability WHERE worker_id = ? ORDER BY weekday').all(user.id);
     const off = db.prepare('SELECT * FROM timeoff WHERE worker_id = ? AND end_date >= ? ORDER BY start_date').all(user.id, pricing.todayParis(now()));
-    return { profile: { ...w, reject_reason: undefined }, steps: db_.STEPS[w.statut], active: engine.isActive(w), offers: safeOffers, missions: missions.map((m) => { const h = m.home_id ? db.prepare('SELECT name, instructions FROM homes WHERE id = ?').get(m.home_id) : null; return { ...bookingView(m), client_name: m.client_name, home_name: h ? h.name : null, instructions: h ? h.instructions : null }; }), done, availability: cal, timeoff: off };
+    return { profile: { ...w, reject_reason: undefined }, steps: db_.STEPS[w.statut], active: engine.isActive(w), offers: safeOffers, missions: missions.map((m) => { const h = m.home_id ? db.prepare('SELECT name, instructions FROM homes WHERE id = ?').get(m.home_id) : null; const shared = ['attribuee', 'en_cours'].includes(m.status) ? db.prepare("SELECT text, created_at FROM admin_notes WHERE kind = 'client' AND target_id = ? AND share = 1 ORDER BY id DESC LIMIT 5").all(m.client_id) : []; return { ...bookingView(m), client_name: m.client_name, home_name: h ? h.name : null, instructions: h ? h.instructions : null, team_notes: shared }; }), done, availability: cal, timeoff: off };
   });
 
   const workerAction = (action) => ({ user, id }) => {
@@ -1211,6 +1218,53 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       if (!db.prepare('SELECT 1 FROM gift_cards WHERE code = ?').get(c)) return c;
     }
   };
+  // ----- pourboires : payés par le client, reversés à 100 % à l'intervenante -----
+  db.exec(`CREATE TABLE IF NOT EXISTS tips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id INTEGER NOT NULL REFERENCES bookings(id),
+    client_id INTEGER NOT NULL REFERENCES users(id),
+    worker_id INTEGER NOT NULL REFERENCES users(id),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents BETWEEN 100 AND 5000),
+    status TEXT NOT NULL DEFAULT 'en_attente' CHECK (status IN ('en_attente','paye')),
+    session_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), paid_at TEXT,
+    payout_id INTEGER)`);
+  const TIP_DAYS = 30; // on peut laisser un pourboire jusqu'à 30 jours après le ménage
+  function fulfillTip(id) {
+    const t = db.prepare("SELECT * FROM tips WHERE id = ? AND status = 'en_attente'").get(id);
+    if (!t) return;
+    db.prepare("UPDATE tips SET status = 'paye', paid_at = datetime('now') WHERE id = ?").run(id);
+    const euros = (t.amount_cents / 100).toFixed(2).replace('.', ',').replace(',00', '');
+    const client = db.prepare('SELECT name FROM users WHERE id = ?').get(t.client_id);
+    const first = String(client && client.name || '').split(' ')[0] || 'Votre client';
+    mailer.send(emailOf(t.worker_id), `Vous avez reçu un pourboire de ${euros} €`, 'Un client vous remercie 🎉', [`${first} vous a laissé un pourboire de ${euros} € pour le ménage n° ${t.booking_id}.`, 'Il vous est reversé en entier, avec votre prochain versement ou sur votre fiche de paie.'], null);
+    push.notifyUser(db, t.worker_id, { title: `Pourboire de ${euros} € 🎉`, body: `${first} vous remercie pour le ménage.`, url: '/#/intervenante', tag: `tip-${id}` }, { subject: pushSubject }).catch(() => {});
+    nativePush.notifyUser(db, t.worker_id, { title: `Pourboire de ${euros} € 🎉`, body: `${first} vous remercie pour le ménage.`, url: '/#/intervenante', tag: `tip-${id}` }).catch(() => {});
+    db_.log(db, `Pourboire de ${euros} € pour la réservation n° ${t.booking_id}.`);
+  }
+  route('POST', '/api/bookings/:id/tip', async ({ user, id, body }) => {
+    need(user, 'client');
+    const b = db.prepare("SELECT * FROM bookings WHERE id = ? AND client_id = ? AND status = 'terminee' AND worker_id IS NOT NULL").get(id, user.id);
+    if (!b) throw new HttpError(404, 'Ménage introuvable.');
+    if (b.date < addDays(pricing.todayParis(now()), -TIP_DAYS)) throw new HttpError(409, 'Ce ménage est trop ancien pour un pourboire.');
+    if (db.prepare("SELECT 1 FROM tips WHERE booking_id = ? AND status = 'paye'").get(id)) throw new HttpError(409, 'Vous avez déjà laissé un pourboire pour ce ménage. Merci !');
+    const euros = Math.round(Number(body.amount));
+    if (!(euros >= 1 && euros <= 50)) throw new HttpError(400, 'Choisissez un montant entre 1 et 50 €.');
+    db.prepare("DELETE FROM tips WHERE booking_id = ? AND status = 'en_attente'").run(id);
+    const tid = Number(db.prepare('INSERT INTO tips (booking_id, client_id, worker_id, amount_cents) VALUES (?, ?, ?, ?)').run(id, user.id, b.worker_id, euros * 100).lastInsertRowid);
+    if (!stripeReady) {
+      if (production) throw new HttpError(503, 'Paiement indisponible.');
+      fulfillTip(tid);
+      return { ok: true, simulated: true, message: 'Merci ! Votre pourboire est envoyé (paiement simulé).' };
+    }
+    try {
+      const w = db.prepare('SELECT name FROM users WHERE id = ?').get(b.worker_id);
+      const r = await stripePay.checkoutTip({ db, tip: { id: tid, amount_cents: euros * 100 }, label: `Pourboire pour ${displayName(w.name)} (Proprigo)`, email: user.email, appUrl });
+      return { ok: true, url: r.url };
+    } catch (e) {
+      console.error('PAIEMENT IMPOSSIBLE (pourboire)', e.message);
+      throw new HttpError(502, 'Paiement momentanément impossible. Réessayez dans quelques minutes.');
+    }
+  });
   // carte payée : code créé et envoyé ; pack payé : crédit ajouté tout de suite à l'acheteur
   function fulfillGift(id) {
     const g = db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
@@ -1346,6 +1400,13 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return { ok: true, message: declared ? 'Crédit d\'impôt affiché sur le site, les factures et les attestations.' : 'Crédit d\'impôt masqué.' };
   });
   // Avance immédiate : liste des clients intéressés, en attendant le raccordement à l'URSSAF.
+  route('POST', '/api/me/lang', ({ user, body }) => {
+    need(user);
+    const lang = ['fr', 'pt', 'es', 'ar'].includes(body.lang) ? body.lang : null;
+    if (!lang) throw new HttpError(400, 'Langue inconnue.');
+    db.prepare('UPDATE users SET lang = ? WHERE id = ?').run(lang, user.id);
+    return { ok: true, lang };
+  });
   route('POST', '/api/me/avance', ({ user, body }) => {
     need(user, 'client');
     db.prepare('UPDATE users SET wants_avance = ? WHERE id = ?').run(body.wants ? 1 : 0, user.id);
@@ -1418,16 +1479,81 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       if (!weeks.has(k)) weeks.set(k, { week_start: k, hours: 0, ids: [] });
       const x = weeks.get(k); x.hours += b.hours; x.ids.push(b.id);
     }
-    return [...weeks.values()].map((x) => {
+    // pourboires payés pas encore versés, rangés dans la semaine de leur paiement
+    for (const t of db.prepare("SELECT id, amount_cents, paid_at FROM tips WHERE worker_id = ? AND status = 'paye' AND payout_id IS NULL").all(wid)) {
+      const k = mondayOf(t.paid_at.slice(0, 10));
+      if (!weeks.has(k)) weeks.set(k, { week_start: k, hours: 0, ids: [] });
+      const x = weeks.get(k); x.tips = (x.tips || 0) + t.amount_cents; (x.tipIds = x.tipIds || []).push(t.id);
+    }
+    return [...weeks.values()].sort((a, c) => a.week_start.localeCompare(c.week_start)).map((x) => {
       const bonusRate = bonus.eligible ? bonus.perHour : 0;
-      return { worker_id: wid, name: w.name, week_start: x.week_start, hours: x.hours, rate: w.rate, bonus_rate: bonusRate, amount: Math.round(x.hours * (w.rate + bonusRate) * 100) / 100, booking_ids: x.ids };
+      const tips = (x.tips || 0) / 100;
+      return { worker_id: wid, name: w.name, week_start: x.week_start, hours: x.hours, rate: w.rate, bonus_rate: bonusRate, tips, tip_ids: x.tipIds || [], amount: Math.round((x.hours * (w.rate + bonusRate) + tips) * 100) / 100, booking_ids: x.ids };
     });
   };
+  // ----- IBAN des intervenantes et virement groupé SEPA (fichier à importer dans la banque) -----
+  for (const [c, t] of [['iban', 'TEXT'], ['iban_name', 'TEXT']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  const cleanIban = (v) => String(v || '').replace(/\s+/g, '').toUpperCase();
+  const ibanOk = (iban) => {
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+    const r = (iban.slice(4) + iban.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
+    let m = 0; for (const ch of r) m = (m * 10 + Number(ch)) % 97;
+    return m === 1;
+  };
+  const maskIban = (iban) => (iban ? `${iban.slice(0, 4)} •••• ${iban.slice(-4)}` : null);
+  route('POST', '/api/worker/iban', ({ user, body }) => {
+    need(user, 'intervenante');
+    const iban = cleanIban(body.iban);
+    const name = str(body.name, 70);
+    if (!ibanOk(iban)) throw new HttpError(400, 'IBAN invalide : vérifiez les chiffres (il commence par FR76 pour un compte français).');
+    if (name.length < 3) throw new HttpError(400, 'Indiquez le nom du titulaire du compte.');
+    db.prepare('UPDATE workers SET iban = ?, iban_name = ? WHERE user_id = ?').run(iban, name, user.id);
+    db_.log(db, `${user.name} a enregistré son IBAN (${maskIban(iban)}).`);
+    for (const to of ownerEmails()) mailer.send(to, `IBAN modifié : ${user.name}`, 'Coordonnées bancaires modifiées', [`${user.name} a enregistré un IBAN se terminant par ${iban.slice(-4)}.`, 'Si ce changement vous surprend, appelez-la avant le prochain virement.'], null);
+    return { ok: true, message: 'IBAN enregistré.', iban: maskIban(iban) };
+  });
+  route('GET', '/api/worker/iban', ({ user }) => {
+    need(user, 'intervenante');
+    const w = db.prepare('SELECT iban, iban_name FROM workers WHERE user_id = ?').get(user.id);
+    return { iban: w ? maskIban(w.iban) : null, name: w ? w.iban_name : null };
+  });
+  const xmlEsc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+  const sepaText = (t, n = 70) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9 /\-?:().,'+]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
+  route('GET', '/api/admin/payouts/sepa.xml', ({ user, res }) => {
+    need(user, 'admin');
+    if (!isOwner(user)) throw new HttpError(403, 'Réservé au responsable.');
+    const debtorIban = cleanIban(company.iban);
+    if (!ibanOk(debtorIban)) throw new HttpError(409, 'Ajoutez l\'IBAN du compte Proprigo dans config/entreprise.json (champ « iban ») pour créer le fichier de virements.');
+    const today = pricing.todayParis(now());
+    const items = db.prepare("SELECT w.user_id, w.iban, w.iban_name FROM workers w WHERE w.statut = 'I'").all()
+      .flatMap((w) => owedFor(w.user_id).filter((o) => o.week_start < mondayOf(today)).map((o) => ({ ...o, iban: w.iban, iban_name: w.iban_name })))
+      .filter((o) => o.amount > 0 && ibanOk(cleanIban(o.iban)));
+    if (!items.length) throw new HttpError(409, 'Aucun versement prêt : semaines terminées, avec un IBAN enregistré.');
+    const total = items.reduce((t, o) => t + Math.round(o.amount * 100), 0);
+    const stamp = new Date(now()).toISOString().replace(/\.\d+Z$/, '');
+    const msgId = `PROPRIGO-${stamp.replace(/\D/g, '').slice(0, 14)}`;
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<CstmrCdtTrfInitn>
+<GrpHdr><MsgId>${msgId}</MsgId><CreDtTm>${stamp}</CreDtTm><NbOfTxs>${items.length}</NbOfTxs><CtrlSum>${(total / 100).toFixed(2)}</CtrlSum><InitgPty><Nm>${xmlEsc(sepaText(company.raisonSociale || company.nomCommercial || 'Proprigo'))}</Nm></InitgPty></GrpHdr>
+<PmtInf><PmtInfId>${msgId}-1</PmtInfId><PmtMtd>TRF</PmtMtd><BtchBookg>true</BtchBookg><NbOfTxs>${items.length}</NbOfTxs><CtrlSum>${(total / 100).toFixed(2)}</CtrlSum>
+<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl></PmtTpInf><ReqdExctnDt>${today}</ReqdExctnDt>
+<Dbtr><Nm>${xmlEsc(sepaText(company.raisonSociale || company.nomCommercial || 'Proprigo'))}</Nm></Dbtr><DbtrAcct><Id><IBAN>${debtorIban}</IBAN></Id></DbtrAcct><DbtrAgt><FinInstnId>${company.bic ? `<BIC>${xmlEsc(String(company.bic).trim())}</BIC>` : '<Othr><Id>NOTPROVIDED</Id></Othr>'}</FinInstnId></DbtrAgt><ChrgBr>SLEV</ChrgBr>
+${items.map((o, i) => `<CdtTrfTxInf><PmtId><EndToEndId>${msgId.slice(-12)}-${i + 1}</EndToEndId></PmtId><Amt><InstdAmt Ccy="EUR">${o.amount.toFixed(2)}</InstdAmt></Amt><Cdtr><Nm>${xmlEsc(sepaText(o.iban_name || o.name))}</Nm></Cdtr><CdtrAcct><Id><IBAN>${cleanIban(o.iban)}</IBAN></Id></CdtrAcct><RmtInf><Ustrd>${xmlEsc(sepaText(`Proprigo semaine du ${fr(o.week_start)}`, 140))}</Ustrd></RmtInf></CdtTrfTxInf>`).join('\n')}
+</PmtInf>
+</CstmrCdtTrfInitn>
+</Document>`;
+    db_.log(db, `Fichier de virements groupés ${msgId} créé par ${user.name} : ${items.length} virement(s), ${(total / 100).toFixed(2)} €.`);
+    res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Content-Disposition': `attachment; filename="${msgId}.xml"`, 'Cache-Control': 'no-store', 'X-Proprigo-Reference': msgId });
+    res.end(xml);
+    return { streamed: true };
+  });
   route('GET', '/api/admin/payouts', ({ user }) => {
     need(user, 'admin');
     const ind = db.prepare("SELECT user_id FROM workers WHERE statut = 'I'").all();
     const today = pricing.todayParis(now());
-    const owed = ind.flatMap((w) => owedFor(w.user_id)).map((o) => ({ ...o, weekOver: o.week_start < mondayOf(today) }));
+    const ibanOf = (wid) => (db.prepare('SELECT iban FROM workers WHERE user_id = ?').get(wid) || {}).iban;
+    const owed = ind.flatMap((w) => owedFor(w.user_id)).map((o) => ({ ...o, weekOver: o.week_start < mondayOf(today), iban: maskIban(ibanOf(o.worker_id)) }));
     const history = db.prepare('SELECT p.*, u.name FROM payouts p JOIN users u ON u.id = p.worker_id ORDER BY p.id DESC LIMIT 20').all();
     return { owed, history, total: Math.round(owed.reduce((t, o) => t + o.amount, 0) * 100) / 100 };
   });
@@ -1438,8 +1564,10 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const o = owedFor(wid).find((x) => x.week_start === week);
     if (!o) throw new HttpError(409, 'Rien à verser pour cette semaine.');
     const reference = str(body.reference, 60) || null;
+    const payoutId = () => db.prepare('SELECT MAX(id) AS id FROM payouts').get().id;
     db.prepare('INSERT INTO payouts (worker_id, week_start, hours, rate, bonus_rate, amount, booking_ids, reference, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(wid, week, o.hours, o.rate, o.bonus_rate, o.amount, JSON.stringify(o.booking_ids), reference, user.id);
-    mailer.send(emailOf(wid), `Versement de ${o.amount.toFixed(2).replace('.', ',')} €`, 'Votre versement Proprigo', [`Semaine du ${fr(week)} : ${String(o.hours).replace('.', ',')} h × ${o.rate} €${o.bonus_rate ? ` + bonus qualité ${o.bonus_rate} €/h` : ''}.`, `Montant : ${o.amount.toFixed(2).replace('.', ',')} €${reference ? ` (référence ${reference})` : ''}.`], { label: 'Voir mes gains', path: '/#/intervenante' });
+    if (o.tip_ids.length) db.prepare(`UPDATE tips SET payout_id = ? WHERE id IN (${o.tip_ids.map(() => '?').join(',')})`).run(payoutId(), ...o.tip_ids);
+    mailer.send(emailOf(wid), `Versement de ${o.amount.toFixed(2).replace('.', ',')} €`, 'Votre versement Proprigo', [`Semaine du ${fr(week)} : ${String(o.hours).replace('.', ',')} h × ${o.rate} €${o.bonus_rate ? ` + bonus Platine ${o.bonus_rate} €/h` : ''}${o.tips ? ` + pourboires ${o.tips.toFixed(2).replace('.', ',')} €` : ''}.`, `Montant : ${o.amount.toFixed(2).replace('.', ',')} €${reference ? ` (référence ${reference})` : ''}.`], { label: 'Voir mes gains', path: '/#/intervenante' });
     db_.log(db, `Versement de ${o.amount} € à ${o.name} pour la semaine du ${week}.`);
     return { ok: true, message: `${o.amount.toFixed(2).replace('.', ',')} € marqués comme versés à ${o.name.split(' ')[0]}.` };
   });
@@ -1480,6 +1608,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const paidByMonth = w.statut === 'I' ? Object.fromEntries(db.prepare("SELECT substr(paid_at, 1, 7) AS m, SUM(amount) AS s FROM payouts WHERE worker_id = ? AND paid_at IS NOT NULL GROUP BY m").all(user.id).map((r) => [r.m, Math.round(r.s * 100) / 100])) : {};
     return {
       statut: w.statut, rate: w.rate, tier: tiers.tierOf(db, user.id),
+      tipsMonth: db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS c FROM tips WHERE worker_id = ? AND status = 'paye' AND substr(paid_at, 1, 7) = ?").get(user.id, m0).c / 100,
       month: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", m0)),
       lastMonth: pack(sum("status = 'terminee' AND substr(date, 1, 7) = ?", prev)),
       upcoming: pack(sum("status IN ('attribuee','en_cours') AND date >= ?", pricing.todayParis(now()))),
@@ -1544,7 +1673,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
       client: { ...c, email: owner ? c.email : '', phone: owner ? c.phone : '' },
       stats: { menages: bookings.filter((b) => b.status === 'terminee').length, annules: bookings.filter((b) => b.status === 'annulee').length, depense: owner ? Math.round(bookings.filter((b) => b.status === 'terminee').reduce((t, b) => t + b.total, 0)) : null, credit: owner ? creditOf(id) : null },
       bookings: bookings.map((b) => ({ ...b, total: owner ? b.total : null })), homes,
-      notes: db.prepare("SELECT n.id, n.text, n.created_at, u.name AS author FROM admin_notes n JOIN users u ON u.id = n.author_id WHERE kind = 'client' AND target_id = ? ORDER BY n.id DESC").all(id),
+      notes: db.prepare("SELECT n.id, n.text, n.created_at, n.share, u.name AS author FROM admin_notes n JOIN users u ON u.id = n.author_id WHERE kind = 'client' AND target_id = ? ORDER BY n.id DESC").all(id),
     };
   });
   route('GET', '/api/admin/workers/:id/file', ({ user, id }) => {
@@ -1566,14 +1695,23 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
       rejected: w.rejected_at ? { at: w.rejected_at, reason: isOwner(user) ? w.reject_reason : null } : null,
     };
   });
+  if (!db.prepare('PRAGMA table_info(admin_notes)').all().some((x) => x.name === 'share')) db.exec('ALTER TABLE admin_notes ADD COLUMN share INTEGER NOT NULL DEFAULT 0');
+  route('POST', '/api/admin/notes/:id/share', ({ user, id, body }) => {
+    needStaff(user);
+    const r = db.prepare("UPDATE admin_notes SET share = ? WHERE id = ? AND kind = 'client'").run(body.share ? 1 : 0, id);
+    if (!r.changes) throw new HttpError(404, 'Note introuvable.');
+    return { ok: true, message: body.share ? 'Visible par l\'intervenante.' : 'Réservée à l\'équipe.' };
+  });
   route('POST', '/api/admin/notes', ({ user, body }) => {
     needStaff(user);
     const kind = body.kind === 'worker' ? 'worker' : body.kind === 'client' ? 'client' : null;
     const target = Number(body.target_id);
     const text = str(body.text, 1000);
     if (!kind || !target || text.length < 2) throw new HttpError(400, 'Note vide.');
-    db.prepare('INSERT INTO admin_notes (kind, target_id, author_id, text) VALUES (?, ?, ?, ?)').run(kind, target, user.id, text);
-    return { ok: true, message: 'Note enregistrée.' };
+    // une note sur un client peut être montrée à l'intervenante de ses ménages (jamais au client)
+    const share = kind === 'client' && body.share ? 1 : 0;
+    db.prepare('INSERT INTO admin_notes (kind, target_id, author_id, text, share) VALUES (?, ?, ?, ?, ?)').run(kind, target, user.id, text, share);
+    return { ok: true, message: share ? 'Note enregistrée : l\'intervenante la verra sur ses missions chez ce client.' : 'Note enregistrée (équipe seulement).' };
   });
 
   // ----- comptes de l'équipe : accès « planning » sans argent ni remboursements -----
@@ -1796,7 +1934,8 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     need(user, 'client');
     const fav = db.prepare('SELECT worker_id FROM favorites WHERE client_id = ?').get(user.id);
     const list = db.prepare(`SELECT u.id, u.name, COUNT(*) AS n, ROUND(AVG(b.rating), 1) AS note FROM bookings b JOIN users u ON u.id = b.worker_id
-      WHERE b.client_id = ? AND b.status = 'terminee' GROUP BY u.id ORDER BY n DESC`).all(user.id);
+      WHERE b.client_id = ? AND b.status = 'terminee' GROUP BY u.id ORDER BY n DESC`).all(user.id)
+      .map((w) => ({ ...w, name: displayName(w.name), photo: hasAvatar(w.id) }));
     return { favorite: fav ? fav.worker_id : null, list };
   });
 
@@ -1938,7 +2077,13 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
   db.exec(`CREATE TABLE IF NOT EXISTS worker_docs (id INTEGER PRIMARY KEY, worker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL,
     file TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'a_verifier' CHECK (status IN ('a_verifier','valide','refuse')),
     note TEXT, uploaded_at TEXT NOT NULL DEFAULT (datetime('now')), reviewed_by INTEGER, reviewed_at TEXT)`);
-  for (const [c, t] of [['rejected_at', 'TEXT'], ['reject_reason', 'TEXT']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  for (const [c, t] of [['rejected_at', 'TEXT'], ['reject_reason', 'TEXT'], ['docs_expired', 'INTEGER NOT NULL DEFAULT 0']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  if (!db.prepare('PRAGMA table_info(worker_docs)').all().some((x) => x.name === 'expires_on')) db.exec('ALTER TABLE worker_docs ADD COLUMN expires_on TEXT');
+  // pièces qui expirent : titre de séjour, attestation URSSAF (6 mois), assurance
+  const EXPIRING_KINDS = new Set(['identite', 'urssaf', 'assurance']);
+  const URSSAF_MONTHS = 6;
+  const plusMonths = (date, n) => { const d = new Date(date + 'T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 10); };
+  const daysUntil = (date) => Math.round((Date.parse(date + 'T12:00:00Z') - Date.parse(pricing.todayParis(now()) + 'T12:00:00Z')) / 864e5);
   // Pièces demandées selon le statut. required : nécessaire pour activer l'intervenante.
   const DOC_KINDS = {
     identite: { label: "Pièce d'identité ou titre de séjour en cours de validité", for: ['S', 'I'], required: true },
@@ -1963,10 +2108,45 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
   function docsOf(workerId) {
     const w = db.prepare('SELECT statut FROM workers WHERE user_id = ?').get(workerId);
     if (!w) return null;
-    const rows = db.prepare('SELECT id, kind, mime, size, status, note, uploaded_at, reviewed_at FROM worker_docs WHERE worker_id = ? ORDER BY id DESC').all(workerId);
-    const list = kindsFor(w.statut).map((k) => ({ ...k, latest: rows.find((r) => r.kind === k.kind) || null }));
-    const missing = list.filter((k) => k.required && (!k.latest || k.latest.status !== 'valide')).map((k) => k.label);
-    return { list, missing, complete: missing.length === 0 };
+    const rows = db.prepare('SELECT id, kind, mime, size, status, note, uploaded_at, reviewed_at, expires_on FROM worker_docs WHERE worker_id = ? ORDER BY id DESC').all(workerId);
+    const list = kindsFor(w.statut).map((k) => {
+      const valid = rows.find((r) => r.kind === k.kind && r.status === 'valide') || null;
+      const left = valid && valid.expires_on ? daysUntil(valid.expires_on) : null;
+      return { ...k, expiring: EXPIRING_KINDS.has(k.kind), latest: rows.find((r) => r.kind === k.kind) || null, valid_until: valid ? valid.expires_on : null, days_left: left,
+        expired: left !== null && left < 0, soon: left !== null && left >= 0 && left <= 30 };
+    });
+    const missing = list.filter((k) => k.required && (!k.latest || k.latest.status !== 'valide') && !(k.valid_until && !k.expired)).map((k) => k.label);
+    const expired = list.filter((k) => k.required && k.expired && !(k.latest && k.latest.status === 'valide' && k.latest.expires_on && daysUntil(k.latest.expires_on) >= 0)).map((k) => k.label);
+    return { list, missing, expired, complete: missing.length === 0 && expired.length === 0 };
+  }
+  // une pièce obligatoire expirée : plus de nouvelles missions jusqu'à la nouvelle version validée
+  function refreshExpiry(workerId) {
+    const st = docsOf(workerId);
+    if (!st) return;
+    db.prepare('UPDATE workers SET docs_expired = ? WHERE user_id = ?').run(st.expired.length ? 1 : 0, workerId);
+  }
+  function runDocExpiry() {
+    let sent = 0;
+    for (const w of db.prepare("SELECT w.user_id, u.name, u.email FROM workers w JOIN users u ON u.id = w.user_id WHERE w.rejected_at IS NULL").all()) {
+      const st = docsOf(w.user_id);
+      if (!st) continue;
+      for (const k of st.list.filter((x) => x.valid_until)) {
+        const step = k.days_left < 0 ? 0 : k.days_left <= 7 ? 7 : k.days_left <= 30 ? 30 : null;
+        if (step === null) continue;
+        if (k.latest && k.latest.status === 'a_verifier' && step !== 0) continue; // nouvelle version déjà envoyée
+        if (!db.prepare('INSERT OR IGNORE INTO mail_sent (key) VALUES (?)').run(`docexp-${w.user_id}-${k.kind}-${k.valid_until}-${step}`).changes) continue;
+        const first = w.name.split(' ')[0];
+        const when = step === 0 ? `a expiré le ${fr(k.valid_until)}` : `expire le ${fr(k.valid_until)}, dans ${k.days_left} jour${k.days_left > 1 ? 's' : ''}`;
+        mailer.send(w.email, step === 0 ? `Document expiré : ${k.label}` : `Document à renouveler : ${k.label}`, step === 0 ? 'Un document a expiré' : 'Un document arrive à expiration',
+          [`Bonjour ${first},`, `Votre document « ${k.label} » ${when}.`, step === 0 && k.required ? 'Vous ne recevez plus de nouvelles missions tant que la nouvelle version n\'est pas validée.' : 'Envoyez la nouvelle version depuis votre espace, rubrique « Mes documents ».'],
+          { label: 'Mes documents', path: '/#/intervenante' });
+        pushAll(db, w.user_id, { title: step === 0 ? '⚠️ Document expiré' : '📄 Document à renouveler', body: `${k.label} ${when}.`, url: '/#/intervenante', tag: `docexp-${k.kind}` }).catch(() => {});
+        for (const to of ownerEmails()) mailer.send(to, `${w.name} : ${k.label} ${step === 0 ? 'expiré' : 'à renouveler'}`, 'Document d\'une intervenante', [`${w.name} : « ${k.label} » ${when}.`, step === 0 && k.required ? 'Elle ne reçoit plus de nouvelles missions. Vérifiez aussi ses missions déjà prévues.' : 'Elle a été prévenue.'], null);
+        sent += 1;
+      }
+      refreshExpiry(w.user_id);
+    }
+    return sent;
   }
   route('GET', '/api/admin/worker-docs', ({ user }) => {
     need(user, 'admin');
@@ -2022,7 +2202,10 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
       try { fs.unlinkSync(path.join(DOCS, path.basename(old.file))); } catch { /* déjà supprimé */ }
       db.prepare('DELETE FROM worker_docs WHERE id = ?').run(old.id);
     }
-    db.prepare('INSERT INTO worker_docs (worker_id, kind, file, mime, size) VALUES (?, ?, ?, ?, ?)').run(user.id, kind, file, mime, buf.length);
+    let expires = pricing.isValidDate(String(body.expires_on || '')) ? String(body.expires_on) : null;
+    if (expires && daysUntil(expires) < 0) throw new HttpError(400, 'Ce document est déjà expiré : envoyez la version à jour.');
+    if (!expires && kind === 'urssaf') expires = plusMonths(pricing.todayParis(now()), URSSAF_MONTHS);
+    db.prepare('INSERT INTO worker_docs (worker_id, kind, file, mime, size, expires_on) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, kind, file, mime, buf.length, expires);
     db_.log(db, `${user.name} a déposé : ${docLabel(kind)}. À vérifier.`);
     return { ok: true, message: 'Document reçu. L\'équipe le vérifie rapidement.', ...docsOf(user.id) };
   });
@@ -2046,6 +2229,13 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     const note = str(body.note, 300);
     if (decision === 'refuse' && note.length < 5) throw new HttpError(400, 'Indiquez la raison du refus : l\'intervenante la recevra (ex. « photo floue », « attestation de plus de 6 mois »).');
     db.prepare("UPDATE worker_docs SET status = ?, note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(decision, note || null, user.id, id);
+    if (pricing.isValidDate(String(body.expires_on || ''))) db.prepare('UPDATE worker_docs SET expires_on = ? WHERE id = ?').run(String(body.expires_on), id);
+    // une nouvelle version validée remplace l'ancienne pièce validée du même type
+    if (decision === 'valide') for (const old of db.prepare("SELECT id, file FROM worker_docs WHERE worker_id = ? AND kind = ? AND status = 'valide' AND id <> ?").all(d.worker_id, d.kind, id)) {
+      try { fs.unlinkSync(path.join(DOCS, path.basename(old.file))); } catch { /* déjà supprimé */ }
+      db.prepare('DELETE FROM worker_docs WHERE id = ?').run(old.id);
+    }
+    refreshExpiry(d.worker_id);
     const w = workerProfile(d.worker_id);
     const label = docLabel(d.kind);
     db_.log(db, `Document de ${w.name} (${label}) ${decision === 'valide' ? 'validé' : `refusé : ${note}`} par ${user.name}.`);
@@ -2483,7 +2673,73 @@ ${body}</body></html>`);
     res.end('﻿' + lines.join('\r\n'));
     return { streamed: true };
   });
+  // export de paie des salariées : heures, prime Platine, pourboires, absences, pour le comptable
+  route('GET', '/api/admin/payroll.csv', ({ user, query, res }) => {
+    need(user, 'admin');
+    if (!isOwner(user)) throw new HttpError(403, 'Réservé au responsable.');
+    const month = query.get('month');
+    if (!monthOk(month)) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
+    const cell = (v) => { const t = String(v ?? ''); if (/^-?\d+(,\d+)?$/.test(t)) return t; return /[;"\n]/.test(t) || /^[=+\-@]/.test(t) ? `"${(/^[=+\-@]/.test(t) ? "'" : '') + t.replace(/"/g, '""')}"` : t; };
+    const n2 = (x) => (Math.round(x * 100) / 100).toFixed(2).replace('.', ',');
+    const lines = [['Salariée', 'E-mail', 'Ménages', 'Heures', 'Dont dimanches et jours fériés (h)', 'Niveau', 'Prime Platine (€/h)', 'Prime Platine (€)', 'Pourboires (€)', 'Absences non prévenues', 'Congés posés (jours)'].join(';')];
+    const holidays = pricing.holidays(Number(month.slice(0, 4))); // jours fériés de l'année
+    for (const w of db.prepare("SELECT w.user_id, u.name, u.email FROM workers w JOIN users u ON u.id = w.user_id WHERE w.statut = 'S' AND w.rejected_at IS NULL ORDER BY u.name").all()) {
+      const rows = db.prepare("SELECT date, hours FROM bookings WHERE worker_id = ? AND status = 'terminee' AND substr(date, 1, 7) = ?").all(w.user_id, month);
+      const hours = rows.reduce((t, r) => t + r.hours, 0);
+      const special = rows.filter((r) => new Date(r.date + 'T12:00:00Z').getUTCDay() === 0 || holidays.has(r.date)).reduce((t, r) => t + r.hours, 0);
+      const t = tiers.tierOf(db, w.user_id);
+      const tips = db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS c FROM tips WHERE worker_id = ? AND status = 'paye' AND substr(paid_at, 1, 7) = ?").get(w.user_id, month).c / 100;
+      const absences = db.prepare('SELECT COUNT(*) AS n FROM worker_absences a JOIN bookings b ON b.id = a.booking_id WHERE a.worker_id = ? AND substr(b.date, 1, 7) = ?').get(w.user_id, month).n;
+      const offDays = db.prepare('SELECT start_date, end_date FROM timeoff WHERE worker_id = ?').all(w.user_id).reduce((tot, o) => {
+        let k = 0; for (let d = o.start_date; d <= o.end_date; d = addDays(d, 1)) if (d.slice(0, 7) === month) k += 1; return tot + k;
+      }, 0);
+      lines.push([w.name, w.email, rows.length, n2(hours), n2(special), t.label, n2(t.bonus), n2(hours * t.bonus), n2(tips), absences, offDays].map(cell).join(';'));
+    }
+    db_.log(db, `Export de paie de ${month} par ${user.name}.`);
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="proprigo-paie-${month}.csv"`, 'Cache-Control': 'no-store' });
+    res.end('\ufeff' + lines.join('\r\n'));
+    return { streamed: true };
+  });
   // Toutes les factures et avoirs du mois sur une page, une pièce par feuille : « Imprimer › Enregistrer en PDF ».
+  // relevé mensuel de l'intervenante (imprimable en PDF) : missions, heures, bonus, pourboires, versements reçus
+  route('GET', '/api/worker/statement', ({ user, query, res }) => {
+    need(user);
+    const month = query.get('month');
+    if (!monthOk(month)) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
+    const wid = user.role === 'intervenante' ? user.id : isOwner(user) && query.get('worker') ? Number(query.get('worker')) : null;
+    const w = wid ? workerProfile(wid) : null;
+    if (!w) throw new HttpError(404, 'Relevé introuvable.');
+    const ind = w.statut === 'I';
+    const e2 = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace('.', ',')} €`;
+    const h2 = (n) => String(Math.round(n * 100) / 100).replace('.', ',');
+    const esc2 = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const rows = db.prepare("SELECT id, date, time, service, cp, hours FROM bookings WHERE worker_id = ? AND status = 'terminee' AND substr(date, 1, 7) = ? ORDER BY date, time").all(wid, month);
+    const hours = rows.reduce((t, r) => t + r.hours, 0);
+    const bonus = bonusOf(wid);
+    const bonusRate = bonus.eligible ? bonus.perHour : 0;
+    const tips = db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS c FROM tips WHERE worker_id = ? AND status = 'paye' AND substr(paid_at, 1, 7) = ?").get(wid, month).c / 100;
+    const base = ind ? hours * (w.rate || 0) : 0;
+    const paid = ind ? db.prepare('SELECT week_start, amount, reference, paid_at FROM payouts WHERE worker_id = ? AND paid_at IS NOT NULL AND substr(paid_at, 1, 7) = ? ORDER BY paid_at').all(wid, month) : [];
+    const received = paid.reduce((t, p) => t + p.amount, 0);
+    const label = new Date(month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    res.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relevé ${month} – ${esc2(w.name)}</title><style>${INVOICE_CSS} td.n,th.n{text-align:right} .tot td{font-weight:700;border-top:2px solid #0f1430} .box{background:#f2f5ff;border-radius:12px;padding:12px 16px;margin:16px 0}</style></head><body>
+<p class="noprint muted">Pour un PDF : Ctrl + P (ou Partager › Imprimer sur téléphone), puis « Enregistrer au format PDF ».</p>
+<h1>Relevé de ${esc2(label)}</h1>
+<p><b>${esc2(w.name)}</b> · ${ind ? 'Intervenante indépendante' : 'Intervenante salariée'}${ind && w.rate ? ` · ${e2(w.rate)} de l'heure` : ''}<br>Proprigo${company.raisonSociale ? ` (${esc2(company.raisonSociale)})` : ''}</p>
+<table><thead><tr><th>Date</th><th>Mission</th><th>Prestation</th><th>Secteur</th><th class="n">Heures</th>${ind ? '<th class="n">Montant</th>' : ''}</tr></thead><tbody>
+${rows.map((r) => `<tr><td>${fr(r.date)} ${esc2(r.time)}</td><td>n° ${r.id}</td><td>${esc2(SERVICE_NAME[r.service] || r.service)}</td><td>${esc2(r.cp)}</td><td class="n">${h2(r.hours)}</td>${ind ? `<td class="n">${e2(r.hours * (w.rate || 0))}</td>` : ''}</tr>`).join('') || `<tr><td colspan="${ind ? 6 : 5}">Aucune mission terminée ce mois-ci.</td></tr>`}
+<tr class="tot"><td colspan="4">${rows.length} mission${rows.length > 1 ? 's' : ''}</td><td class="n">${h2(hours)} h</td>${ind ? `<td class="n">${e2(base)}</td>` : ''}</tr></tbody></table>
+${bonusRate ? `<p>💎 Bonus Platine : ${e2(bonusRate)} de l'heure, soit ${e2(hours * bonusRate)} ce mois-ci.</p>` : ''}
+${tips ? `<p>💝 Pourboires reçus ce mois-ci : ${e2(tips)}.</p>` : ''}
+${ind ? `<div class="box"><b>Total des prestations du mois : ${e2(base + hours * bonusRate + tips)}</b><br>
+Versements reçus ce mois-ci : <b>${e2(received)}</b>${paid.length ? ` (${paid.map((p) => `${e2(p.amount)} le ${fr(p.paid_at.slice(0, 10))}${p.reference ? `, réf. ${esc2(p.reference)}` : ''}`).join(' ; ')})` : ''}.<br>
+<span class="muted">En micro-entreprise, on déclare à l'URSSAF les sommes <b>encaissées</b> dans la période : c'est en général le montant « versements reçus ». En cas de doute, demandez à l'URSSAF ou à votre comptable.</span></div>`
+    : `<div class="box"><b>${h2(hours)} heures réalisées</b>${bonusRate ? ` · prime Platine ${e2(hours * bonusRate)}` : ''}${tips ? ` · pourboires ${e2(tips)}` : ''}<br><span class="muted">Document d'information : seule votre fiche de paie fait foi.</span></div>`}
+<p class="muted">Relevé édité le ${fr(pricing.todayParis(now()))}.</p>
+</body></html>`);
+    return { streamed: true };
+  });
   route('GET', '/api/admin/invoices/print', ({ user, query, res }) => {
     need(user, 'admin');
     if (!monthOk(query.get('month'))) throw new HttpError(400, 'Mois invalide (AAAA-MM).');
@@ -2767,6 +3023,26 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
     return { booking: bookingView(b), list };
   });
 
+  // ----- absence non prévenue : comptée dans le niveau (pas de Platine avec une absence sur 6 mois) -----
+  db.exec(`CREATE TABLE IF NOT EXISTS worker_absences (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id INTEGER NOT NULL UNIQUE REFERENCES bookings(id),
+    worker_id INTEGER NOT NULL REFERENCES users(id), note TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), created_by INTEGER)`);
+  route('POST', '/api/admin/bookings/:id/no-show', ({ user, id, body }) => {
+    needStaff(user);
+    const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
+    if (!b || !b.worker_id) throw new HttpError(404, 'Aucune intervenante sur cette réservation.');
+    if (!['attribuee', 'en_cours'].includes(b.status)) throw new HttpError(409, 'Seulement pour un ménage prévu, pas terminé ni annulé.');
+    if (b.date > pricing.todayParis(now())) throw new HttpError(409, 'Le ménage n\'a pas encore eu lieu.');
+    const w = db.prepare('SELECT name, email FROM users WHERE id = ?').get(b.worker_id);
+    const note = str(body.note, 300) || null;
+    try { db.prepare('INSERT INTO worker_absences (booking_id, worker_id, note, created_by) VALUES (?, ?, ?, ?)').run(id, b.worker_id, note, user.id); }
+    catch { throw new HttpError(409, 'Absence déjà notée pour ce ménage.'); }
+    // la mission repart : l'équipe choisit une remplaçante (ou attribution automatique)
+    db.prepare("UPDATE bookings SET worker_id = NULL, status = 'en_attente', on_way_at = NULL, arrived_at = NULL, eta_at = NULL WHERE id = ?").run(id);
+    db.prepare("DELETE FROM offers WHERE booking_id = ?").run(id);
+    db_.log(db, `Absence non prévenue de ${w.name} notée par ${user.name} (réservation n° ${id})${note ? ` : ${note}` : ''}.`);
+    mailer.send(w.email, 'Absence non prévenue', 'Vous n\'êtes pas venue à une mission', [`La mission n° ${id} du ${fr(b.date)} à ${b.time} a été notée « absence non prévenue ».`, 'Si vous ne pouvez pas venir, prévenez toujours l\'équipe à l\'avance : contact@proprigo.fr.', 'Si c\'est une erreur, répondez à cet e-mail.'], null);
+    return { ok: true, message: `Absence notée. La réservation n° ${id} est à réattribuer.` };
+  });
   route('POST', '/api/admin/bookings/:id/assign', ({ user, id, body }) => {
     needStaff(user);
     const bookingToAssign = db.prepare('SELECT paid, payment_status FROM bookings WHERE id = ?').get(id);
@@ -2800,6 +3076,8 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
           const sess = event.data.object;
           const gift = db.prepare('SELECT * FROM gift_cards WHERE session_id = ?').get(sess.id);
           if (gift && sess.currency === 'eur' && sess.amount_total === gift.amount_cents) fulfillGift(gift.id);
+          const tip = db.prepare('SELECT * FROM tips WHERE session_id = ?').get(sess.id);
+          if (tip && sess.currency === 'eur' && sess.amount_total === tip.amount_cents) fulfillTip(tip.id);
           const payment = db.prepare('SELECT * FROM stripe_payments WHERE session_id = ?').get(sess.id);
           if (payment && payment.status !== 'paid' && sess.currency === 'eur' && sess.amount_total === payment.amount_cents) {
             const ids = JSON.parse(payment.booking_ids);
@@ -2973,7 +3251,7 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
       // La page d'accueil appelle app.js, art.js et styles.css avec le numéro de version (?v=1.5.9) :
       // après une mise en ligne, aucun navigateur ne peut garder l'ancien code en mémoire.
       if (path.basename(file) === 'index.html') {
-        const html = fs.readFileSync(file, 'utf8').replace(/(src|href)="\/(app\.js|art\.js|styles\.css)"/g, `$1="/$2?v=${VERSION}"`)
+        const html = fs.readFileSync(file, 'utf8').replace(/(src|href)="\/(app\.js|art\.js|i18n\.js|styles\.css)"/g, `$1="/$2?v=${VERSION}"`)
           .replace('</head>', `<meta name="proprigo-version" content="${VERSION}">\n</head>`);
         const out = /\bgzip\b/.test(req.headers['accept-encoding'] || '') ? zlib.gzipSync(html) : Buffer.from(html);
         const { ETag: _omit, ...pageHeaders } = headers;
@@ -3014,26 +3292,38 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
   }
 
   /** Rappel la veille du ménage, envoyé une seule fois. */
-  const runReminders = () => {
+  // rappel la veille, à partir de 17 h (jamais en pleine nuit) : e-mail + notification au client et à l'intervenante
+  const REMINDER_FROM = 17;
+  const runReminders = ({ force = false } = {}) => {
+    if (!force && Number(nowParisHM().slice(0, 2)) < REMINDER_FROM) return 0;
     const tomorrow = new Date(Date.parse(pricing.todayParis(now()) + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10);
     const list = db.prepare("SELECT * FROM bookings WHERE date = ? AND reminded = 0 AND status IN ('en_attente','proposee','attribuee')").all(tomorrow);
     for (const b of list) {
-      const w = b.worker_id ? engine.firstName(db, b.worker_id) : null;
-      mailer.send(emailOf(b.client_id), `Rappel : votre ménage demain à ${b.time}`, 'Votre ménage, c\'est demain', [`${fr(b.date)} à ${b.time}, ${b.address}.`, w ? `${w}, intervenante vérifiée, viendra.` : 'Nous vous confirmons votre intervenante très vite.', 'Un changement ? Écrivez-nous dans la messagerie de la réservation.'], { label: 'Voir ma réservation', path: '/#/' });
-      if (b.worker_id) mailer.send(emailOf(b.worker_id), `Rappel : mission demain à ${b.time}`, 'Votre mission de demain', [`${fr(b.date)} à ${b.time}, ${b.cp}.`, "L'adresse, les consignes et la checklist sont dans votre espace."], { label: 'Voir mes missions', path: '/#/intervenante' });
+      const w = b.worker_id ? db.prepare('SELECT name FROM users WHERE id = ?').get(b.worker_id) : null;
+      const who = w ? displayName(w.name) : null;
+      const home = b.home_id ? db.prepare('SELECT instructions FROM homes WHERE id = ?').get(b.home_id) : null;
+      const access = home && home.instructions ? 'Vos consignes d\'accès sont transmises à l\'intervenante.' : 'Pensez à prévoir l\'accès : clés, code de la porte, ou quelqu\'un sur place.';
+      mailer.send(emailOf(b.client_id), `Rappel : votre ménage demain à ${b.time}`, 'Votre ménage, c\'est demain', [`${fr(b.date)} à ${b.time}, ${b.address}.`, who ? `${who}, intervenante vérifiée, viendra.` : 'Nous vous confirmons l\'intervenante très vite.', access], { label: 'Voir ma réservation', url: `${appUrl || ''}/#/mes-reservations` });
+      pushAll(db, b.client_id, { title: `🧽 Demain à ${b.time}`, body: `${who ? `${who.split(' ')[0]} vient chez vous` : 'Votre ménage est prévu'}. ${home && home.instructions ? '' : 'Pensez aux clés ou au code.'}`.trim(), url: '/#/mes-reservations', tag: `rappel-${b.id}` }).catch(() => {});
+      if (b.worker_id) {
+        mailer.send(emailOf(b.worker_id), `Rappel : mission demain à ${b.time}`, 'Votre mission de demain', [`${fr(b.date)} à ${b.time}, ${b.cp}.`, "L'adresse, les consignes et la checklist sont dans votre espace."], { label: 'Voir mes missions', url: `${appUrl || ''}/#/intervenante` });
+        pushAll(db, b.worker_id, { title: `🚶 Mission demain à ${b.time}`, body: `${b.cp} · ${b.hours} h. Les consignes sont dans l'application.`, url: '/#/intervenante', tag: `rappel-w-${b.id}` }).catch(() => {});
+      }
       db.prepare('UPDATE bookings SET reminded = 1 WHERE id = ?').run(b.id);
     }
     return list.length;
   };
   if (autoSync) {
     setInterval(() => { try { runNudges(); } catch (e) { console.error('Relances :', e.message); } }, 24 * 3600e3).unref();
+    setTimeout(() => { try { runDocExpiry(); } catch (e) { console.error('Documents :', e.message); } }, 90_000).unref();
+    setInterval(() => { try { runDocExpiry(); } catch (e) { console.error('Documents :', e.message); } }, 24 * 3600e3).unref();
     setInterval(() => { try { purgePhotos(); purgeAttempts(); purgeRejectedDocs(); } catch (e) { console.error('Nettoyage quotidien :', e.message); } }, 24 * 3600e3).unref();
     setInterval(() => { mailer.processQueue().catch((e) => console.error('File des e-mails :', e.message)); }, 5 * 60e3).unref();
     setTimeout(runReminders, 60_000).unref();
     setInterval(runReminders, 3600e3).unref();
   }
 
-  return { server, db, runReminders, runBackup, purgePhotos, reportError, runNudges };
+  return { server, db, runReminders, runBackup, purgePhotos, reportError, runNudges, runDocExpiry };
 }
 
 module.exports = { createApp };

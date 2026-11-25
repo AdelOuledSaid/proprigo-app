@@ -504,8 +504,9 @@ test('e-mails, règle d\'annulation, rappel la veille et reçu', async () => {
     r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-22', time: '09:00' });
     const late = r.data.id;
     // rappel la veille (nous sommes le 21) : une seule fois
-    assert.equal(runReminders(), 1);
-    assert.equal(runReminders(), 0);
+    assert.equal(runReminders(), 0, 'à 10 h, pas de rappel : il part à partir de 17 h');
+    assert.equal(runReminders({ force: true }), 1);
+    assert.equal(runReminders({ force: true }), 0);
     await wait();
     assert.ok(mails().some((m) => /Rappel : votre ménage demain/.test(m)));
     r = await client('POST', `/api/bookings/${late}/cancel`);

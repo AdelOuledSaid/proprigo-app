@@ -891,3 +891,29 @@ ol.steps-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 10px; 
 .av-edit { display: flex; gap: 16px; align-items: center; margin: 6px 0 14px; }
 .av-check { display: flex; gap: 12px; align-items: center; margin: 10px 0; padding: 10px; border-radius: 14px; background: color-mix(in srgb, var(--coral) 12%, transparent); }
 .av-check img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; flex: none; }
+
+/* réservation : « avec qui ? » */
+.who-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.who-pick button { display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px 12px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--raised); color: inherit; font: inherit; cursor: pointer; }
+.who-pick button[aria-pressed="true"] { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent); }
+.who-pick small { display: block; color: var(--muted); font-size: 12.5px; }
+.who-pick .av.sm { font-size: 16px; }
+
+/* pourboire */
+.tip-box { margin-top: 12px; padding: 10px 14px; border-radius: 14px; background: color-mix(in srgb, var(--coral) 10%, transparent); }
+.tip-box summary { cursor: pointer; font-weight: 700; }
+.tip-done { margin: 12px 0 0; font-weight: 600; color: var(--coral); }
+
+.doc-up { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.doc-up input[type=date] { display: block; padding: 6px 8px; font-size: 14px; }
+.warn-text { color: #c77700; font-weight: 600; }
+
+/* langue de l'espace intervenante */
+.lang-pick { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; font-weight: 600; }
+.lang-pick select { width: auto; padding: 6px 10px; margin: 0; font-size: 14px; border-radius: 10px; }
+html[dir="rtl"] body { text-align: right; }
+html[dir="rtl"] .lv-head, html[dir="rtl"] .who-line, html[dir="rtl"] .av-edit { flex-direction: row; }
+html[dir="rtl"] .bk-main, html[dir="rtl"] .wk-l-item em { direction: rtl; }
+html[dir="rtl"] .wk-l-item em { margin-left: 0; margin-right: auto; }
+.day-route { display: flex; width: 100%; justify-content: center; gap: 6px; margin: 0 0 12px; }
+.team-note { border-left: 4px solid var(--coral, #ff6a3d); }

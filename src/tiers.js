@@ -47,16 +47,19 @@ function stats(db, workerId) {
   const forgive = r.rated > MIN_RATINGS;
   const count = forgive ? r.rated - 1 : r.rated;
   const sum = forgive ? r.sum - r.worst : r.sum;
-  return { missions: r.n, rated: r.rated, rating: count ? Math.round((sum / count) * 100) / 100 : null };
+  let absences = 0;
+  try { absences = db.prepare("SELECT COUNT(*) AS n FROM worker_absences WHERE worker_id = ? AND created_at >= datetime('now', '-6 months')").get(workerId).n; } catch { absences = 0; }
+  return { missions: r.n, rated: r.rated, rating: count ? Math.round((sum / count) * 100) / 100 : null, absences };
 }
 
-function reaches(st, t) {
+function reaches(st, t, key) {
+  if (key === 'platine' && st.absences > 0) return false; // Platine : aucune absence non prévenue sur 6 mois
   return st.missions >= t.missions && st.rated >= MIN_RATINGS && st.rating >= t.rating;
 }
 
 function tierOf(db, workerId, cfg = settings(db)) {
   const st = stats(db, workerId);
-  const key = reaches(st, cfg.platine) ? 'platine' : reaches(st, cfg.or) ? 'or' : 'bleu';
+  const key = reaches(st, cfg.platine, 'platine') ? 'platine' : reaches(st, cfg.or, 'or') ? 'or' : 'bleu';
   const rank = { bleu: 0, or: 1, platine: 2 }[key];
   const nextKey = key === 'bleu' ? 'or' : key === 'or' ? 'platine' : null;
   const next = nextKey ? {

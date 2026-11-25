@@ -1,5 +1,5 @@
 {
-  "_aide": "Informations imprimées sur chaque facture et avoir. Auto-entrepreneur : raisonSociale = « Prénom NOM EI » (la mention EI est obligatoire), formeJuridique = « Entreprise individuelle », capital et rcs vides, regimeTVA = « franchise » tant que le chiffre d'affaires reste sous 37 500 € par an. Remplissez puis redéployez.",
+  "_aide": "Informations imprimées sur chaque facture et avoir. Auto-entrepreneur : raisonSociale = « Prénom NOM EI » (la mention EI est obligatoire), formeJuridique = « Entreprise individuelle », capital et rcs vides, regimeTVA = « franchise » tant que le chiffre d'affaires reste sous 37 500 € par an. Remplissez puis redéployez. iban et bic : le compte bancaire de Proprigo, utilisé seulement pour créer le fichier de virements groupés aux indépendantes (onglet Paiements).",
   "nomCommercial": "Proprigo",
   "raisonSociale": "",
   "formeJuridique": "Entreprise individuelle (micro-entrepreneur)",
@@ -9,5 +9,7 @@
   "rcs": "",
   "tvaIntracom": "",
   "emailFacturation": "",
-  "regimeTVA": "franchise"
+  "regimeTVA": "franchise",
+  "iban": "",
+  "bic": ""
 }

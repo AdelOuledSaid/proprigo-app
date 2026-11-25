@@ -309,4 +309,37 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, getIntent, captureIntent, cancelIntent, sessionForIntent, checkoutGift };
+// pourboire : paiement simple, encaissé tout de suite, reversé à 100 % à l'intervenante
+async function checkoutTip({ db, tip, label, email, appUrl }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (!validBaseUrl(appUrl)) throw new Error('Invalid public URL');
+  const amount = tip.amount_cents;
+  if (!Number.isSafeInteger(amount) || amount < 100 || amount > 5000) throw new Error('Invalid amount');
+  const params = new URLSearchParams();
+  params.set('mode', 'payment');
+  params.set('customer_email', email);
+  params.set('line_items[0][price_data][currency]', 'eur');
+  params.set('line_items[0][price_data][unit_amount]', String(amount));
+  params.set('line_items[0][price_data][product_data][name]', label);
+  params.set('line_items[0][quantity]', '1');
+  params.set('metadata[tip_id]', String(tip.id));
+  params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&tip=${tip.id}#/mes-reservations`);
+  params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
+  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `proprigo-tip-${tip.id}` },
+      body: params, signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    console.error('Stripe tip checkout network error:', { name: err.name, message: err.message });
+    throw new Error('Stripe network error');
+  }
+  const out = await resp.json().catch(() => ({}));
+  if (!resp.ok || !out.id || !out.url) { console.error('Stripe tip checkout error:', { status: resp.status, message: out.error?.message }); throw new Error('Stripe checkout failed'); }
+  db.prepare('UPDATE tips SET session_id = ? WHERE id = ?').run(out.id, tip.id);
+  return { url: out.url };
+}
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, getIntent, captureIntent, cancelIntent, sessionForIntent, checkoutGift, checkoutTip };
