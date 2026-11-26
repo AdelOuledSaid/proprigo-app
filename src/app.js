@@ -178,7 +178,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!t) return null;
     const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(t);
     if (!s || s.expires < Date.now()) return null;
-    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance, lang FROM users WHERE id = ?').get(s.user_id) || null;
+    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance, lang, billing FROM users WHERE id = ?').get(s.user_id) || null;
   };
   const need = (user, role) => {
     if (!user) throw new HttpError(401, 'Connectez-vous pour continuer.');
@@ -203,6 +203,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   const pastWorker = (clientId, wid) => Boolean(wid && db.prepare("SELECT 1 FROM bookings WHERE client_id = ? AND worker_id = ? AND status = 'terminee'").get(clientId, Number(wid)));
   // photo de profil des intervenantes
   for (const [c, t] of [['avatar', 'TEXT'], ['avatar_status', 'TEXT'], ['avatar_at', 'TEXT']]) if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE workers ADD COLUMN ${c} ${t}`);
+  if (!db.prepare('PRAGMA table_info(workers)').all().some((x) => x.name === 'gender')) db.exec('ALTER TABLE workers ADD COLUMN gender TEXT'); // 'h' homme, sinon femme
+  const genderOf = (wid) => (wid && (db.prepare('SELECT gender FROM workers WHERE user_id = ?').get(wid) || {}).gender === 'h' ? 'h' : 'f');
   const hasAvatar = (wid) => Boolean(wid && db.prepare("SELECT 1 FROM workers WHERE user_id = ? AND avatar IS NOT NULL AND avatar_status = 'valide'").get(wid));
   const bookingView = (b) => {
     const w = b.worker_id ? db.prepare('SELECT name FROM users WHERE id = ?').get(b.worker_id) : null;
@@ -212,7 +214,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     let list = [];
     try { list = JSON.parse(b.checklist || '[]'); } catch { list = []; }
     const tipRow = b.status === 'terminee' ? db.prepare("SELECT amount_cents FROM tips WHERE booking_id = ? AND status = 'paye'").get(b.id) : null;
-    return { ...b, tip: tipRow ? tipRow.amount_cents / 100 : null, worker_name: w ? w.name : null, worker_display: w ? displayName(w.name) : null, worker_photo: hasAvatar(b.worker_id), checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
+    return { ...b, tip: tipRow ? tipRow.amount_cents / 100 : null, worker_name: w ? w.name : null, worker_display: w ? displayName(w.name) : null, worker_gender: genderOf(b.worker_id), worker_photo: hasAvatar(b.worker_id), checklist: list, photos, messages: msgs, incidents: inc, guarantee_open: guaranteeOpen(b) };
   };
   const nowParisHM = () => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false }).format(now());
   const hoursBefore = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.parse(`${pricing.todayParis(now())}T${nowParisHM()}:00`)) / 36e5;
@@ -297,6 +299,47 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     res.end(buf);
     return { streamed: true };
   });
+  // ----- effacer les données de test avant l'ouverture (impossible une fois Stripe en mode réel) -----
+  const stripeLive = () => /^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY || '');
+  const TEST_TABLES = ['bookings', 'invoices', 'stripe_payments', 'stripe_claims', 'stripe_disputes', 'stripe_duplicate_refunds', 'stripe_intents_seen', 'stripe_refund_ledger',
+    'tips', 'messages', 'photos', 'incidents', 'offers', 'payouts', 'series', 'credits', 'gift_cards', 'quote_requests', 'worker_absences', 'admin_notes', 'transfer_bills'];
+  route('GET', '/api/admin/test-data', ({ user }) => {
+    need(user, 'admin');
+    const has = (t) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+    const count = (t) => (has(t) ? db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n : 0);
+    return { allowed: !stripeLive(), bookings: count('bookings'), invoices: count('invoices'), quotes: count('quote_requests'),
+      demoAccounts: db.prepare("SELECT COUNT(*) AS n FROM users WHERE email LIKE '%@proprigo.test' AND id <> ?").get(user.id).n,
+      clients: db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client' AND email NOT LIKE '%@proprigo.test'").get().n };
+  });
+  route('POST', '/api/admin/test-data/reset', ({ user, body }) => {
+    need(user, 'admin');
+    if (stripeLive()) throw new HttpError(409, 'Stripe est en mode réel : les données ne peuvent plus être effacées (factures obligatoires à garder 10 ans).');
+    if (body.confirm !== 'EFFACER') throw new HttpError(400, 'Écrivez EFFACER en majuscules pour confirmer.');
+    let saved = null;
+    if (backupDir) { saved = runBackup(); if (!saved) throw new HttpError(500, 'La sauvegarde de sécurité a échoué : rien n\'a été effacé.'); }
+    const has = (t) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+    const ids = db.prepare(`SELECT id FROM users WHERE id <> ? AND ((? AND email LIKE '%@proprigo.test') OR (? AND role = 'client'))`)
+      .all(user.id, body.demo ? 1 : 0, body.clients ? 1 : 0).map((r) => r.id);
+    const done = {};
+    db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      for (const t of TEST_TABLES) if (has(t)) done[t] = Number(db.prepare(`DELETE FROM ${t}`).run().changes);
+      if (ids.length) {
+        const list = ids.join(',');
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'users'").all().map((r) => r.name);
+        for (const t of tables) {
+          const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+          for (const c of ['user_id', 'client_id', 'worker_id']) if (cols.includes(c)) db.prepare(`DELETE FROM ${t} WHERE ${c} IN (${list})`).run();
+        }
+        done.users = Number(db.prepare(`DELETE FROM users WHERE id IN (${list})`).run().changes);
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; } finally { db.exec('PRAGMA foreign_keys = ON'); }
+    try { for (const f of fs.readdirSync(PHOTOS)) fs.rmSync(path.join(PHOTOS, f), { recursive: true, force: true }); } catch { /* dossier absent */ }
+    db_.log(db, `DONNÉES DE TEST EFFACÉES par ${user.email} : ${done.bookings || 0} réservations, ${done.invoices || 0} factures, ${done.users || 0} comptes${saved ? ` (sauvegarde avant : ${path.basename(saved)})` : ''}.`);
+    return { ok: true, message: `Données de test effacées : ${done.bookings || 0} réservations, ${done.invoices || 0} factures et avoirs${done.users ? `, ${done.users} comptes` : ''}. La prochaine facture sera F${parisYear()}-000001.${saved ? ' Une sauvegarde a été faite juste avant.' : ''}` };
+  });
   route('POST', '/api/admin/backups', ({ user }) => {
     need(user, 'admin');
     if (!backupDir) throw new HttpError(400, 'Sauvegardes désactivées.');
@@ -376,7 +419,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db_.log(db, `Nouveau client parrainé (code ${refCode}) : ${REFERRAL_EUR} € offerts sur son premier ménage.`);
     }
     if (role === 'intervenante') {
-      db.prepare('INSERT INTO workers (user_id, statut, cp, rate) VALUES (?, ?, ?, ?)').run(id, statut, cp, rate);
+      db.prepare('INSERT INTO workers (user_id, statut, cp, rate, gender) VALUES (?, ?, ?, ?, ?)').run(id, statut, cp, rate, body.gender === 'h' ? 'h' : 'f');
       db_.setAvailability(db, id, db_.NEW_WORKER_WEEK);
       db_.log(db, `Nouvelle candidature : ${name} (${statut === 'S' ? 'salariée' : 'indépendante'}, ${cp}).`);
     }
@@ -588,14 +631,17 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db.prepare('INSERT INTO resets (token_hash, user_id, expires) VALUES (?, ?, ?)').run(sha(welcome), cid, Date.now() + 7 * 864e5);
       client = { id: cid };
     }
+    const transfer = body.billing === 'virement';
+    if (transfer) db.prepare("UPDATE users SET billing = 'virement' WHERE id = ?").run(client.id);
     const service = QUOTE_SERVICE[q.kind] || 'menage';
     const tasks = JSON.stringify(checklist.clean([], service));
     const dates = planDates(start, count, o.frequency);
     const ids = [];
     for (const date of dates) {
       const r = db.prepare(`INSERT INTO bookings (client_id, service, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, checklist, photo_consent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, ?, 0)`).run(client.id, service, o.hours, q.cp, address, date, time, o.perVisitTTC, zone, stripeReady ? 'en_attente_paiement' : 'simule', tasks);
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, ?, 0)`).run(client.id, service, o.hours, q.cp, address, date, time, o.perVisitTTC, zone, transfer ? 'virement' : stripeReady ? 'en_attente_paiement' : 'simule', tasks);
       ids.push(Number(r.lastInsertRowid));
+      if (transfer) engine.assign(db, ids[ids.length - 1]);
     }
     db.prepare("UPDATE quote_requests SET status = 'planifie', planned_ids = ?, planned_at = ? WHERE id = ?").run(JSON.stringify(ids), now().toISOString(), id);
     db_.log(db, `Devis ${q.offer_number} planifié : ${ids.length} passage(s) pour ${q.company} (réservations n° ${ids.join(', ')}).`);
@@ -606,7 +652,8 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       `Merci pour votre confiance. Voici les passages prévus pour ${q.company}, à ${time}, ${address} :`,
       ...dates.slice(0, 12).map((d) => `• ${fmtD(d)}`), ...(dates.length > 12 ? [`… et ${dates.length - 12} autres passages.`] : []),
       `${o.perVisitTTC.toFixed(2).replace('.', ',')} € par passage, soit ${total.toFixed(2).replace('.', ',')} € pour ces ${ids.length} passage${ids.length > 1 ? 's' : ''}.`,
-      stripeReady ? 'Pour confirmer, réglez par carte dans votre espace Proprigo : un passage à la fois, ou tous en une fois. Une facture est créée automatiquement après chaque paiement.' : 'Vous retrouvez ces passages dans votre espace Proprigo.',
+      transfer ? 'Paiement par virement : en fin de mois, vous recevez un relevé avec les factures des passages faits, à régler sous 30 jours. Rien à payer maintenant.'
+        : stripeReady ? 'Pour confirmer, réglez par carte dans votre espace Proprigo : un passage à la fois, ou tous en une fois. Une facture est créée automatiquement après chaque paiement.' : 'Vous retrouvez ces passages dans votre espace Proprigo.',
       ...(welcome ? ['Nous vous avons créé un espace client avec cette adresse e-mail. Choisissez votre mot de passe avec le bouton ci-dessous (lien valable 7 jours).'] : []),
     ], welcome ? { label: 'Créer mon mot de passe', path: `/#/nouveau-mot-de-passe?t=${welcome}` } : { label: 'Voir et payer mes passages', path: '/#/mes-reservations' });
     return { ok: true, message: `${ids.length} passage${ids.length > 1 ? 's' : ''} planifié${ids.length > 1 ? 's' : ''}. ${q.company} a reçu l'e-mail${welcome ? ' avec la création de son espace' : ''}.`, ids };
@@ -625,6 +672,90 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db_.log(db, `PAIEMENT GROUPÉ IMPOSSIBLE (${user.email}) : ${String(e.message).slice(0, 300)}`);
       throw new HttpError(502, 'Paiement indisponible. Réessayez dans un instant.');
     }
+  });
+  // ----- entreprises payées par virement : relevé de fin de mois -----
+  const monthOf = (d) => String(d).slice(0, 7);
+  const billView = (bill) => {
+    const c = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(bill.client_id) || {};
+    const lines = db.prepare('SELECT b.id, b.date, b.time, b.service, b.hours, b.total, b.discount, b.cp, i.number FROM bookings b LEFT JOIN invoices i ON i.booking_id = b.id AND i.kind = \'facture\' WHERE b.bill_id = ? ORDER BY b.date, b.time').all(bill.id);
+    return { ...bill, total: bill.total_cents / 100, client: c, lines, iban: company.iban || null, bic: company.bic || null, legal: legalInfo(), franchiseTVA };
+  };
+  route('GET', '/api/admin/transfers', ({ user }) => {
+    need(user, 'admin');
+    const clients = db.prepare("SELECT id, name, email FROM users WHERE role = 'client' AND billing = 'virement' ORDER BY name").all().map((c) => ({
+      ...c, toBill: db.prepare("SELECT substr(date, 1, 7) AS month, COUNT(*) AS n, ROUND(SUM(total), 2) AS total FROM bookings WHERE client_id = ? AND status = 'terminee' AND payment_status = 'virement' AND bill_id IS NULL GROUP BY month ORDER BY month").all(c.id),
+    }));
+    const bills = db.prepare('SELECT * FROM transfer_bills ORDER BY paid_at IS NOT NULL, issued_at DESC LIMIT 60').all().map(billView);
+    return { clients, bills, ibanReady: Boolean(company.iban) };
+  });
+  route('POST', '/api/admin/clients/billing', ({ user, body }) => {
+    need(user, 'admin');
+    const email = str(body.email, 200).toLowerCase();
+    const c = db.prepare("SELECT id, name, billing FROM users WHERE email = ? AND role = 'client'").get(email);
+    if (!c) throw new HttpError(404, 'Aucun compte client avec cette adresse e-mail.');
+    const billing = body.billing === 'virement' ? 'virement' : null;
+    db.prepare('UPDATE users SET billing = ? WHERE id = ?').run(billing, c.id);
+    let moved = 0;
+    if (billing) {
+      // les passages à venir pas encore payés passent en virement et sont confirmés
+      for (const b of db.prepare("SELECT id FROM bookings WHERE client_id = ? AND paid = 0 AND status IN ('en_attente', 'proposee', 'attribuee') AND payment_status IN ('en_attente_paiement', 'paiement_echoue')").all(c.id)) {
+        db.prepare("UPDATE bookings SET payment_status = 'virement' WHERE id = ?").run(b.id); engine.assign(db, b.id); moved++;
+      }
+    }
+    db_.log(db, `${c.name} (${email}) : paiement ${billing ? 'par virement en fin de mois' : 'par carte'}.`);
+    return { ok: true, message: billing ? `${c.name} paiera par virement en fin de mois.${moved ? ` ${moved} passage(s) à venir confirmé(s).` : ''}` : `${c.name} paiera de nouveau par carte.` };
+  });
+  route('POST', '/api/admin/transfer-bills', ({ user, body }) => {
+    need(user, 'admin');
+    const clientId = Number(body.client_id); const month = str(body.month, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new HttpError(400, 'Mois invalide.');
+    if (month >= monthOf(pricing.todayParis(now())) && !body.early) throw new HttpError(400, 'Le mois n\'est pas terminé. Facturez-le à partir du 1er du mois suivant.');
+    const c = db.prepare("SELECT id, name, email FROM users WHERE id = ? AND role = 'client'").get(clientId);
+    if (!c) throw new HttpError(404, 'Client introuvable.');
+    const rows = db.prepare("SELECT id, total FROM bookings WHERE client_id = ? AND status = 'terminee' AND payment_status = 'virement' AND bill_id IS NULL AND substr(date, 1, 7) = ?").all(c.id, month);
+    if (!rows.length) throw new HttpError(409, 'Aucun passage terminé à facturer pour ce mois.');
+    const issued = now().toISOString();
+    const due = addDays(pricing.todayParis(now()), 30);
+    let billId;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const n = db.prepare('SELECT COUNT(*) AS n FROM transfer_bills').get().n + 1;
+      billId = Number(db.prepare('INSERT INTO transfer_bills (client_id, month, total_cents, issued_at, due_date, ref) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(c.id, month, Math.round(rows.reduce((t, b) => t + b.total, 0) * 100), issued, due, `PROPRIGO-R${String(n).padStart(4, '0')}`).lastInsertRowid);
+      for (const b of rows) db.prepare("UPDATE bookings SET payment_status = 'virement_facture', bill_id = ? WHERE id = ?").run(billId, b.id);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    for (const b of rows) issueInvoice(b.id);
+    const v = billView(db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(billId));
+    const mois = new Date(month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    mailer.send(c.email, `Votre relevé Proprigo de ${mois}`, `Relevé de ${mois}`, [
+      `Bonjour ${c.name.split(' ')[0]},`,
+      `Voici le relevé de vos ${rows.length} passage${rows.length > 1 ? 's' : ''} de ${mois} : ${v.total.toFixed(2).replace('.', ',')} € au total, une facture par passage.`,
+      `À régler par virement avant le ${new Date(due + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}, avec la référence ${v.ref}.`,
+      ...(company.iban ? [`IBAN : ${company.iban}${company.bic ? ` · BIC : ${company.bic}` : ''}`] : []),
+    ], { label: 'Voir le relevé et les factures', path: `/#/releve?id=${billId}` });
+    db_.log(db, `Relevé ${v.ref} (${mois}) envoyé à ${c.name} : ${v.total} €.`);
+    return { ok: true, message: `Relevé ${v.ref} envoyé à ${c.email} : ${v.total.toFixed(2).replace('.', ',')} €.`, bill: v };
+  });
+  route('POST', '/api/admin/transfer-bills/:id/paid', ({ user, id }) => {
+    need(user, 'admin');
+    const bill = db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(id);
+    if (!bill) throw new HttpError(404, 'Relevé introuvable.');
+    if (bill.paid_at) throw new HttpError(409, 'Ce relevé est déjà marqué payé.');
+    db.prepare('UPDATE transfer_bills SET paid_at = ? WHERE id = ?').run(now().toISOString(), id);
+    db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye_virement' WHERE bill_id = ?").run(id);
+    db_.log(db, `Virement reçu pour le relevé ${bill.ref} (${bill.total_cents / 100} €).`);
+    return { ok: true, message: `Relevé ${bill.ref} marqué payé.` };
+  });
+  route('GET', '/api/transfer-bills', ({ user }) => {
+    need(user, 'client');
+    return db.prepare('SELECT id, month, total_cents, issued_at, due_date, paid_at, ref FROM transfer_bills WHERE client_id = ? ORDER BY issued_at DESC').all(user.id).map((b) => ({ ...b, total: b.total_cents / 100 }));
+  });
+  route('GET', '/api/transfer-bills/:id', ({ user, id }) => {
+    need(user);
+    const bill = db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(id);
+    if (!bill || !(user.role === 'admin' || bill.client_id === user.id)) throw new HttpError(404, 'Relevé introuvable.');
+    return billView(bill);
   });
   const quoteByToken = (t) => {
     const token = String(t || '');
@@ -744,7 +875,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       const homeId = Number(query.get('home_id')) || null;
       const asked = pastWorker(user.id, query.get('worker_id')) ? Number(query.get('worker_id')) : null;
       const pid = asked || engine.preferredIds(db, { client_id: user.id, home_id: homeId, series_id: null })[0];
-      if (pid) preferred = { id: pid, name: engine.firstName(db, pid), slots: engine.slotsFor(db, pid, { date, cp, hours }).filter(later) };
+      if (pid) preferred = { id: pid, name: engine.firstName(db, pid), gender: genderOf(pid), slots: engine.slotsFor(db, pid, { date, cp, hours }).filter(later) };
     }
     return { slots, preferred };
   });
@@ -799,6 +930,11 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return Array.isArray(ids) ? [...new Set(ids.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))] : [];
   };
   // ---- factures et avoirs : numéro unique, qui se suit sans trou, par année (F2026-000001, A2026-000001)
+  // entreprises payées par virement : relevé mensuel des factures
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'billing')) db.exec('ALTER TABLE users ADD COLUMN billing TEXT');
+  if (!db.prepare('PRAGMA table_info(bookings)').all().some((c) => c.name === 'bill_id')) db.exec('ALTER TABLE bookings ADD COLUMN bill_id INTEGER');
+  db.exec(`CREATE TABLE IF NOT EXISTS transfer_bills (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL, month TEXT NOT NULL, total_cents INTEGER NOT NULL,
+    issued_at TEXT NOT NULL, due_date TEXT NOT NULL, paid_at TEXT, ref TEXT NOT NULL UNIQUE)`);
   db.exec(`CREATE TABLE IF NOT EXISTS invoices (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('facture','avoir')), year INTEGER NOT NULL, seq INTEGER NOT NULL,
     number TEXT NOT NULL UNIQUE, booking_id INTEGER NOT NULL, client_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, tva_rate REAL NOT NULL,
     ref_invoice TEXT, refund_key TEXT UNIQUE, issued_at TEXT NOT NULL, UNIQUE(kind, year, seq))`);
@@ -835,7 +971,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const existing = db.prepare("SELECT * FROM invoices WHERE kind = 'facture' AND booking_id = ?").get(bookingId);
     if (existing) return existing;
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
-    if (!b || !b.paid || b.payment_status === 'garantie') return null; // retour gratuit : rien n'est facturé
+    if (!b || (!b.paid && b.payment_status !== 'virement_facture') || b.payment_status === 'garantie') return null; // retour gratuit : rien n'est facturé
     db.exec('BEGIN IMMEDIATE');
     try {
       const n = nextNumber('facture');
@@ -1089,7 +1225,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       const discount = Math.min(creditOf(user.id), qk0.total);
       const qk = { ...qk0, total: Math.round((qk0.total - discount) * 100) / 100 };
       const r = db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, series_id, checklist, photo_consent, home_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${user.billing === 'virement' ? 'virement' : stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
         user.id, q.service, q.size, q.hours, body.cp, address, date, time, k === 0 && body.urgent ? 1 : 0, body.kit ? 1 : 0, qk.total, q.zone, seriesId, tasks, consent, home ? home.id : null);
       const id = Number(r.lastInsertRowid);
       if (pastWorker(user.id, body.want_worker_id)) db.prepare('UPDATE bookings SET want_worker_id = ? WHERE id = ?').run(Number(body.want_worker_id), id);
@@ -1099,7 +1235,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       if (stripeReady && qk.total === 0) db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye' WHERE id = ?").run(id);
       ids.push(id);
       db_.log(db, `Réservation n° ${id} créée, paiement ${stripeReady ? 'en attente' : 'simulé'} : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
-      if (!stripeReady && !production) engine.assign(db, id); // mode démonstration seulement
+      if ((!stripeReady && !production) || user.billing === 'virement') engine.assign(db, id); // démonstration, ou entreprise payée par virement
+    }
+    if (user.billing === 'virement') {
+      const f = bookingView(db.prepare('SELECT * FROM bookings WHERE id = ?').get(ids[0]));
+      notifyTeamNewBooking(ids, { paidBy: 'virement en fin de mois (entreprise)' });
+      mailer.send(user.email, `Réservation confirmée : ${fr(f.date)} à ${f.time}`, 'Votre ménage est réservé', [`${fr(f.date)} à ${f.time}, ${f.address} (${f.cp}).`,
+        `Prix : ${f.total} €${ids.length > 1 ? `, puis ${ids.length - 1} autre(s) passage(s)` : ''}. Paiement par virement : vous recevez une facture récapitulative en fin de mois.`], { label: 'Suivre ma réservation', path: '/#/mes-reservations' });
+      return { status: 201, data: { ...f, created: ids.length, paidByTransfer: true } };
     }
     if (stripeReady) {
       // Chaque intervention est enregistrée sans affectation jusqu'à confirmation Stripe.
@@ -1126,7 +1269,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     notifyTeamNewBooking(ids, { paidBy: 'paiement simulé (démonstration)' });
     mailer.send(user.email, `Réservation confirmée : ${fr(first.date)} à ${first.time}`, 'Votre ménage est réservé',
       [`${fr(first.date)} à ${first.time}, ${first.address} (${first.cp}).`, `Prix : ${first.total} € TTC${ids.length > 1 ? `, puis ${ids.length - 1} autre(s) ménage(s) récurrent(s)` : ''}.`,
-        first.worker_name ? `Votre intervenante : ${first.worker_name.split(' ')[0]}, intervenante vérifiée.` : 'Nous vous indiquerons le nom de votre intervenante dès que possible.',
+        first.worker_name ? (genderOf(first.worker_id) === 'h' ? `Votre intervenant : ${first.worker_name.split(' ')[0]}, intervenant vérifié.` : `Votre intervenante : ${first.worker_name.split(' ')[0]}, intervenante vérifiée.`) : 'Nous vous indiquerons très vite qui vient.',
         `Annulation gratuite jusqu'à ${FREE_CANCEL_HOURS} h avant le ménage.`],
       { label: 'Suivre ma réservation', path: '/#/' });
     return { status: 201, data: { ...first, created: ids.length } };
@@ -1205,7 +1348,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       const v = { ...bookingView(b) };
       v.worker_name = v.worker_display; // le client ne reçoit pas le nom de famille
       const pid = engine.preferredIds(db, b)[0];
-      return pid ? { ...v, preferred_id: pid, preferred_name: engine.firstName(db, pid) } : v;
+      return pid ? { ...v, preferred_id: pid, preferred_name: engine.firstName(db, pid), preferred_gender: genderOf(pid) } : v;
     });
   });
 
@@ -1945,7 +2088,7 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     const reviews = db.prepare("SELECT rating, review, date FROM bookings WHERE worker_id = ? AND status = 'terminee' AND review IS NOT NULL AND rating >= 4 ORDER BY date DESC LIMIT 3").all(id);
     const tier = tiers.tierOf(db, id);
     const own = user.id === id || user.role === 'admin';
-    return { id, photo: hasAvatar(id), ...(own ? { avatar_status: db.prepare('SELECT avatar_status FROM workers WHERE user_id = ?').get(id).avatar_status || null } : {}), displayName: displayName(w.name), tier: { key: tier.key, label: tier.label, icon: tier.icon }, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
+    return { id, photo: hasAvatar(id), gender: genderOf(id), ...(own ? { avatar_status: db.prepare('SELECT avatar_status FROM workers WHERE user_id = ?').get(id).avatar_status || null } : {}), displayName: displayName(w.name), tier: { key: tier.key, label: tier.label, icon: tier.icon }, firstName: w.name.split(' ')[0], since: w.created_at.slice(0, 7), missions: st.n, rating: st.rated ? Math.round(st.avg * 10) / 10 : null, ratings: st.rated, languages: w.languages || '', bio: w.bio || '', reviews };
   });
   // ----- photo de profil des intervenantes (validée par l'équipe avant d'être montrée aux clients) -----
   const AVATARS = path.join(PHOTOS, 'avatars');
@@ -1987,6 +2130,12 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     return { streamed: true };
   });
   // tarif d'une indépendante : modifié par le responsable, avec son accord ; s'applique aux ménages faits à partir d'aujourd'hui
+  route('POST', '/api/admin/workers/:id/gender', ({ user, id, body }) => {
+    needStaff(user);
+    const r = db.prepare('UPDATE workers SET gender = ? WHERE user_id = ?').run(body.gender === 'h' ? 'h' : 'f', id);
+    if (!r.changes) throw new HttpError(404, 'Intervenant(e) introuvable.');
+    return { ok: true, message: body.gender === 'h' ? 'Enregistré : homme (« intervenant »).' : 'Enregistré : femme (« intervenante »).' };
+  });
   route('POST', '/api/admin/workers/:id/rate', ({ user, id, body }) => {
     need(user, 'admin');
     if (!isOwner(user)) throw new HttpError(403, 'Réservé au responsable.');
@@ -2753,6 +2902,11 @@ ${parts || '<p>Aucune réservation retrouvée pour ce paiement : vérifiez dans 
 <div><b>Lieu de la prestation</b><br>${e(b.address)}, ${e(b.cp)}<br>Réservation n° ${b.id}</div></div>
 ${table}
 ${isAvoir ? `<p>Remboursé sur le moyen de paiement d'origine.</p>`
+    : ['virement_facture', 'paye_virement'].includes(b.payment_status) ? (() => {
+      const bill = b.bill_id ? db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(b.bill_id) : null;
+      return bill && bill.paid_at ? `<p>Facture acquittée par virement le ${e(day(bill.paid_at))}.</p>`
+        : `<p>Paiement par virement à réception, au plus tard le ${bill ? e(day(bill.due_date + 'T12:00:00Z')) : '30 jours après la facture'}${bill ? `, référence <b>${e(bill.ref)}</b>` : ''}.${company.iban ? ` IBAN : ${e(company.iban)}${company.bic ? ` · BIC : ${e(company.bic)}` : ''}.` : ''}</p>`;
+    })()
     : `<p>Facture acquittée${isTest ? '' : ` le ${e(day(doc.issued_at))}`} : ${credit > 0 ? `${eur(ttc - credit)} par carte bancaire et ${eur(credit)} avec le crédit Proprigo (parrainage, carte cadeau ou pack).` : 'réglée par carte bancaire.'}</p>`}
 ${isPro ? "<p class=\"muted\">Prestation à un professionnel. Escompte pour paiement anticipé : néant. En cas de retard de paiement : pénalités au taux de 3 fois le taux d'intérêt légal et indemnité forfaitaire pour frais de recouvrement de 40 € (art. L441-10 du Code de commerce).</p>"
     : sapOn() && SAP_SERVICES.includes(b.service) ? `<p class="muted">Prestation de services à la personne (déclaration n° ${e(sapSettings().numero)}), ouvrant droit au crédit d'impôt de l'article 199 sexdecies du Code général des impôts, dans les conditions en vigueur. L'attestation fiscale annuelle est disponible dans votre espace.</p>`
@@ -2767,8 +2921,8 @@ ${isAvoir ? `<p class="noprint"><a href="?">Voir la facture ${e(doc.ref_invoice)
   route('GET', '/api/bookings/:id/receipt', ({ user, id, res, query }) => {
     const b = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
     if (!b || !user || !(user.role === 'admin' || b.client_id === user.id)) throw new HttpError(404, 'Réservation introuvable.');
-    const isTest = !b.paid;
-    if (isTest && (production || b.status !== 'terminee')) throw new HttpError(409, 'La facture est disponible dès que la réservation est payée.');
+    const isTest = !b.paid && b.payment_status !== 'virement_facture';
+    if (isTest && (production || b.status !== 'terminee')) throw new HttpError(409, b.payment_status === 'virement' ? 'La facture sera créée avec le relevé de fin de mois.' : 'La facture est disponible dès que la réservation est payée.');
     const facture = isTest ? null : issueInvoice(b.id);
     const avoirs = isTest ? [] : db.prepare("SELECT * FROM invoices WHERE kind = 'avoir' AND booking_id = ? ORDER BY seq").all(b.id);
     const wanted = String(query.get('doc') || '');
@@ -3045,7 +3199,7 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
     db.exec('BEGIN IMMEDIATE');
     try {
       const id = db_.createUser(db, { role: 'intervenante', email, name, password, phone: str(body.phone, 20) });
-      db.prepare('INSERT INTO workers (user_id, statut, cp, rate, step) VALUES (?, ?, ?, ?, 0)').run(id, statut, cp, rate);
+      db.prepare('INSERT INTO workers (user_id, statut, cp, rate, step, gender) VALUES (?, ?, ?, ?, 0, ?)').run(id, statut, cp, rate, body.gender === 'h' ? 'h' : 'f');
       db_.setAvailability(db, id, db_.NEW_WORKER_WEEK);
       db.exec('COMMIT');
       db_.log(db, `Intervenante créée par administration : ${name} (validation nécessaire).`);

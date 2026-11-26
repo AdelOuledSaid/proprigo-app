@@ -7,7 +7,7 @@
 
   // ---------- outils ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const eur = (n) => { const v = Number(n); return v.toLocaleString('fr-FR', Number.isInteger(v) ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\u00a0€'; };
+  const eur = (n) => { const v = Number(n); return v.toLocaleString(LOC(), Number.isInteger(v) ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '\u00a0€'; };
   const dayFr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const LOC = () => (window.PROPRIGO_I18N ? window.PROPRIGO_I18N.locale() : 'fr-FR'); // langue choisie par l'intervenante
   const dateFr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -19,7 +19,7 @@
     en_attente: ['Recherche en cours', 'warn'], proposee: ['Recherche en cours', 'warn'], attribuee: ['Confirmée', ''],
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
   };
-  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé' };
+  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé', virement: 'Paiement par virement en fin de mois', virement_facture: 'Facturé, virement à recevoir', paye_virement: 'Payé par virement' };
   const paymentLabel = (b) => {
     if (b.status === 'annulee' && !b.paid) return 'Annulée — non payée';
     if (['rembourse', 'rembourse'].includes(b.payment_status)) {
@@ -29,6 +29,8 @@
     }
     return PAY[b.payment_status] || '';
   };
+  // accord selon l'intervenant(e) : homme → « intervenant », sinon « intervenante »
+  const GW = (g) => (g === 'h' ? { N: 'Intervenant', n: 'intervenant', e: '', il: 'il' } : { N: 'Intervenante', n: 'intervenante', e: 'e', il: 'elle' });
   const pill = (s) => `<span class="pill ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
   // étiquette suivie en direct : en route et arrivée remplacent « Confirmée »
   const livePill = (b) => (b.status === 'attribuee' && b.arrived_at ? '<span class="pill pill-live">📍 Arrivée</span>' : b.status === 'attribuee' && b.on_way_at ? '<span class="pill pill-live">🚶 En route</span>' : b.status === 'en_cours' ? '<span class="pill pill-live">🧽 En cours</span>' : pill(b.status));
@@ -108,7 +110,15 @@
       links.push('<a href="#/compte">Mon compte</a>');
       links.push('<button type="button" id="logout">Se déconnecter</button>');
     }
+    if (!me || me.role === 'client') links.push(`<button type="button" id="langToggle" class="lang-toggle" data-notr aria-label="${uiLang() === 'en' ? 'Passer en français' : 'Switch to English'}">${uiLang() === 'en' ? '🇫🇷 Français' : '🇬🇧 English'}</button>`);
     $nav.innerHTML = links.join('');
+    const lt = document.getElementById('langToggle');
+    if (lt) lt.onclick = async () => {
+      const next = uiLang() === 'en' ? 'fr' : 'en';
+      try { localStorage.setItem('lang', next); } catch { /* navigation privée */ }
+      if (me) await api('POST', '/api/me/lang', { lang: next }).catch(() => {});
+      location.reload(); // les textes déjà traduits repartent du français
+    };
     // téléphone : bandeau compact, menu replié ; le bouton Réserver reste visible pour les clients
     const btn = document.getElementById('menuBtn');
     const quick = document.getElementById('quickCta');
@@ -143,7 +153,7 @@
   // Crédit d'impôt : affiché seulement une fois la déclaration « services à la personne » enregistrée dans l'admin.
   const sapOn = () => Boolean(CONFIG.sap && CONFIG.sap.declared);
   const afterCredit = (n) => `soit ${String(Math.round(n * 50) / 100).replace('.', ',')} € après crédit d'impôt`;
-  const hhmm = (iso) => new Date(iso).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
+  const hhmm = (iso) => new Date(iso).toLocaleTimeString(LOC(), { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
   async function loadMe() {
     const r = await api('GET', '/api/me');
     me = r.user;
@@ -173,7 +183,7 @@
   async function openThread(box, id, quick = []) {
     const msgs = await api('GET', `/api/bookings/${id}/messages`);
     box.innerHTML = `<div class="thread">
-      ${msgs.length ? msgs.map((m) => `<p class="bubble ${m.mine ? 'me' : ''}"><span class="small muted">${esc(m.name)} · ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><br>${esc(m.text)}</p>`).join('') : '<p class="small muted">Aucun message. Les numéros de téléphone et e-mails sont masqués automatiquement.</p>'}
+      ${msgs.length ? msgs.map((m) => `<p class="bubble ${m.mine ? 'me' : ''}"><span class="small muted">${esc(m.name)} · ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleString(LOC(), { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><br>${esc(m.text)}</p>`).join('') : '<p class="small muted">Aucun message. Les numéros de téléphone et e-mails sont masqués automatiquement.</p>'}
       ${quick.length ? `<div class="chips">${quick.map((q) => `<button type="button" data-quick="${esc(q)}">${esc(q)}</button>`).join('')}</div>` : ''}
       <form class="row" style="flex-wrap:nowrap"><input type="text" name="text" maxlength="1000" placeholder="Votre message" aria-label="Votre message" required style="margin:0"><button class="btn blue">Envoyer</button></form>
     </div>`;
@@ -240,7 +250,7 @@
   const LEASE = { studio: { label: 'Studio', hours: 4 }, T2: { label: '2 pièces', hours: 5 }, T3: { label: '3 pièces', hours: 7 }, maison: { label: 'Maison', hours: 8 } };
   const LEASE_TASKS = ['Cuisine : intérieur des placards, four, réfrigérateur, hotte, plaques', 'Salle de bain : calcaire, joints, robinetterie, miroir', 'WC : cuvette, abattant, sol, murs autour', 'Sols de toutes les pièces : aspirateur et serpillière', 'Plinthes, portes, poignées et interrupteurs', 'Intérieur des placards et penderies', 'Vitres intérieures accessibles', 'Traces sur les murs (quand c\'est possible)', 'Radiateurs et grilles de ventilation'];
   const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge', bureau: 'Locaux professionnels' };
-  const dateLong = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const dateLong = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 
   // ---------- accueil ----------
   views[''] = async (params) => {
@@ -398,7 +408,7 @@
       const box = document.getElementById('homeReviews');
       if (!box || rv.count < 3 || !rv.list.length) return;
       const stars = (n) => `<span class="rv-stars" aria-label="${n} sur 5">${'★'.repeat(n)}<span aria-hidden="true">${'★'.repeat(5 - n)}</span></span>`;
-      const month = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+      const month = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' });
       box.innerHTML = `<h2 id="revT">Ce que disent nos clients</h2>
         <p class="rv-summary"><b>${String(rv.average).replace('.', ',')}/5</b> sur ${rv.count} avis de clients ayant réservé un ménage</p>
         <div class="rv-grid">${rv.list.map((r) => `<figure class="rv-card">${stars(r.stars)}<blockquote>${esc(r.text)}</blockquote>
@@ -496,7 +506,7 @@
   async function workerCard(id) {
     let c;
     try { c = await api('GET', `/api/workers/${id}/card`); } catch { return ''; }
-    const meta = ['Intervenante vérifiée', c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
+    const meta = [`${GW(c.gender).N} vérifié${GW(c.gender).e}`, c.missions ? `${c.missions} ménage${c.missions > 1 ? 's' : ''}` : '', c.rating ? `★ ${String(c.rating).replace('.', ',')} (${c.ratings} avis)` : ''].filter(Boolean).join(' · ');
     return `<div class="wcard">
       ${avatar(c.id, c.photo, c.firstName, 'wcard-av')}
       <div class="wcard-name">${esc(c.displayName || c.firstName)}${c.tier && c.tier.key !== 'bleu' ? ` <span class="tier-pill ${c.tier.key}">${c.tier.icon} Intervenante ${esc(c.tier.label)}</span>` : ''}</div>
@@ -528,7 +538,7 @@
       </section>
       ${next ? `
         <article class="card next">
-          ${next.status === 'attribuee' && next.on_way_at ? `<p class="live-line"><span class="live-dot"></span>${next.arrived_at ? `${esc((next.worker_name || '').split(' ')[0])} est arrivée chez vous.` : `${esc((next.worker_name || '').split(' ')[0])} est en route${next.eta_at ? `, arrivée estimée vers ${hhmm(next.eta_at)}` : ''}.`}</p>` : ''}
+          ${next.status === 'attribuee' && next.on_way_at ? `<p class="live-line"><span class="live-dot"></span>${next.arrived_at ? `${esc((next.worker_name || '').split(' ')[0])} est arrivé${GW(next.worker_gender).e} chez vous.` : `${esc((next.worker_name || '').split(' ')[0])} est en route${next.eta_at ? `, arrivée estimée vers ${hhmm(next.eta_at)}` : ''}.`}</p>` : ''}
           ${next.worker_id ? '<div id="wcardHost"></div>' : ''}
           ${next.status === 'en_cours' && next.checklist.length ? shine(next) : ''}
           <dl class="facts">
@@ -537,7 +547,7 @@
             <div><dt>Prestation</dt><dd>${esc(label(next))} · <b>${eur(next.total)}</b></dd></div>
           </dl>
           ${next.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(next.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${next.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${next.id}">Annuler le ménage</button></div></div>` : ''}
-          ${next.preferred_id && next.worker_id !== next.preferred_id ? `<p class="notice"><b>${esc(next.preferred_name)}, votre intervenante préférée, n'est pas disponible à ce créneau.</b> L'équipe recherchera une intervenante et vous confirmera son attribution. Pour la garder, choisissez un autre créneau via « Modifier ».</p>` : ''}
+          ${next.preferred_id && next.worker_id !== next.preferred_id ? `<p class="notice"><b>${esc(next.preferred_name)}, votre ${GW(next.preferred_gender).n} préféré${GW(next.preferred_gender).e}, n'est pas disponible à ce créneau.</b> L'équipe recherchera une intervenante et vous confirmera son attribution. Pour la garder, choisissez un autre créneau via « Modifier ».</p>` : ''}
           <div class="actions">
             ${['en_attente', 'proposee', 'attribuee'].includes(next.status) && (Date.parse(`${next.date}T${next.time}:00`) - Date.now()) / 36e5 >= 24 ? `<button class="btn ghost" data-edit="${next.id}">Modifier</button>` : ''}
             <button class="btn ghost" data-thread="${next.id}">Contacter${next.messages ? ` (${next.messages})` : ''}</button>
@@ -776,7 +786,7 @@
       let who = 'Une intervenante vérifiée, confirmée par e-mail';
       try {
         const s = await api('GET', `/api/slots?date=${draft.date}&cp=${draft.cp}&hours=${draftHours(draft)}&service=${draft.service}${draft.home_id ? `&home_id=${draft.home_id}` : ''}`);
-        if (s.preferred && s.preferred.slots.includes(draft.time)) who = `${s.preferred.name}, votre intervenante préférée`;
+        if (s.preferred && s.preferred.slots.includes(draft.time)) who = `${s.preferred.name}, votre ${GW(s.preferred.gender).n} préféré${GW(s.preferred.gender).e}`;
       } catch { /* sans incidence */ }
       shell(`
         <h1>Récapitulatif</h1>
@@ -829,7 +839,7 @@
             <div class="done-art">${ART.done}</div>
             <h1>C'est réservé !</h1>
             <p>${esc(dateLong(r.date))} à ${esc(r.time)}, ${esc(r.address)}.</p>
-            <p>${r.worker_name ? `<b>${esc(r.worker_name.split(' ')[0])}</b>, intervenante vérifiée, viendra.` : 'Nous confirmons votre intervenante très vite.'}${r.created > 1 ? ` ${r.created} ménages sont réservés.` : ''}</p>
+            <p>${r.worker_name ? `<b>${esc(r.worker_name.split(' ')[0])}</b>, ${GW(r.worker_gender).n} vérifié${GW(r.worker_gender).e}, viendra.` : 'Nous confirmons votre intervenante très vite.'}${r.created > 1 ? ` ${r.created} ménages sont réservés.` : ''}</p>
             <p class="small muted">Un e-mail de confirmation vous est envoyé.</p>
             <a class="btn primary" href="#/">Suivre ma réservation</a></section>`;
           draft = DRAFT0();
@@ -881,6 +891,7 @@
           ${worker ? '' : `<label>Code de parrainage (facultatif)<input type="text" name="ref" maxlength="12" autocapitalize="characters" value="${esc(ref)}" placeholder="Ex. CLAIRE123"></label>${ref ? '<p class="msg ok" style="margin:0">10 € offerts sur votre premier ménage.</p>' : ''}`}
           ${worker ? `
             <label>Code postal de votre domicile<input type="text" name="cp" inputmode="numeric" maxlength="5" required></label>
+            <label>Vous êtes<select name="gender"><option value="f">Une femme (« intervenante »)</option><option value="h">Un homme (« intervenant »)</option></select></label>
             <label>Vous souhaitez travailler comme
               <select name="statut" id="statut"><option value="S">Salariée de Proprigo</option><option value="I">Indépendante (auto-entrepreneuse)</option></select></label>
             <label id="rateBox" hidden>Votre tarif horaire, facturé à Proprigo<input type="number" name="rate" min="15" max="40" step="0.5" value="22"></label>` : ''}
@@ -924,8 +935,8 @@
           <div class="row"><h3>${esc(label(b))}${b.series_id ? ' <span class="pill">Récurrent</span>' : ''}</h3>${livePill(b)}</div>
           <p class="muted" style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · ${esc(b.address)} · ${esc(b.cp)} · <b>${b.payment_status === 'garantie' ? 'Gratuit (garantie)' : eur(b.total)}</b>${b.kit ? ' · matériel fourni' : ''}</p>
           ${b.payment_status === 'garantie' ? '<p class="small" style="margin:6px 0 0"><span class="pill ok">Retour gratuit</span> Nous revenons reprendre les points que vous avez signalés.</p>' : ''}
-          ${b.status === 'attribuee' && b.on_way_at && !b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est en route${b.eta_at ? `, arrivée estimée vers ${hhmm(b.eta_at)}` : ''}.</p>` : ''}${b.status === 'attribuee' && b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est arrivée chez vous, le ménage va commencer.</p>` : ''}
-          ${b.worker_name ? `<p class="who-line">${avatar(b.worker_id, b.worker_photo, b.worker_name, 'sm')}<span>Intervenante vérifiée : <b>${esc(b.worker_name)}</b></span>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
+          ${b.status === 'attribuee' && b.on_way_at && !b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est en route${b.eta_at ? `, arrivée estimée vers ${hhmm(b.eta_at)}` : ''}.</p>` : ''}${b.status === 'attribuee' && b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est arrivé${GW(b.worker_gender).e} chez vous, le ménage va commencer.</p>` : ''}
+          ${b.worker_name ? `<p class="who-line">${avatar(b.worker_id, b.worker_photo, b.worker_name, 'sm')}<span>${GW(b.worker_gender).N} vérifié${GW(b.worker_gender).e} : <b>${esc(b.worker_name)}</b></span>${mw.favorite === b.worker_id ? ` <span class="pill ok">★ Votre préféré${GW(b.worker_gender).e}</span>` : ''}</p>` : ''}
           ${b.source === 'ical' ? '<p class="small muted" style="margin:6px 0 0">Créé automatiquement depuis le calendrier de votre annonce.</p>' : ''}
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
           <p class="small muted" style="margin:6px 0 0">${esc(paymentLabel(b))}</p>
@@ -945,7 +956,7 @@
             ${active ? `<button type="button" class="linkish danger-link" data-cancel="${b.id}">Annuler le ménage</button>` : ''}
           </div>` : ''}
           ${active && hoursLeft(b) < 24 ? '<p class="small muted" style="margin:6px 0 0">Ménage dans moins de 24 h : pour un changement, écrivez-nous dans les messages. En cas d\'annulation, la moitié du prix est retenue.</p>' : ''}
-          ${active && b.preferred_id && b.worker_id !== b.preferred_id ? `<div class="notice"><b>${esc(b.preferred_name)}, votre intervenante préférée, n'est pas disponible à ce créneau.</b> Une autre intervenante vérifiée Proprigo viendra à sa place.
+          ${active && b.preferred_id && b.worker_id !== b.preferred_id ? `<div class="notice"><b>${esc(b.preferred_name)}, votre ${GW(b.preferred_gender).n} préféré${GW(b.preferred_gender).e}, n'est pas disponible à ce créneau.</b> Une autre intervenante vérifiée Proprigo viendra à sa place.
             ${hoursLeft(b) >= 24 ? `<br>Vous préférez ${esc(b.preferred_name)} ? <button class="btn ghost" data-prefslots="${b.id}">Voir quand ${esc(b.preferred_name)} est libre</button><div id="pref-${b.id}"></div>` : ''}</div>` : ''}
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
           ${b.guarantee_status === 'demandee' ? '<div class="notice"><b>Retour gratuit demandé.</b> L\'équipe vous contacte pour fixer le créneau.</div>' : ''}
@@ -965,6 +976,7 @@
       <div class="row"><h1>Mes réservations</h1><a class="btn primary" href="#/reserver">Nouvelle réservation</a></div>
       <p class="small muted">${FREE_CANCEL}</p>
       ${list.length ? '' : '<p class="card muted">Aucune réservation pour le moment.</p>'}
+      <div id="billsBox"></div>
       ${visibleBookings.some((b) => !isHistory(b)) ? '<h2>Réservations en cours</h2>' : ''}
       ${(() => { const due = visibleBookings.filter((b) => b.payment_status === 'en_attente_paiement' && b.status !== 'annulee' && hoursLeft(b) >= 1); return due.length > 1 ? `<div class="pay-all"><span><b>${due.length} passages à régler</b>${eur(Math.round(due.reduce((t, b) => t + Number(b.total), 0) * 100) / 100)} au total · une facture par passage</span><button class="btn primary" id="payAll">💳 Tout payer en une fois</button></div>` : ''; })()}
       ${visibleBookings.filter((b) => !isHistory(b)).map((b) => renderBooking(b)).join('')}
@@ -1013,6 +1025,12 @@
     });
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
+    const bb = document.getElementById('billsBox');
+    if (bb && me.billing === 'virement') api('GET', '/api/transfer-bills').then((bills) => {
+      const open = bills.filter((x) => !x.paid_at);
+      bb.innerHTML = open.length ? open.map((x) => `<div class="pay-all"><span><b>🧾 Relevé ${esc(new Date(x.month + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' }))} : ${eur(x.total)}</b>à régler par virement avant le ${new Date(x.due_date + 'T12:00:00Z').toLocaleDateString(LOC(), { day: 'numeric', month: 'long', timeZone: 'UTC' })} · référence ${esc(x.ref)}</span><a class="btn primary" href="#/releve?id=${x.id}">Voir le relevé</a></div>`).join('')
+        : '<p class="small muted">💶 Vous payez par virement : un relevé avec les factures arrive en fin de mois.</p>';
+    }).catch(() => {});
     const pa = document.getElementById('payAll');
     if (pa) pa.onclick = async () => { pa.disabled = true; try { const r = await api('POST', '/api/bookings/pay-many', {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); pa.disabled = false; } };
     act('[data-pay-booking]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.payBooking}/pay`, {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); } });
@@ -1618,13 +1636,14 @@
       <section class="card" id="sec-team" data-tab="equipe"><h2>Équipe et recrutement</h2>
         <p class="small muted">Aucune mission avant le statut « Active ».</p>
         ${owner ? `<form id="admin-add-worker" class="card" style="margin:12px 0;padding:16px">
-          <h3>Ajouter une intervenante réelle</h3>
+          <h3>Ajouter une intervenante ou un intervenant</h3>
           <div class="grid2">
             <label>Nom<input name="name" required maxlength="80" placeholder="Prénom et nom"></label>
             <label>E-mail<input name="email" type="email" required maxlength="120"></label>
             <label>Code postal<input name="cp" required maxlength="5" pattern="[0-9]{5}" placeholder="75011"></label>
             <label>Statut<select name="statut" id="admin-worker-statut"><option value="S">Salariée</option><option value="I">Indépendante</option></select></label>
             <label>Téléphone<input name="phone" maxlength="20"></label>
+            <label>Femme ou homme<select name="gender"><option value="f">Femme (« intervenante »)</option><option value="h">Homme (« intervenant »)</option></select></label>
             <label>Tarif horaire (indépendante)<input name="rate" type="number" min="15" max="40" step="0.5" placeholder="22"></label>
             <label>Mot de passe provisoire (10 caractères min.)<input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
           </div>
@@ -1663,14 +1682,15 @@
           ${ob.queue && ob.queue.attente ? `<p class="msg warn">${ob.queue.attente} e-mail(s) en attente : nouvel essai automatique toutes les 5 minutes.</p>` : ''}
           ${ob.queue && ob.queue.abandon ? `<p class="msg warn">${ob.queue.abandon} e-mail(s) abandonné(s) après plusieurs essais : détails dans le journal.</p>` : ''}
           <ul class="plain small">${ob.list.slice(0, 12).map((m) => `<li><span>${esc(m.subject)}<br><span class="muted">${esc(m.to)}</span></span><a href="/api/admin/outbox/${encodeURIComponent(m.file)}" target="_blank" rel="noopener">Ouvrir</a></li>`).join('') || '<li class="muted">Aucun e-mail.</li>'}</ul></section>
+        ${me.staff_level !== 'planning' ? '<section class="card" data-tab="suivi" id="testData"></section>' : ''}
         <section class="card" data-tab="suivi"><h2>Sauvegardes</h2>
           ${bk.enabled ? `<p class="small muted">Une sauvegarde automatique par jour ; les 14 dernières sont gardées sur le serveur.</p>
           ${bk.error ? `<p class="msg warn">Dernière sauvegarde en échec : ${esc(bk.error)}</p>` : ''}
           ${bk.verify && bk.verify.ok ? `<p class="small">Dernière copie vérifiée : elle s'ouvre et contient ${bk.verify.users} comptes et ${bk.verify.bookings} réservations.</p>` : ''}
           ${!bk.offsite || !bk.offsite.configured ? '<p class="msg warn">Pas de copie hors de Render : si le disque est perdu, les sauvegardes le sont aussi. Configurez le stockage externe (voir SAUVEGARDES.md).</p>'
-            : bk.offsite.ok ? `<p class="small">Copie externe chiffrée envoyée le ${new Date(bk.offsite.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}.</p>`
+            : bk.offsite.ok ? `<p class="small">Copie externe chiffrée envoyée le ${new Date(bk.offsite.at).toLocaleString(LOC(), { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}.</p>`
             : bk.offsite.ok === false ? `<p class="msg warn">Copie externe en échec : ${esc(bk.offsite.error || '')}</p>` : '<p class="small muted">Copie externe : envoi à la prochaine sauvegarde.</p>'}
-          <ul class="plain small">${bk.list.map((x) => `<li><span>${new Date(x.time).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><span class="muted">${Math.max(1, Math.round(x.size / 1024))} Ko</span></li>`).join('') || '<li class="muted">Aucune sauvegarde pour le moment.</li>'}</ul>
+          <ul class="plain small">${bk.list.map((x) => `<li><span>${new Date(x.time).toLocaleString(LOC(), { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><span class="muted">${Math.max(1, Math.round(x.size / 1024))} Ko</span></li>`).join('') || '<li class="muted">Aucune sauvegarde pour le moment.</li>'}</ul>
           <button class="btn ghost" id="doBackup">Sauvegarder maintenant</button>
           ${bk.download ? '<a class="btn ghost" href="/api/admin/backups/latest" download>Télécharger la dernière (chiffrée)</a>' : ''}` : '<p class="small muted">Sauvegardes désactivées.</p>'}</section>
         ${r.couts ? `<section class="card" data-tab="chiffres"><h2>Hypothèses de marge</h2><p class="small muted">La marge est une estimation. Ces valeurs sont dans le fichier <b>config/couts.json</b> : faites-les valider par votre expert-comptable puis modifiez-les si besoin (redémarrage nécessaire).</p>
@@ -1717,11 +1737,11 @@
       const notes = `<h3>Notes de l'équipe</h3>
         <form class="note-form"><textarea name="text" rows="2" maxlength="1000" placeholder="Ex. préfère le matin, code d'accès changé…" aria-label="Nouvelle note"></textarea>
           ${kind === 'client' ? '<label class="check small"><input type="checkbox" name="share"> Montrer aussi à l\'intervenante de ses ménages (jamais au client)</label>' : ''}<button class="btn blue">Ajouter</button></form>
-        <ul class="plain small">${d.notes.map((n) => `<li><span>${esc(n.text)}<br><span class="muted">${esc(n.author)} · ${new Date(n.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span>${kind === 'client' ? ` · <button type="button" class="linkish small" data-nshare="${n.id}" data-on="${n.share ? 0 : 1}">${n.share ? '👁️ Visible par l\'intervenante · masquer' : 'Équipe seulement · montrer à l\'intervenante'}</button>` : ''}</span></li>`).join('') || '<li class="muted">Aucune note.</li>'}</ul>`;
+        <ul class="plain small">${d.notes.map((n) => `<li><span>${esc(n.text)}<br><span class="muted">${esc(n.author)} · ${new Date(n.created_at.replace(' ', 'T') + 'Z').toLocaleDateString(LOC())}</span>${kind === 'client' ? ` · <button type="button" class="linkish small" data-nshare="${n.id}" data-on="${n.share ? 0 : 1}">${n.share ? '👁️ Visible par l\'intervenante · masquer' : 'Équipe seulement · montrer à l\'intervenante'}</button>` : ''}</span></li>`).join('') || '<li class="muted">Aucune note.</li>'}</ul>`;
       if (kind === 'client') {
         const c = d.client;
         dlg.innerHTML = `<div class="dlg-head"><h2>${esc(c.name)}</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
-          <p class="muted small">Client depuis ${new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}${c.email ? ` · ${esc(c.email)}` : ''}${c.phone ? ` · ${esc(c.phone)}` : ''}${c.referred_by ? ' · venu par parrainage' : ''}</p>
+          <p class="muted small">Client depuis ${new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric' })}${c.email ? ` · ${esc(c.email)}` : ''}${c.phone ? ` · ${esc(c.phone)}` : ''}${c.referred_by ? ' · venu par parrainage' : ''}</p>
           <div class="gain-grid"><div class="gain"><span>Ménages</span><b>${d.stats.menages}</b></div><div class="gain"><span>Annulés</span><b>${d.stats.annules}</b></div>${d.stats.depense !== null ? `<div class="gain"><span>Dépensé</span><b>${eur(d.stats.depense)}</b></div>` : ''}</div>
           ${d.homes.length ? `<p class="small" style="margin-top:10px"><b>Logements :</b> ${d.homes.map((h) => esc(h.name)).join(', ')}</p>` : ''}
           <h3>Historique</h3><ul class="plain small">${d.bookings.slice(0, 12).map((b) => `<li><span>n° ${b.id} · ${dateFr(b.date)} ${esc(b.time)} · ${esc(label(b))}${b.rating ? ` · ${'★'.repeat(b.rating)}` : ''}${b.review ? `<br><span class="muted">« ${esc(b.review)} »</span>` : ''}</span>${pill(b.status)}</li>`).join('')}</ul>${notes}`;
@@ -1729,15 +1749,16 @@
         const w = d.worker;
         dlg.innerHTML = `<div class="dlg-head"><h2>${esc(w.name)}</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
           <p class="muted small">${w.statut === 'S' ? 'Salariée' : `Indépendante · ${eur(w.rate)}/h`} · ${esc(w.cp)}${w.email ? ` · ${esc(w.email)}` : ''}${w.phone ? ` · ${esc(w.phone)}` : ''}${w.languages ? ` · parle ${esc(w.languages)}` : ''}</p>
+          <label class="small gender-pick">Accord<select data-gender="${w.user_id}"><option value="f"${w.gender === 'h' ? '' : ' selected'}>Femme · intervenante</option><option value="h"${w.gender === 'h' ? ' selected' : ''}>Homme · intervenant</option></select></label>
           ${w.statut === 'I' && owner ? `<form class="row rate-form" style="justify-content:flex-start;gap:8px;align-items:end;margin:6px 0 10px"><label class="small">Tarif horaire<input name="rate" type="number" min="15" max="40" step="0.5" value="${w.rate}" style="width:110px"></label><button class="btn ghost small-btn">Changer le tarif</button><span class="small muted">Uniquement avec son accord : elle est prévenue par e-mail.</span></form>` : ''}
           <div class="gain-grid"><div class="gain"><span>Missions</span><b>${d.stats.missions}</b><small>${String(d.stats.heures).replace('.', ',')} h</small></div><div class="gain"><span>Note</span><b>${d.stats.note ? String(d.stats.note).replace('.', ',') + ' / 5' : '–'}</b><small>${d.stats.avis} avis</small></div><div class="gain"><span>Refus · problèmes</span><b>${d.stats.refus} · ${d.stats.problemes}</b></div></div>
           ${d.lowRatings.length ? `<h3>Notes basses à suivre</h3><ul class="plain small">${d.lowRatings.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} · ${'★'.repeat(x.rating)}${x.review ? `<br><span class="muted">« ${esc(x.review)} »</span>` : ''}</span></li>`).join('')}</ul>` : ''}
           <h3>Prochaines missions</h3><ul class="plain small">${d.upcoming.map((x) => `<li><span>n° ${x.id} · ${dateFr(x.date)} ${esc(x.time)} · ${esc(x.cp)}</span></li>`).join('') || '<li class="muted">Aucune.</li>'}</ul>
-          ${d.rejected ? `<p class="msg warn">Candidature refusée le ${new Date(d.rejected.at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${d.rejected.reason ? ` : ${esc(d.rejected.reason)}` : ''}.</p>` : ''}
+          ${d.rejected ? `<p class="msg warn">Candidature refusée le ${new Date(d.rejected.at.replace(' ', 'T') + 'Z').toLocaleDateString(LOC())}${d.rejected.reason ? ` : ${esc(d.rejected.reason)}` : ''}.</p>` : ''}
           ${d.documents ? `<h3>Pièces justificatives</h3>
             <p class="small ${d.documents.complete ? '' : 'muted'}">${d.documents.complete ? '<span class="pill ok">Toutes les pièces obligatoires sont validées</span>' : (d.documents.missing.length ? `Manque encore : ${d.documents.missing.map(esc).join(' ; ')}.` : '')}${d.documents.expired && d.documents.expired.length ? ` <span class="pill warn">Expiré : ${d.documents.expired.map(esc).join(' ; ')} · plus de nouvelles missions</span>` : ''}</p>
             <ul class="plain small doc-list">${d.documents.list.map((k) => `<li><span><b>${esc(k.label)}</b>${k.required ? '' : ' (facultatif)'}<br>${k.latest
-              ? `<span class="pill ${DOC_STATUS[k.latest.status][1]}">${DOC_STATUS[k.latest.status][0]}</span> déposé le ${new Date(k.latest.uploaded_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}${k.latest.note ? ` · ${esc(k.latest.note)}` : ''}${k.valid_until ? `<br><span class="${k.expired ? 'err' : k.soon ? 'warn-text' : 'muted'}">${k.expired ? '⚠️ Expiré' : 'Valable'} jusqu'au ${dayFr(k.valid_until)}</span>` : ''}`
+              ? `<span class="pill ${DOC_STATUS[k.latest.status][1]}">${DOC_STATUS[k.latest.status][0]}</span> déposé le ${new Date(k.latest.uploaded_at.replace(' ', 'T') + 'Z').toLocaleDateString(LOC())}${k.latest.note ? ` · ${esc(k.latest.note)}` : ''}${k.valid_until ? `<br><span class="${k.expired ? 'err' : k.soon ? 'warn-text' : 'muted'}">${k.expired ? '⚠️ Expiré' : 'Valable'} jusqu'au ${dayFr(k.valid_until)}</span>` : ''}`
               : '<span class="muted">Pas encore déposé</span>'}</span>
               ${k.latest ? `<span class="row" style="gap:6px;flex-wrap:wrap"><a class="btn ghost small-btn" href="/api/documents/${k.latest.id}" target="_blank" rel="noopener">Ouvrir</a>
                 ${k.latest.status !== 'valide' ? `${k.expiring ? `<label class="small">Valable jusqu'au<input type="date" data-docexp="${k.latest.id}" value="${esc(k.latest.expires_on || '')}"></label>` : ''}<button class="btn blue small-btn" data-docok="${k.latest.id}">Valider</button>` : ''}${k.latest.status !== 'refuse' ? `<button class="btn ghost small-btn" data-docko="${k.latest.id}">Refuser</button>` : ''}</span>` : ''}</li>`).join('')}</ul>
@@ -1788,6 +1809,52 @@
       const id = b.dataset.avok || b.dataset.avno;
       try { const r2 = await api('POST', `/api/admin/workers/${id}/avatar`, { ok: Boolean(b.dataset.avok) }); toast(r2.message); route(); } catch (e) { toast(e.message); }
     });
+    const paintTransfers = () => api('GET', '/api/admin/transfers').then((t) => {
+      const tb = document.getElementById('transferBox');
+      if (!tb) return;
+      const mois = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' });
+      const thisMonth = todayParis().slice(0, 7);
+      tb.innerHTML = `<h2>Entreprises payées par virement</h2>
+        <p class="small muted">Ces clients n'ont pas de carte à donner : leurs passages sont confirmés tout de suite. Au début de chaque mois, envoyez le relevé du mois passé (une facture par passage, à régler sous 30 jours), puis cochez « Payé » quand le virement arrive sur votre compte.</p>
+        ${t.ibanReady ? '' : '<p class="msg warn">Ajoutez votre IBAN et votre BIC dans config/entreprise.json : ils sont imprimés sur les relevés et les factures.</p>'}
+        <form id="billingForm" class="row" style="gap:8px;flex-wrap:wrap;align-items:end"><label style="flex:1 1 220px">E-mail du client<input name="email" type="email" required placeholder="contact@entreprise.fr"></label>
+          <label>Paiement<select name="billing"><option value="virement">Virement en fin de mois</option><option value="carte">Carte (normal)</option></select></label><button class="btn ghost">Enregistrer</button></form>
+        ${t.clients.length ? `<ul class="plain quotes">${t.clients.map((c) => `<li><div class="q-head"><b>${esc(c.name)}</b><span class="small muted">${esc(c.email)}</span></div>
+          <div class="q-actions">${c.toBill.length ? c.toBill.map((m) => `<button class="btn ${m.month < thisMonth ? 'primary' : 'ghost'}" data-bill="${c.id}" data-month="${m.month}"${m.month < thisMonth ? '' : ' disabled title="Le mois n\'est pas terminé"'}>🧾 Facturer ${esc(mois(m.month))} · ${m.n} passage${m.n > 1 ? 's' : ''} · ${money2(m.total)}</button>`).join('') : '<span class="small muted">Rien à facturer pour le moment.</span>'}</div></li>`).join('')}</ul>` : ''}
+        ${t.bills.length ? `<h3>Relevés envoyés</h3><ul class="plain quotes">${t.bills.map((x) => `<li><div class="q-head"><span><b>${esc(x.ref)}</b> · ${esc(x.client.name || '')} · ${esc(mois(x.month))} · <b>${money2(x.total)}</b></span>
+          ${x.paid_at ? `<span class="pill ok">✅ Payé le ${new Date(x.paid_at).toLocaleDateString(LOC())}</span>` : `<span class="pill ${x.due_date < todayParis() ? 'warn' : ''}">${x.due_date < todayParis() ? '⏰ En retard' : 'À recevoir'} · avant le ${new Date(x.due_date + 'T12:00:00Z').toLocaleDateString(LOC())}</span>`}</div>
+          <div class="q-actions"><a class="btn ghost" href="#/releve?id=${x.id}">Voir</a>${x.paid_at ? '' : `<button class="btn primary" data-billpaid="${x.id}">💶 Virement reçu : marquer payé</button>`}</div></li>`).join('')}</ul>` : ''}`;
+      const f = document.getElementById('billingForm');
+      f.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/admin/clients/billing', formData(f)); toast(r.message); paintTransfers(); } catch (err) { toast(err.message); } };
+      tb.querySelectorAll('[data-bill]').forEach((b) => b.onclick = async () => {
+        if (!confirm(`Envoyer le relevé de ${mois(b.dataset.month)} au client ? Les factures seront créées.`)) return;
+        try { const r = await api('POST', '/api/admin/transfer-bills', { client_id: Number(b.dataset.bill), month: b.dataset.month }); toast(r.message); paintTransfers(); } catch (err) { toast(err.message); }
+      });
+      tb.querySelectorAll('[data-billpaid]').forEach((b) => b.onclick = async () => {
+        if (!confirm('Le virement est bien arrivé sur votre compte ?')) return;
+        try { const r = await api('POST', `/api/admin/transfer-bills/${b.dataset.billpaid}/paid`, {}); toast(r.message); paintTransfers(); } catch (err) { toast(err.message); }
+      });
+    }).catch(() => {});
+    const td = document.getElementById('testData');
+    if (td) api('GET', '/api/admin/test-data').then((t) => {
+      td.innerHTML = `<h2>Avant l'ouverture : effacer les données de test</h2>
+        ${!t.allowed ? '<p class="small muted">Stripe est en mode réel : les vraies réservations et factures doivent être gardées. Ce bouton est désactivé.</p>'
+          : `<p class="small">Efface les réservations, paiements, factures, devis, messages et photos d'essai (aujourd'hui : ${t.bookings} réservations, ${t.invoices} factures, ${t.quotes} devis). Votre compte, l'équipe, les tarifs et les réglages sont gardés. La prochaine facture repartira à F${new Date().getFullYear()}-000001. Une sauvegarde est faite juste avant.</p>
+          <form id="resetForm" class="stack">
+            <label class="check"><input type="checkbox" name="demo"${t.demoAccounts ? ' checked' : ''}> Supprimer aussi les ${t.demoAccounts} comptes de démonstration (adresses @proprigo.test)</label>
+            <label class="check"><input type="checkbox" name="clients"> Supprimer aussi les ${t.clients} comptes clients de test (avec leurs logements)</label>
+            <label>Pour confirmer, écrivez EFFACER<input name="confirm" autocomplete="off" required pattern="EFFACER"></label>
+            <button class="btn danger">🧹 Effacer les données de test</button><p class="msg" id="resetMsg"></p>
+          </form>`}`;
+      const f = document.getElementById('resetForm');
+      if (f) f.onsubmit = async (e) => {
+        e.preventDefault();
+        if (!confirm('Effacer définitivement les données de test ? Cette action ne peut pas être annulée.')) return;
+        try { const r = await api('POST', '/api/admin/test-data/reset', { confirm: f.confirm.value, demo: f.demo.checked, clients: f.clients.checked }); toast(r.message); route(); }
+        catch (err) { const m = document.getElementById('resetMsg'); m.className = 'msg err'; m.textContent = err.message; }
+      };
+    }).catch(() => {});
+    $app.querySelectorAll('[data-gender]').forEach((sel) => sel.onchange = async () => { try { const r = await api('POST', `/api/admin/workers/${sel.dataset.gender}/gender`, { gender: sel.value }); toast(r.message); } catch (e) { toast(e.message); } });
     const od = document.getElementById('openDevis');
     if (od) od.onclick = () => openQuotes();
     const pb = document.getElementById('payoutsBox');
@@ -1807,7 +1874,7 @@
       if (sd) sd.onclick = async () => {
         const ready = d.owed.filter((o) => o.weekOver && o.iban && o.amount > 0);
         if (!confirm(`Marquer ${ready.length} versement(s) comme faits, pour ${eur(ready.reduce((t, o) => t + o.amount, 0))} ? Chaque intervenante reçoit un e-mail.`)) return;
-        const ref = `Virement groupé du ${new Date().toLocaleDateString('fr-FR')}`;
+        const ref = `Virement groupé du ${new Date().toLocaleDateString(LOC())}`;
         for (const o of ready) { try { await api('POST', '/api/admin/payouts', { worker_id: o.worker_id, week_start: o.week_start, reference: ref }); } catch (err) { toast(err.message); } }
         toast('Versements marqués comme faits.'); paintPayouts();
       };
@@ -1874,7 +1941,7 @@
       };
     });
     const cents = (c) => eur(Math.round(c) / 100);
-    const monthName = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    const monthName = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric' });
     // ---- statistiques par mois ----
     const paintStats = async () => {
       const box = document.getElementById('statsBox');
@@ -1902,7 +1969,7 @@
       const open = d.disputes.filter((x) => x.open);
       box.innerHTML = `<h2>Paiements et remboursements</h2>
         ${d.disputes.length ? `<div class="card ${open.length ? 'dispute-open' : ''}" style="margin:0 0 14px;padding:14px"><h3>Contestations bancaires${open.length ? ` · <span class="pill warn">${open.length} à traiter</span>` : ''}</h3>
-          <ul class="plain small">${d.disputes.map((x) => `<li><span><b>${cents(x.amount_cents)}</b> · ${esc(x.reason)} · <span class="pill ${x.status === 'won' ? 'ok' : x.open ? 'warn' : ''}">${esc(x.statusLabel)}</span>${x.due_by && x.open ? ` · <b>réponse avant le ${new Date(x.due_by).toLocaleDateString('fr-FR')}</b>` : ''}<br>
+          <ul class="plain small">${d.disputes.map((x) => `<li><span><b>${cents(x.amount_cents)}</b> · ${esc(x.reason)} · <span class="pill ${x.status === 'won' ? 'ok' : x.open ? 'warn' : ''}">${esc(x.statusLabel)}</span>${x.due_by && x.open ? ` · <b>réponse avant le ${new Date(x.due_by).toLocaleDateString(LOC())}</b>` : ''}<br>
             <span class="muted">${x.client ? esc(x.client) + ' · ' : ''}${x.bookings.length ? `réservation n° ${x.bookings.join(', ')}` : 'réservation non retrouvée'}</span></span>
             <span class="row" style="gap:6px;flex-wrap:wrap"><a class="btn ghost small-btn" href="/api/admin/disputes/${x.id}/evidence" target="_blank" rel="noopener">Dossier de preuve</a><a class="btn blue small-btn" href="${esc(x.stripeUrl)}" target="_blank" rel="noopener">Répondre dans Stripe</a></span></li>`).join('')}</ul></div>` : ''}
         <div class="row" style="justify-content:flex-start;align-items:end;gap:10px;flex-wrap:wrap"><label>Mois<input type="month" id="payMonth" value="${esc(d.month)}"></label>
@@ -1914,7 +1981,7 @@
         <div class="kpis"><div class="kpi"><span>Encaissé par carte</span><b>${cents(d.totals.encaisse)}</b></div><div class="kpi"><span>Crédit Proprigo utilisé</span><b>${cents(d.totals.credit)}</b></div>
           <div class="kpi"><span>Remboursé</span><b>${cents(d.totals.rembourse)}</b></div><div class="kpi"><span>Net encaissé</span><b>${cents(d.totals.net)}</b></div><div class="kpi"><span>Dont TVA (factures − avoirs)</span><b>${cents(d.totals.tva)}</b></div></div>
         ${d.rows.length ? `<div class="table-wrap"><table class="stats"><thead><tr><th>Date</th><th>Type</th><th>Pièce</th><th>Client</th><th class="n">Réserv.</th><th class="n">Montant</th><th>Détail</th></tr></thead><tbody>
-          ${d.rows.map((r2) => `<tr><td>${new Date(r2.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(r2.type)}</td>
+          ${d.rows.map((r2) => `<tr><td>${new Date(r2.at).toLocaleString(LOC(), { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(r2.type)}</td>
             <td>${r2.ref ? `<a href="/api/bookings/${r2.booking}/receipt${r2.type === 'Remboursement' ? `?doc=${encodeURIComponent(r2.ref)}` : ''}" target="_blank" rel="noopener">${esc(r2.ref)}</a>` : '–'}</td><td>${esc(r2.client)}</td><td class="n">${r2.booking ? `n° ${r2.booking}` : '–'}</td>
             <td class="n">${r2.amount_cents ? `<b>${cents(r2.amount_cents)}</b>` : '–'}</td><td class="small">${esc(r2.status)}${r2.credit_cents ? ` · dont ${cents(r2.credit_cents)} de crédit` : ''}</td></tr>`).join('')}</tbody></table></div>`
           : '<p class="muted">Aucun mouvement ce mois-ci.</p>'}
@@ -2030,7 +2097,7 @@
             <p class="err" id="priceErr"></p>
             <div class="row" style="justify-content:flex-start;gap:10px;flex-wrap:wrap"><button class="btn blue">Enregistrer les tarifs</button><button type="button" class="btn ghost" id="priceDefaults">Revenir aux prix d'origine</button></div>
           </form>
-          ${d.history.length ? `<h3>Derniers changements</h3><ul class="plain small">${d.history.map((h) => `<li><span>${new Date(h.at.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} · ${esc(h.by_name || '')}<br><span class="muted">${h.changes.map(esc).join(' · ')}</span></span></li>`).join('')}</ul>` : ''}`;
+          ${d.history.length ? `<h3>Derniers changements</h3><ul class="plain small">${d.history.map((h) => `<li><span>${new Date(h.at.replace(' ', 'T') + 'Z').toLocaleString(LOC(), { dateStyle: 'short', timeStyle: 'short' })} · ${esc(h.by_name || '')}<br><span class="muted">${h.changes.map(esc).join(' · ')}</span></span></li>`).join('')}</ul>` : ''}`;
         const f = document.getElementById('priceForm');
         const showHT = () => ['IDF', 'FR'].forEach((z) => { const el = box.querySelector(`[data-ht="${z}"]`); const v = Number(f.elements[`${z}.bureau`].value); if (el) el.textContent = v ? `soit ${eur(Math.round((v / (1 + d.cost.tvaPro)) * 100) / 100)} HT` : ''; });
         showHT();
@@ -2057,6 +2124,7 @@
         <section class="card" data-tab="chiffres" id="statsBox"><h2>Statistiques par mois</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="suivi" id="revBox"><h2>Avis des clients</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="suivi" id="nudgeBox"><h2>Relances des clients</h2><p class="muted small">Chargement…</p></section>
+        ${me.staff_level !== 'planning' ? '<section class="card" data-tab="paiements" id="transferBox"></section>' : ''}
         <section class="card" data-tab="paiements" id="payBox"><h2>Paiements et remboursements</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="tarifs" id="priceBox"><h2>Tarifs et zones</h2><p class="muted small">Chargement…</p></section>
         <section class="card" data-tab="tarifs" id="tierBox"><h2>Niveaux des intervenantes</h2><p class="muted small">Chargement…</p></section>
@@ -2065,7 +2133,7 @@
     const showTab = (k) => {
       sessionStorage.setItem('adminTab', k);
       if (k === 'chiffres' && owner) paintStats();
-      if (k === 'paiements' && owner) paintPayments();
+      if (k === 'paiements' && owner) { paintPayments(); paintTransfers(); }
       if (k === 'tarifs' && owner) { paintPricing(); paintSap(); paintTiers(); }
       if (k === 'suivi' && owner) { paintReviews(); paintNudges(); }
       $app.querySelectorAll('[data-tab]').forEach((el) => { el.hidden = el.dataset.tab !== k; });
@@ -2149,7 +2217,7 @@
       const bk = document.getElementById('jBk').value.trim();
       const re = bk ? new RegExp(`n° ${bk.replace(/\D/g, '')}\\b`) : null;
       const list = r.events.filter((e) => (!type || eventType(e.text) === type) && (!re || re.test(e.text)));
-      document.getElementById('jList').innerHTML = list.slice(0, 40).map((e) => `<li><span class="small muted">${new Date(e.at.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><br>${esc(e.text)}</li>`).join('') || '<li class="muted">Aucun événement.</li>';
+      document.getElementById('jList').innerHTML = list.slice(0, 40).map((e) => `<li><span class="small muted">${new Date(e.at.replace(' ', 'T') + 'Z').toLocaleString(LOC(), { timeZone: 'Europe/Paris', dateStyle: 'short', timeStyle: 'short' })}</span><br>${esc(e.text)}</li>`).join('') || '<li class="muted">Aucun événement.</li>';
       document.getElementById('jMore').textContent = list.length > 40 ? `${list.length - 40} événements plus anciens non affichés : précisez le filtre.` : '';
     };
     document.getElementById('jType').onchange = paintJournal;
@@ -2741,9 +2809,18 @@
     const lang = e.target.value;
     try { await api('POST', '/api/me/lang', { lang }); me.lang = lang; applyLang(); route(); } catch (err) { toast(err.message); }
   });
+  // langue de l'interface : intervenante (5 langues), client et visiteur (français ou anglais), admin en français
+  function uiLang() {
+    if (me && me.role === 'intervenante') return me.lang || 'fr';
+    if (me && me.role === 'admin') return 'fr';
+    let saved = null;
+    try { saved = localStorage.getItem('lang'); } catch { /* navigation privée */ }
+    const l = (me && me.lang) || saved;
+    return l === 'en' ? 'en' : 'fr';
+  }
   function applyLang() {
     if (!window.PROPRIGO_I18N) return;
-    window.PROPRIGO_I18N.set(me && me.role === 'intervenante' ? (me.lang || 'fr') : 'fr');
+    window.PROPRIGO_I18N.set(uiLang());
   }
   // aide des intervenantes : leurs questions à elles, pas celles des clients
   function aideIntervenante() {
@@ -2792,8 +2869,8 @@
   const guessFreq = (t) => { const f = String(t || '').toLowerCase(); return /2|deux/.test(f) && /semaine/.test(f) ? 'twice' : /quinz|2 semaines|deux semaines/.test(f) ? 'biweekly' : /semaine|hebdo/.test(f) ? 'weekly' : /mois|mensu/.test(f) ? 'monthly' : 'once'; };
   const QSTATUS = (q) => ({
     nouveau: '<span class="pill warn">Nouvelle demande</span>',
-    envoye: `<span class="pill">📨 Devis ${esc(q.offer_number)} envoyé le ${new Date(q.offer_sent_at).toLocaleDateString('fr-FR')}</span>`,
-    accepte: `<span class="pill ok">✅ Accepté par ${esc(q.answer_name || '')} le ${q.answered_at ? new Date(q.answered_at).toLocaleDateString('fr-FR') : ''}</span>`,
+    envoye: `<span class="pill">📨 Devis ${esc(q.offer_number)} envoyé le ${new Date(q.offer_sent_at).toLocaleDateString(LOC())}</span>`,
+    accepte: `<span class="pill ok">✅ Accepté par ${esc(q.answer_name || '')} le ${q.answered_at ? new Date(q.answered_at).toLocaleDateString(LOC()) : ''}</span>`,
     refuse: '<span class="pill gray">✖ Refusé par le client</span>',
     traite: '<span class="pill gray">Classée</span>',
     planifie: `<span class="pill ok">📅 ${(JSON.parse(q.planned_ids || '[]')).length} passage(s) planifié(s)</span>`,
@@ -2827,6 +2904,7 @@
             <label>Heure<input name="time" type="time" required value="09:00"></label>
             ${q.offer.frequency === 'once' ? '' : `<label>Nombre de passages<input name="count" type="number" min="1" max="26" required value="${{ weekly: 4, twice: 8, biweekly: 2, monthly: 3 }[q.offer.frequency] || 4}"></label>`}
           </div>
+          <label>Paiement<select name="billing"><option value="carte">Par carte dans son espace, avant chaque passage</option><option value="virement">Par virement, relevé en fin de mois (30 jours)</option></select></label>
           <p class="small muted" style="margin:0">${esc(q.offer.frequencyLabel)} · ${money2(q.offer.perVisitTTC)} par passage. Les passages suivants se calculent à partir du premier.</p>
           <button class="btn primary">📅 Créer les passages et prévenir le client</button><p class="msg" data-qmsg></p>
         </form>` : ''}
@@ -2879,7 +2957,7 @@
     catch (e) { page('Devis', `<p class="err">${esc(e.message)}</p><p>Le lien est peut-être incomplet. Écrivez-nous à contact@proprigo.fr.</p>`); return; }
     const o = d.offer; const L = d.legal || {};
     const ht = d.franchiseTVA ? '' : ' HT';
-    const fmt = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    const fmt = (iso) => new Date(iso).toLocaleDateString(LOC(), { day: 'numeric', month: 'long', year: 'numeric' });
     $app.innerHTML = `<article class="card devis-doc">
       <header class="devis-top">
         <div><img src="/logo.svg" alt="" width="40" height="40"><p><b>${esc(L.raisonSociale || L.nomCommercial || 'Proprigo')}</b>${L.formeJuridique ? `, ${esc(L.formeJuridique)}${L.capital ? ` au capital de ${esc(L.capital)}` : ''}` : ''}<br>${esc(L.adresse || '')}${L.siret ? `<br>SIRET ${esc(L.siret)}` : ''}${L.rcs ? ` · RCS ${esc(L.rcs)}` : ''}${!d.franchiseTVA && L.tvaIntracom ? `<br>TVA ${esc(L.tvaIntracom)}` : ''}<br>${esc(L.emailContact || 'contact@proprigo.fr')}</p></div>
@@ -2916,6 +2994,29 @@
     if (yes) yes.onsubmit = (e) => { e.preventDefault(); send({ accept: true, name: yes.name.value }, document.getElementById('devisMsg')); };
     const no = document.getElementById('devisNo');
     if (no) no.onsubmit = (e) => { e.preventDefault(); send({ accept: false, message: no.message.value }, document.getElementById('devisMsg') || no); };
+  };
+  views['releve'] = async (qs) => {
+    if (!me) { location.hash = '#/connexion'; return; }
+    let v;
+    try { v = await api('GET', `/api/transfer-bills/${Number(qs.get('id'))}`); } catch (e) { page('Relevé', `<p class="err">${esc(e.message)}</p>`); return; }
+    const L = v.legal || {};
+    const mois = new Date(v.month + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const day = (iso) => new Date(iso.length === 10 ? iso + 'T12:00:00Z' : iso).toLocaleDateString(LOC(), { day: 'numeric', month: 'long', year: 'numeric' });
+    $app.innerHTML = `<article class="card devis-doc">
+      <header class="devis-top"><div><img src="/logo.svg" alt="" width="40" height="40"><p><b>${esc(L.raisonSociale || 'Proprigo')}</b>${L.formeJuridique ? `, ${esc(L.formeJuridique)}` : ''}<br>${esc(L.adresse || '')}${L.siret ? `<br>SIRET ${esc(L.siret)}` : ''}</p></div>
+        <div class="devis-no"><h1>Relevé ${esc(mois)}</h1><p>Référence ${esc(v.ref)}<br>Émis le ${day(v.issued_at)}</p></div></header>
+      <section class="devis-client"><small>Pour</small><p><b>${esc(v.client.name || '')}</b><br>${esc(v.client.email || '')}</p></section>
+      <table class="devis-table"><thead><tr><th>Passage</th><th>Facture</th><th>Montant</th></tr></thead><tbody>
+        ${v.lines.map((l) => `<tr><td>${esc(SERVICE[l.service] || l.service)} · ${day(l.date)} à ${esc(l.time)}<br><span class="small muted">${String(l.hours).replace('.', ',')} h · ${esc(l.cp)}</span></td><td data-l="Facture"><a href="/api/bookings/${l.id}/receipt" target="_blank" rel="noopener">${esc(l.number || '')}</a></td><td data-l="Montant">${money2(l.total)}</td></tr>`).join('')}
+      </tbody></table>
+      <div class="devis-sum"><p class="big"><span>Total à régler</span><b>${money2(v.total)}</b></p>${v.franchiseTVA ? '<p class="small muted">TVA non applicable, art. 293 B du CGI.</p>' : ''}</div>
+      ${v.paid_at ? `<p class="msg ok">✅ Payé par virement le ${day(v.paid_at)}. Merci !</p>`
+        : `<div class="devis-msg"><p style="margin:0 0 6px"><b>Virement à faire avant le ${day(v.due_date)}</b></p>
+          ${v.iban ? `<p style="margin:0">IBAN : <b>${esc(v.iban)}</b>${v.bic ? `<br>BIC : <b>${esc(v.bic)}</b>` : ''}<br>Bénéficiaire : ${esc(L.raisonSociale || 'Proprigo')}<br>Référence à indiquer : <b>${esc(v.ref)}</b></p>` : '<p style="margin:0">Nos coordonnées bancaires vous sont envoyées par e-mail.</p>'}</div>`}
+      <p class="small muted">En cas de retard de paiement : pénalités au taux de 3 fois le taux d'intérêt légal et indemnité forfaitaire de 40 € pour frais de recouvrement (art. L441-10 du Code de commerce).</p>
+      <div class="devis-answer no-print"><button class="btn ghost" type="button" id="relPrint">🖨️ Imprimer ou enregistrer en PDF</button></div>
+    </article>`;
+    document.getElementById('relPrint').onclick = () => window.print();
   };
   views['mentions-legales'] = () => {
     const L = CONFIG.legal || {};

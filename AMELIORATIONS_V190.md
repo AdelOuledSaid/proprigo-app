@@ -119,3 +119,10 @@
 
 - « Mes réservations » : l'historique est replié (« 📜 Historique · N ménages · Afficher ») ; seul le dernier ménage terminé à noter (ou encore sous garantie 48 h) reste visible.
 - Pourboire replié : « 💝 Laisser un pourboire à … », petits cercles 2 €, 5 €, 10 €, Autre à l'ouverture.
+
+## v1.12.0 — prêt pour l'ouverture
+
+- **Effacer les données de test** (Admin → Suivi, responsable seulement) : réservations, paiements, factures, devis, messages et photos d'essai ; option comptes de démo et comptes clients de test. Sauvegarde automatique juste avant, confirmation « EFFACER ». La prochaine facture repart à F2026-000001. Refusé dès que Stripe est en mode réel (clé sk_live).
+- **Virement pour les entreprises** : un client passe en « virement en fin de mois » (Admin → Paiements, ou au moment de planifier un devis). Ses passages sont confirmés sans carte. Début de mois : « 🧾 Facturer octobre » crée une facture par passage et envoie un relevé (référence PROPRIGO-R0001, IBAN, échéance 30 jours). « 💶 Virement reçu : marquer payé » à réception. Le client voit ses relevés dans « Mes réservations » et peut les imprimer en PDF.
+- **Intervenant au masculin** : choix Femme / Homme à l'inscription, à la création par le responsable et dans la liste « Équipe ». Les textes côté client s'accordent (« Intervenant vérifié », « votre intervenant préféré », « est arrivé »…).
+- **Version anglaise pour les clients** : bouton « 🇬🇧 English » dans le menu pour les visiteurs et les clients (mémorisé). Accueil, pages pros, réservation, mes réservations, logements, compte, aide et dates traduits. L'admin reste en français ; e-mails, CGV et mentions légales restent en français.
