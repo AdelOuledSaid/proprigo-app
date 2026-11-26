@@ -1,0 +1,23 @@
+{
+  "appId": "fr.proprigo.app",
+  "appName": "Proprigo",
+  "webDir": "www",
+  "server": {
+    "url": "https://proprigo.fr",
+    "cleartext": false,
+    "allowNavigation": ["proprigo.fr", "checkout.stripe.com", "*.stripe.com", "*.stripe.network", "hooks.stripe.com"],
+    "errorPath": "offline.html"
+  },
+  "ios": {
+    "contentInset": "never",
+    "scheme": "Proprigo",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "PushNotifications": { "presentationOptions": ["badge", "sound", "alert"] },
+    "SplashScreen": { "launchShowDuration": 800, "launchAutoHide": true, "backgroundColor": "#f2f5ff", "showSpinner": false }
+  }
+}

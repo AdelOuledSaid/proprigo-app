@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1f4fff">
+<meta name="color-scheme" content="only light">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Proprigo">
@@ -12,11 +13,12 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>Proprigo – ménage à la demande</title>
 <link rel="icon" href="/logo.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="preload" href="/fonts/inter-regular.woff" as="font" type="font/woff" crossorigin>
+<link rel="preload" href="/fonts/outfit-bold.woff" as="font" type="font/woff" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+<div class="sky" aria-hidden="true"><i class="c" style="--x:4%;--y:14%;--s:13px;--d:-4.7s;--t:4.1s"></i><i class="" style="--x:93%;--y:9%;--s:9px;--d:-0.4s;--t:4.4s"></i><i class="" style="--x:7%;--y:46%;--s:13px;--d:-2.9s;--t:5.3s"></i><i class="c" style="--x:96%;--y:38%;--s:11px;--d:-0.2s;--t:4.2s"></i><i class="" style="--x:3%;--y:78%;--s:9px;--d:-1.2s;--t:4.5s"></i><i class="" style="--x:91%;--y:70%;--s:9px;--d:-4.1s;--t:3.5s"></i><i class="c" style="--x:50%;--y:3%;--s:11px;--d:-3.2s;--t:4.5s"></i><i class="" style="--x:18%;--y:92%;--s:9px;--d:-2.9s;--t:4.1s"></i><i class="" style="--x:82%;--y:95%;--s:11px;--d:-0.2s;--t:5.2s"></i><i class="c" style="--x:97%;--y:55%;--s:13px;--d:-2.1s;--t:4.4s"></i><i class="" style="--x:12%;--y:30%;--s:19px;--d:-1.5s;--t:5.1s"></i><i class="" style="--x:88%;--y:24%;--s:11px;--d:-0.5s;--t:4.5s"></i></div>
 <header class="top">
   <div class="in">
     <a class="brand" href="#/"><img src="/logo.svg" alt="" width="36" height="36"><span>proprigo</span></a>
@@ -29,12 +31,14 @@
 <footer class="foot">
   <div class="in">
     <span>© Proprigo · ménage à la demande en Île-de-France</span>
-    <nav aria-label="Informations"><a href="#/pro">Entreprises</a><a href="#/cadeau">Carte cadeau</a><a href="#/aide">Aide et réclamations</a><a href="#/intervenantes-verifiees">Nos intervenantes</a><a href="#/cgv">CGV</a><a href="#/mentions-legales">Mentions légales</a><a href="#/confidentialite">Confidentialité</a></nav>
+    <nav aria-label="Informations"><a href="#/pro">Entreprises</a><a href="#/syndics">Syndics</a><a href="#/agences">Agences immobilières</a><a href="#/recrutement">Recrutement</a><a href="#/cadeau">Carte cadeau</a><a href="#/aide">Aide et réclamations</a><a href="#/intervenantes-verifiees">Nos intervenantes</a><a href="#/cgv">CGV</a><a href="#/mentions-legales">Mentions légales</a><a href="#/confidentialite">Confidentialité</a></nav>
+    <small id="appVersion" class="app-version"></small>
   </div>
 </footer>
 <nav id="tabbar" class="tabbar" aria-label="Navigation principale" hidden></nav>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/art.js"></script>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
