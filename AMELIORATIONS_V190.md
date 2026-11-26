@@ -141,3 +141,12 @@
 - Admin → Paiements : « Prélèvement SEPA (invitation par e-mail) » pour un client existant ; il reçoit un lien vers la page « Prélèvement » de son espace.
 - Début de mois : « 🧾 Facturer » crée les factures, envoie le relevé et lance le prélèvement automatiquement. Le relevé passe à « Payé » tout seul quand Stripe confirme (quelques jours). Prélèvement rejeté : vous et le client êtes prévenus, bouton « 🔁 Relancer le prélèvement ».
 - Stripe (une fois) : activer « Prélèvement SEPA » dans Paramètres → Moyens de paiement, et ajouter l'événement payment_intent.payment_failed au webhook.
+
+## v1.13.0 — tableau de bord du mois
+
+- Admin → Chiffres, en haut : chiffre d'affaires, marge (en € et en %), ménages faits, heures, panier moyen, clients servis, avec la comparaison au mois précédent (▲ / ▼).
+- « Où va l'argent » : part des intervenantes, des frais (paiement, produits, linge) et de votre marge.
+- Ce qui est encore prévu dans le mois (ménages réservés pas encore faits).
+- Clients : servis, nouveaux, qui reviennent, comptes créés, abonnés.
+- Graphique des 6 derniers mois et détail par prestation. Choix du mois en haut à droite.
+- Marge calculée avant cotisations, impôts et frais fixes ; tarif réel de chaque indépendante (historique compris), coût horaire des salariées depuis config/couts.js ; en franchise de TVA, chiffre d'affaires = prix payé.

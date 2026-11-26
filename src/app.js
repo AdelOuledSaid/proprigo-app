@@ -2858,6 +2858,62 @@ ${rows.map((b) => `<tr><td>${e(b.date.split('-').reverse().join('/'))}</td><td>$
     return { month, rows, totals: { encaisse, credit, rembourse, net: encaisse - rembourse, chiffreTTC: sum((r) => (r.tva_rate ? r.amount_cents : 0)), tva: Math.round(tvaNet) } };
   }
   // ----- statistiques par mois (heure de Paris) -----
+  // ----- tableau de bord du mois : chiffre d'affaires, marge, clients -----
+  route('GET', '/api/admin/dashboard', ({ user, query }) => {
+    need(user, 'admin');
+    const today = pricing.todayParis(now());
+    const month = /^\d{4}-\d{2}$/.test(query.get('month') || '') ? query.get('month') : today.slice(0, 7);
+    const shift = (m, k) => { let [y, mo] = m.split('-').map(Number); mo += k; while (mo < 1) { mo += 12; y -= 1; } while (mo > 12) { mo -= 12; y += 1; } return `${y}-${String(mo).padStart(2, '0')}`; };
+    const workers = Object.fromEntries(db.prepare('SELECT user_id, statut, rate FROM workers').all().map((w) => [w.user_id, w]));
+    const C = pricing.COSTS;
+    const r2c = (n) => Math.round(n * 100) / 100;
+    // une réservation : HT (sans TVA en franchise), coût de l'intervenante, frais (paiement, produits, linge)
+    const one = (b) => {
+      const tva = franchiseTVA ? 0 : (pricing.PRO_SERVICES || []).includes(b.service) ? C.tvaPro : C.tvaParticulier;
+      const ht = b.total / (1 + tva);
+      const w = workers[b.worker_id];
+      const hourCost = w && w.statut === 'I' ? rateAt(b.worker_id, b.date) || w.rate || C.salarieeParHeureFacturee : C.salarieeParHeureFacturee;
+      const cout = hourCost * b.hours;
+      const frais = (b.payment_status === 'garantie' ? 0 : b.total * C.paiementPct + C.paiementFixe) + (b.kit ? C.kitCout : C.produits) + (b.service === 'airbnb' ? C.linge[b.size] || 0 : 0);
+      return { ht, cout, frais, marge: ht - cout - frais };
+    };
+    const done = (m) => db.prepare("SELECT * FROM bookings WHERE status = 'terminee' AND substr(date, 1, 7) = ?").all(m);
+    const sum = (rows) => {
+      const t = { ca: 0, cout: 0, frais: 0, marge: 0, menages: rows.length, heures: 0 };
+      for (const b of rows) { const x = one(b); t.ca += x.ht; t.cout += x.cout; t.frais += x.frais; t.marge += x.marge; t.heures += b.hours; }
+      for (const k of ['ca', 'cout', 'frais', 'marge']) t[k] = r2c(t[k]);
+      return t;
+    };
+    const rows = done(month);
+    const cur = sum(rows);
+    const prev = sum(done(shift(month, -1)));
+    // clients du mois
+    const clientIds = [...new Set(rows.map((b) => b.client_id))];
+    const firstDone = db.prepare("SELECT MIN(date) AS d FROM bookings WHERE status = 'terminee' AND client_id = ?");
+    const nouveaux = clientIds.filter((id) => (firstDone.get(id).d || '').slice(0, 7) === month).length;
+    const inscrits = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'client' AND substr(created_at, 1, 7) = ?").get(month).n;
+    const abonnes = db.prepare("SELECT COUNT(DISTINCT client_id) AS n FROM bookings WHERE series_id IS NOT NULL AND status IN ('en_attente', 'proposee', 'attribuee') AND date >= ?").get(today).n;
+    const prevClients = new Set(done(shift(month, -1)).map((b) => b.client_id));
+    // encore prévu ce mois-ci (ménages pas encore faits)
+    const upcoming = db.prepare("SELECT * FROM bookings WHERE status IN ('en_attente', 'proposee', 'attribuee', 'en_cours') AND substr(date, 1, 7) = ? AND payment_status NOT IN ('en_attente_paiement', 'paiement_echoue')").all(month);
+    const prevu = sum(upcoming);
+    // par prestation
+    const bySvc = {};
+    for (const b of rows) { const x = one(b); const k = b.service; bySvc[k] = bySvc[k] || { service: k, label: SERVICE_NAME[k] || k, ca: 0, marge: 0, n: 0 }; bySvc[k].ca += x.ht; bySvc[k].marge += x.marge; bySvc[k].n += 1; }
+    const services = Object.values(bySvc).map((x) => ({ ...x, ca: r2c(x.ca), marge: r2c(x.marge) })).sort((a, b) => b.ca - a.ca);
+    // 6 derniers mois
+    const series = [];
+    for (let k = -5; k <= 0; k++) { const m = shift(month, k); const t = sum(done(m)); series.push({ month: m, ca: t.ca, marge: t.marge, menages: t.menages }); }
+    return {
+      month, isCurrent: month === today.slice(0, 7), franchiseTVA, ...cur,
+      tauxMarge: cur.ca ? Math.round((cur.marge / cur.ca) * 1000) / 10 : null,
+      panierMoyen: cur.menages ? r2c(cur.ca / cur.menages) : null,
+      prev: { ca: prev.ca, marge: prev.marge, menages: prev.menages, clients: prevClients.size },
+      clients: { actifs: clientIds.length, nouveaux, revenus: clientIds.length - nouveaux, inscrits, abonnes },
+      prevu: { ca: prevu.ca, marge: prevu.marge, menages: prevu.menages },
+      services, series,
+    };
+  });
   route('GET', '/api/admin/stats', ({ user, query }) => {
     need(user, 'admin');
     const n = Math.min(24, Math.max(3, Number(query.get('months')) || 12));

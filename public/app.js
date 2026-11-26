@@ -1601,6 +1601,7 @@
       ${r.paymentsEnabled ? '' : '<p class="card"><span class="pill warn">Paiement simulé</span> Aucun argent n\'est encaissé dans cette version. Le chiffre d\'affaires affiché est théorique.</p>'}
       <nav class="tabs" role="tablist" aria-label="Administration">${[['todo', `À traiter${todo.length ? ` (${todo.length})` : ''}`], ['planning', 'Planning'], ['resa', 'Réservations'], ['equipe', 'Équipe'], ...(owner ? [['chiffres', 'Chiffres'], ['paiements', 'Paiements'], ['tarifs', 'Tarifs et zones'], ['suivi', 'Suivi']] : [])].map(([k, t]) => `<button type="button" role="tab" data-tab-btn="${k}">${t}</button>`).join('')}</nav>
       <section class="card todo" data-tab="todo"><h2>À traiter maintenant</h2>${todo.length ? `<ul class="plain">${todo.join('')}</ul>` : '<p class="msg ok">Rien d\'urgent : toutes les missions des 3 prochains jours ont une intervenante.</p>'}</section>
+      ${owner ? '<section class="card dash" data-tab="chiffres" id="dashBox"><h2>Tableau de bord du mois</h2><p class="muted small">Chargement…</p></section>' : ''}
       ${m ? `<section class="card" data-tab="chiffres"><h2>Argent réellement encaissé</h2>
         <p class="small muted">Paiements confirmés par Stripe, remboursements déduits.</p>
         <div class="gain-grid">
@@ -1949,6 +1950,44 @@
     });
     const cents = (c) => eur(Math.round(c) / 100);
     const monthName = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric' });
+    // ---- tableau de bord du mois ----
+    const paintDash = async (month) => {
+      const box = document.getElementById('dashBox');
+      if (!box) return;
+      let d;
+      try { d = await api('GET', `/api/admin/dashboard${month ? `?month=${month}` : ''}`); } catch (e) { box.innerHTML = `<h2>Tableau de bord du mois</h2><p class="err">${esc(e.message)}</p>`; return; }
+      const e2 = (n) => eur(Math.round(n));
+      const delta = (a, b) => { if (!b) return '<small class="muted">pas de mois précédent</small>'; const p = Math.round(((a - b) / Math.abs(b)) * 100); return `<small class="${p >= 0 ? 'up' : 'down'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p)} % vs mois précédent</small>`; };
+      const max = Math.max(1, ...d.series.map((x) => x.ca));
+      const pct = (x) => (d.ca ? Math.max(0, Math.round((x / d.ca) * 100)) : 0);
+      const short = (mm) => new Date(mm + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'short' });
+      box.innerHTML = `<div class="dash-head"><h2>Tableau de bord · ${esc(monthName(d.month))}</h2><input type="month" id="dashMonth" value="${d.month}" max="${todayParis().slice(0, 7)}" aria-label="Choisir le mois"></div>
+        <p class="small muted" style="margin:0 0 12px">Ménages terminés du mois${d.franchiseTVA ? ' (franchise de TVA : chiffre d\'affaires = prix payé)' : ', hors TVA'}. Marge = ce qui reste après l'intervenante, les frais de paiement et les produits, <b>avant</b> vos cotisations, impôts et frais fixes (comptable, assurance, publicité).</p>
+        <div class="dash-kpis">
+          <div class="dk main"><span>Chiffre d'affaires</span><b>${e2(d.ca)}</b>${delta(d.ca, d.prev.ca)}</div>
+          <div class="dk"><span>Marge</span><b>${e2(d.marge)}</b><small>${d.tauxMarge !== null ? `${String(d.tauxMarge).replace('.', ',')} % du chiffre d'affaires` : '–'}</small>${delta(d.marge, d.prev.marge)}</div>
+          <div class="dk"><span>Ménages faits</span><b>${d.menages}</b><small>${String(Math.round(d.heures * 10) / 10).replace('.', ',')} h · panier moyen ${d.panierMoyen ? e2(d.panierMoyen) : '–'}</small>${delta(d.menages, d.prev.menages)}</div>
+          <div class="dk"><span>Clients servis</span><b>${d.clients.actifs}</b><small>${d.clients.nouveaux} nouveau${d.clients.nouveaux > 1 ? 'x' : ''} · ${d.clients.revenus} déjà venu${d.clients.revenus > 1 ? 's' : ''}</small>${delta(d.clients.actifs, d.prev.clients)}</div>
+        </div>
+        ${d.ca ? `<h3>Où va l'argent</h3>
+        <div class="dash-split" role="img" aria-label="Répartition du chiffre d'affaires"><i class="s-w" style="width:${pct(d.cout)}%"></i><i class="s-f" style="width:${pct(d.frais)}%"></i><i class="s-m" style="width:${pct(Math.max(0, d.marge))}%"></i></div>
+        <ul class="dash-legend"><li><i class="s-w"></i>Intervenantes · ${e2(d.cout)} (${pct(d.cout)} %)</li><li><i class="s-f"></i>Paiement, produits, linge · ${e2(d.frais)} (${pct(d.frais)} %)</li><li><i class="s-m"></i>Votre marge · ${e2(d.marge)} (${pct(Math.max(0, d.marge))} %)</li></ul>` : '<p class="muted">Aucun ménage terminé ce mois-ci pour le moment.</p>'}
+        ${d.isCurrent && d.prevu.menages ? `<p class="dash-next">📅 Encore prévu ce mois-ci : <b>${d.prevu.menages} ménage${d.prevu.menages > 1 ? 's' : ''}</b>, soit environ <b>${e2(d.prevu.ca)}</b> de chiffre d'affaires et <b>${e2(d.prevu.marge)}</b> de marge en plus.</p>` : ''}
+        <div class="dash-cols">
+          <div><h3>Clients</h3><ul class="plain dash-list">
+            <li><span>Clients servis ce mois</span><b>${d.clients.actifs}</b></li>
+            <li><span>Nouveaux (premier ménage)</span><b>${d.clients.nouveaux}</b></li>
+            <li><span>Qui reviennent</span><b>${d.clients.revenus}</b></li>
+            <li><span>Nouveaux comptes créés</span><b>${d.clients.inscrits}</b></li>
+            <li><span>Abonnés (ménages réguliers à venir)</span><b>${d.clients.abonnes}</b></li></ul></div>
+          <div><h3>6 derniers mois</h3><div class="dash-bars">${d.series.map((x) => `<div class="db${x.month === d.month ? ' on' : ''}" title="${esc(monthName(x.month))} : ${e2(x.ca)} de CA, ${e2(x.marge)} de marge, ${x.menages} ménages">
+            <div class="db-col"><i class="ca" style="height:${Math.round((x.ca / max) * 100)}%"></i><i class="mg" style="height:${Math.round((Math.max(0, x.marge) / max) * 100)}%"></i></div><small>${esc(short(x.month))}</small></div>`).join('')}</div>
+            <ul class="dash-legend"><li><i class="ca"></i>Chiffre d'affaires</li><li><i class="mg"></i>Marge</li></ul></div>
+        </div>
+        ${d.services.length ? `<h3>Par prestation</h3><table class="dash-table"><thead><tr><th>Prestation</th><th>Ménages</th><th>Chiffre d'affaires</th><th>Marge</th></tr></thead><tbody>
+          ${d.services.map((x) => `<tr><td>${esc(x.label)}</td><td>${x.n}</td><td>${e2(x.ca)}</td><td>${e2(x.marge)} <small class="muted">(${x.ca ? Math.round((x.marge / x.ca) * 100) : 0} %)</small></td></tr>`).join('')}</tbody></table>` : ''}`;
+      document.getElementById('dashMonth').onchange = (ev) => { if (/^\d{4}-\d{2}$/.test(ev.target.value)) paintDash(ev.target.value); };
+    };
     // ---- statistiques par mois ----
     const paintStats = async () => {
       const box = document.getElementById('statsBox');
@@ -2139,7 +2178,7 @@
     }
     const showTab = (k) => {
       sessionStorage.setItem('adminTab', k);
-      if (k === 'chiffres' && owner) paintStats();
+      if (k === 'chiffres' && owner) { paintStats(); paintDash(); }
       if (k === 'paiements' && owner) { paintPayments(); paintTransfers(); }
       if (k === 'tarifs' && owner) { paintPricing(); paintSap(); paintTiers(); }
       if (k === 'suivi' && owner) { paintReviews(); paintNudges(); }
