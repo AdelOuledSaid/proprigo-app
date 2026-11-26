@@ -41,7 +41,7 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
       });
       const old = await r.json();
       if (r.ok && old.status === 'open' && old.url) return { url: old.url };
-      if (r.ok && old.payment_status === 'paid') throw new Error('Payment already completed; awaiting webhook');
+      if (r.ok && (old.payment_status === 'paid' || old.status === 'complete')) throw new Error('Payment already completed; awaiting webhook');
       if (!r.ok) throw new Error(`Stripe session lookup failed (${r.status})`);
     } catch (err) {
       console.error('Stripe Checkout existing session:', { message: err.message });
@@ -53,6 +53,14 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   params.set('customer_email', email);
   params.set('metadata[booking_ids]', JSON.stringify(ids));
   params.set('payment_intent_data[metadata][booking_ids]', JSON.stringify(ids));
+  params.set('payment_intent_data[metadata][client_id]', String(clientId));
+  // Paiement en deux temps : Stripe bloque le montant, PROPRIGO n'encaisse que le premier
+  // paiement autorisé pour une réservation et annule les autres (aucun débit en double).
+  params.set('payment_intent_data[capture_method]', 'manual');
+  // Carte seulement (Apple Pay et Google Pay compris). Depuis l'API Stripe du 30/09/2026 (« endive »),
+  // payment_method_types est refusé : on utilise allowed_payment_method_types. Pour un compte encore
+  // sur une version plus ancienne, voir plus bas : un second essai avec l'ancien nom.
+  params.set('allowed_payment_method_types[0]', 'card');
   
   params.set('line_items[0][price_data][currency]', 'eur');
   params.set('line_items[0][price_data][unit_amount]', String(amount));
@@ -60,29 +68,43 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
   params.set('line_items[0][quantity]', '1');
   params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&booking=${ids[0]}#/mes-reservations`);
   params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
-  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
-  let resp;
-  try {
-    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${amount}:${Math.floor(Date.now() / 1800000)}`).digest('hex')}`,
-      },
-      body: params,
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch (err) {
-    console.error('Stripe Checkout network error:', { name: err.name, message: err.message, cause: err.cause?.code });
-    throw new Error('Stripe Checkout network error');
-  }
-  let session;
-  try {
-    session = await resp.json();
-  } catch (err) {
-    console.error('Stripe Checkout invalid response:', { status: resp.status, message: err.message });
-    throw new Error('Stripe Checkout invalid response');
+  // Stripe exige au moins 30 minutes entre la création et l'expiration : 35 minutes laissent une marge
+  // (horloges légèrement décalées, réseau lent).
+  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 35 * 60));
+  const send = async () => {
+    let resp;
+    try {
+      resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          // Clé anti-doublon tirée de la demande exacte : deux envois identiques (double clic) donnent la même
+          // session ; une demande différente (heure d'expiration, montant…) ne réutilise jamais une ancienne clé.
+          'Idempotency-Key': `proprigo-checkout-${crypto.createHash('sha256').update(`${clientId}:${ids.join(',')}:${params.toString()}`).digest('hex')}`,
+        },
+        body: params,
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (err) {
+      console.error('Stripe Checkout network error:', { name: err.name, message: err.message, cause: err.cause?.code });
+      throw new Error('Stripe Checkout network error');
+    }
+    let body;
+    try {
+      body = await resp.json();
+    } catch (err) {
+      console.error('Stripe Checkout invalid response:', { status: resp.status, message: err.message });
+      throw new Error('Stripe Checkout invalid response');
+    }
+    return { resp, session: body };
+  };
+  let { resp, session } = await send();
+  // Compte Stripe sur une version d'API antérieure au 30/09/2026 : le nouveau nom n'y existe pas encore.
+  if (resp.status === 400 && /allowed_payment_method_types/.test(session.error?.message || '') && session.error?.param === 'allowed_payment_method_types') {
+    params.delete('allowed_payment_method_types[0]');
+    params.set('payment_method_types[0]', 'card');
+    ({ resp, session } = await send());
   }
   if (!resp.ok || !session.id || !session.url) {
     console.error('Stripe Checkout error:', {
@@ -91,7 +113,7 @@ async function checkoutUnlocked({ db, ids, clientId, email, appUrl }) {
       code: session.error?.code,
       message: session.error?.message,
     });
-    throw new Error('Stripe session failed');
+    throw new Error(`Stripe a refusé la session (${resp.status}${session.error?.code ? `, ${session.error.code}` : ''})${session.error?.message ? ` : ${session.error.message}` : ''}`);
   }
   try {
     // Recheck after Stripe API call: the webhook might have marked it paid meanwhile.
@@ -172,6 +194,88 @@ async function refund({ db, bookingId, amountCents }) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { id: out.id, status: out.status };
 }
+// ---- PaymentIntent : lecture, encaissement, annulation (paiement en deux temps)
+async function stripeCall(method, path, params, idem) {
+  const headers = { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` };
+  if (params) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+  if (idem) headers['Idempotency-Key'] = idem;
+  let resp;
+  try { resp = await fetch(`https://api.stripe.com${path}`, { method, headers, body: params || undefined, signal: AbortSignal.timeout(15000) }); }
+  catch (err) { throw new Error(`Stripe network error (${path.split('/')[2]})`); }
+  const body = await resp.json().catch(() => ({}));
+  return { ok: resp.ok, status: resp.status, body };
+}
+const validPi = (pi) => typeof pi === 'string' && /^pi_[A-Za-z0-9_]+$/.test(pi);
+async function getIntent(pi) {
+  if (!validPi(pi)) throw new Error('Invalid payment intent');
+  const r = await stripeCall('GET', `/v1/payment_intents/${pi}`);
+  if (!r.ok || !r.body.id) throw new Error(`Stripe payment intent lookup failed (${r.status})`);
+  return r.body;
+}
+async function captureIntent(pi) {
+  if (!validPi(pi)) throw new Error('Invalid payment intent');
+  const r = await stripeCall('POST', `/v1/payment_intents/${pi}/capture`, new URLSearchParams(), `proprigo-capture-${pi}`);
+  if (r.ok && r.body.status === 'succeeded') return r.body;
+  const now = await getIntent(pi); // déjà encaissé lors d'un essai précédent ?
+  if (now.status === 'succeeded') return now;
+  throw new Error(`Stripe capture failed: ${r.body.error?.code || now.status}`);
+}
+async function cancelIntent(pi) {
+  if (!validPi(pi)) throw new Error('Invalid payment intent');
+  const r = await stripeCall('POST', `/v1/payment_intents/${pi}/cancel`, new URLSearchParams({ cancellation_reason: 'duplicate' }), `proprigo-cancel-${pi}`);
+  if (r.ok && r.body.status === 'canceled') return 'canceled';
+  const now = await getIntent(pi);
+  if (now.status === 'canceled') return 'canceled';
+  if (now.status === 'succeeded') return 'captured'; // déjà encaissé : il faudra rembourser
+  throw new Error(`Stripe cancel failed: ${r.body.error?.code || now.status}`);
+}
+async function sessionForIntent(pi) {
+  if (!validPi(pi)) return null;
+  const r = await stripeCall('GET', `/v1/checkout/sessions?payment_intent=${pi}&limit=1`);
+  return r.ok && Array.isArray(r.body.data) && r.body.data[0] ? r.body.data[0].id : null;
+}
+/**
+ * Remboursement automatique d'un encaissement en trop (deuxième onglet, deuxième session…).
+ * Une ligne par PaymentIntent : jamais deux remboursements pour le même encaissement,
+ * et la clé d'idempotence Stripe protège aussi contre les webhooks rejoués.
+ */
+async function refundDuplicate({ db, paymentIntent, amountCents, sessionId, bookingIds, clientId }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (typeof paymentIntent !== 'string' || !/^pi_[A-Za-z0-9_]+$/.test(paymentIntent)) throw new Error('Invalid payment intent');
+  if (!Number.isSafeInteger(amountCents) || amountCents < 1) throw new Error('Invalid amount');
+  db.exec(`CREATE TABLE IF NOT EXISTS stripe_duplicate_refunds (payment_intent TEXT PRIMARY KEY, session_id TEXT, client_id INTEGER, booking_ids TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL, refund_id TEXT, status TEXT NOT NULL DEFAULT 'a_rembourser', created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  const inserted = db.prepare('INSERT OR IGNORE INTO stripe_duplicate_refunds (payment_intent, session_id, client_id, booking_ids, amount_cents) VALUES (?, ?, ?, ?, ?)')
+    .run(paymentIntent, sessionId || null, clientId || null, JSON.stringify(bookingIds), amountCents);
+  const row = db.prepare('SELECT * FROM stripe_duplicate_refunds WHERE payment_intent = ?').get(paymentIntent);
+  if (!inserted.changes && (row.refund_id || row.status === 'annule')) return { id: row.refund_id, status: row.status, already: true };
+  const params = new URLSearchParams({ payment_intent: paymentIntent, amount: String(amountCents), reason: 'duplicate',
+    'metadata[booking_ids]': JSON.stringify(bookingIds), 'metadata[proprigo]': 'duplicate_payment' });
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `proprigo-duplicate-${paymentIntent}` },
+      body: params, signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    db.prepare("UPDATE stripe_duplicate_refunds SET status = 'echec' WHERE payment_intent = ?").run(paymentIntent);
+    throw new Error('Stripe refund network error');
+  }
+  const out = await resp.json().catch(() => ({}));
+  // Déjà remboursé en totalité (par exemple à la main dans Stripe) : rien à refaire.
+  if (!resp.ok && out.error?.code === 'charge_already_refunded') {
+    db.prepare("UPDATE stripe_duplicate_refunds SET status = 'rembourse' WHERE payment_intent = ?").run(paymentIntent);
+    return { id: null, status: 'succeeded', already: true };
+  }
+  if (!resp.ok || !out.id || !['succeeded', 'pending'].includes(out.status)) {
+    db.prepare("UPDATE stripe_duplicate_refunds SET status = 'echec' WHERE payment_intent = ?").run(paymentIntent);
+    throw new Error(out.error?.message ? `Stripe : ${out.error.message}` : 'Stripe refund failed');
+  }
+  db.prepare('UPDATE stripe_duplicate_refunds SET refund_id = ?, status = ? WHERE payment_intent = ?')
+    .run(out.id, out.status === 'succeeded' ? 'rembourse' : 'remboursement_en_cours', paymentIntent);
+  return { id: out.id, status: out.status };
+}
 /** Paiement d'une carte cadeau ou d'un pack d'heures : une session Stripe dédiée, reconnue par son identifiant. */
 async function checkoutGift({ db, gift, email, appUrl }) {
   if (!configured()) throw new Error('Stripe not configured');
@@ -205,4 +309,37 @@ async function checkoutGift({ db, gift, email, appUrl }) {
   db.prepare('UPDATE gift_cards SET session_id = ?, amount_cents = ? WHERE id = ?').run(out.id, amount, gift.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, checkoutGift };
+// pourboire : paiement simple, encaissé tout de suite, reversé à 100 % à l'intervenante
+async function checkoutTip({ db, tip, label, email, appUrl }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (!validBaseUrl(appUrl)) throw new Error('Invalid public URL');
+  const amount = tip.amount_cents;
+  if (!Number.isSafeInteger(amount) || amount < 100 || amount > 5000) throw new Error('Invalid amount');
+  const params = new URLSearchParams();
+  params.set('mode', 'payment');
+  params.set('customer_email', email);
+  params.set('line_items[0][price_data][currency]', 'eur');
+  params.set('line_items[0][price_data][unit_amount]', String(amount));
+  params.set('line_items[0][price_data][product_data][name]', label);
+  params.set('line_items[0][quantity]', '1');
+  params.set('metadata[tip_id]', String(tip.id));
+  params.set('success_url', `${appUrl.replace(/\/$/, '')}/?stripe=success&tip=${tip.id}#/mes-reservations`);
+  params.set('cancel_url', `${appUrl.replace(/\/$/, '')}/?stripe=cancel#/mes-reservations`);
+  params.set('expires_at', String(Math.floor(Date.now() / 1000) + 1800));
+  let resp;
+  try {
+    resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `proprigo-tip-${tip.id}` },
+      body: params, signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    console.error('Stripe tip checkout network error:', { name: err.name, message: err.message });
+    throw new Error('Stripe network error');
+  }
+  const out = await resp.json().catch(() => ({}));
+  if (!resp.ok || !out.id || !out.url) { console.error('Stripe tip checkout error:', { status: resp.status, message: out.error?.message }); throw new Error('Stripe checkout failed'); }
+  db.prepare('UPDATE tips SET session_id = ? WHERE id = ?').run(out.id, tip.id);
+  return { url: out.url };
+}
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, getIntent, captureIntent, cancelIntent, sessionForIntent, checkoutGift, checkoutTip };

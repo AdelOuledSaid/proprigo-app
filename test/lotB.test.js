@@ -46,7 +46,7 @@ test('société : facture à son nom, SIRET et TVA vérifiés', async () => {
     const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'claire@proprigo.test', password: 'demo-proprigo' }) });
     const cookie = login.headers.get('set-cookie').split(';')[0];
     const html = await (await fetch(base + `/api/bookings/${id}/receipt`, { headers: { Cookie: cookie } })).text();
-    assert.match(html, /Facturé à :<\/b> Conciergerie Test/);
+    assert.match(html, /Facturé à<\/b><br>Conciergerie Test/);
     assert.match(html, /SIRET : 12345678900012/);
   } finally { server.close(); }
 });
@@ -58,17 +58,17 @@ test('remise volume : seulement pour une société, prestations pro, jamais cumu
     const cid = uid(db, 'claire@proprigo.test');
     const c = await logged('claire@proprigo.test');
     const q0 = (await c('POST', '/api/quote', { service: 'bureau', hours: 3, cp: '75008', date: '2026-11-30', volume: 0.1 })).data;
-    assert.equal(q0.total, 126, 'la remise envoyée par le navigateur est ignorée');
+    assert.equal(q0.total, 130, 'la remise envoyée par le navigateur est ignorée');
     for (let i = 0; i < 10; i++) addBooking(db, { client: cid, date: '2026-11-2' + (i % 8 + 1), paid: true });
-    assert.equal((await c('POST', '/api/quote', { service: 'bureau', hours: 3, cp: '75008', date: '2026-11-30' })).data.total, 126, 'pas de société : pas de remise');
+    assert.equal((await c('POST', '/api/quote', { service: 'bureau', hours: 3, cp: '75008', date: '2026-11-30' })).data.total, 130, 'pas de société : pas de remise');
     await c('POST', '/api/account/company', { company: 'Bureaux Test' });
     const q1 = (await c('POST', '/api/quote', { service: 'bureau', hours: 3, cp: '75008', date: '2026-11-30' })).data;
-    assert.equal(q1.total, Math.round(126 * 0.95));
+    assert.equal(q1.total, Math.round(3 * 43.2 * 0.95));
     assert.ok(q1.lines.some((l) => /Remise volume/.test(l.label)));
-    assert.equal((await c('POST', '/api/quote', { service: 'menage', hours: 3, cp: '75011', date: '2026-11-30' })).data.total, 111, 'pas de remise volume sur le ménage à domicile');
+    assert.equal((await c('POST', '/api/quote', { service: 'menage', hours: 3, cp: '75011', date: '2026-11-30' })).data.total, 108, 'pas de remise volume sur le ménage à domicile');
     for (let i = 0; i < 20; i++) addBooking(db, { client: cid, date: '2026-11-2' + (i % 8 + 1), paid: true });
     const q2 = (await c('POST', '/api/quote', { service: 'bureau', hours: 3, cp: '75008', date: '2026-11-30', repeat: '7' })).data;
-    assert.equal(q2.total, Math.round(126 * 0.9), '−10 %, sans y ajouter l\'abonnement');
+    assert.equal(q2.total, Math.round(3 * 43.2 * 0.9), '−10 %, sans y ajouter l\'abonnement');
     for (const [svc, extra] of [['bureau', {}], ['airbnb', { size: 'T2' }]]) {
       const q = pricing.quote({ service: svc, hours: 3, cp: '75008', date: '2026-11-30', volume: 0.1, ...extra }, NOW);
       const m = pricing.estimateMargin({ service: svc, size: extra.size, total: q.total, hours: q.hours, kit: 0 }, null);
