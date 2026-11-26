@@ -947,9 +947,9 @@ html[dir="rtl"] .wk-l-item em { margin-left: 0; margin-right: auto; }
 .sky { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
 .sky i { position: absolute; left: var(--x); top: var(--y); width: var(--s); height: var(--s); background: #7d97ff; opacity: .6;
   clip-path: polygon(50% 0, 64% 36%, 100% 50%, 64% 64%, 50% 100%, 36% 64%, 0 50%, 36% 36%);
-  animation: twinkle var(--t) ease-in-out var(--d) infinite; }
+  animation: sky-twinkle var(--t) ease-in-out var(--d) infinite; }
 .sky i.c { background: #ff8a63; }
-@keyframes twinkle { 0%, 100% { opacity: .3; transform: scale(.65) rotate(0deg); } 50% { opacity: .9; transform: scale(1) rotate(20deg); } }
+@keyframes sky-twinkle { 0%, 100% { opacity: .3; transform: scale(.65) rotate(0deg); } 50% { opacity: .9; transform: scale(1) rotate(20deg); } }
 @media (prefers-reduced-motion: reduce) { .sky i { animation: none; opacity: .55; } }
 @media print { .sky { display: none; } }
 
@@ -964,3 +964,7 @@ html[dir="rtl"] .wk-l-item em { margin-left: 0; margin-right: auto; }
 @media (max-width: 640px) { .wk-cal { display: block; } }
 .pill.pill-live::before { display: none; }
 article.card > .row:first-child { flex-wrap: nowrap; align-items: flex-start; gap: 10px; } article.card > .row:first-child .pill { flex: none; white-space: nowrap; }
+/* l'animation des étapes ne se joue qu'une fois : pas de « saut » à chaque mise à jour de la page */
+.anim-done .live-steps::after { animation: none; width: 80%; }
+.anim-done .live-steps .live-dot { animation: none; border-color: var(--blue); transform: none; }
+.anim-done .live-steps li:last-child .live-dot { border-color: var(--coral); }

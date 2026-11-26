@@ -83,3 +83,9 @@
 - Message « … est arrivée chez vous, le ménage va commencer. »
 - Une fois l'intervenante partie, plus de lien « Annuler » ni « Modifier » ; le serveur refuse l'annulation après l'arrivée (test ajouté).
 - Correction : rond vide affiché au-dessus du message de suivi.
+
+## v1.9.11
+
+- Après un bouton ou la mise à jour automatique (toutes les 15 s), la page garde sa position : elle ne remonte plus en haut et ne « saute » plus.
+- Les étapes animées (Réservé → Terminé) ne se rejouent plus à chaque mise à jour.
+- Correction : l'animation des étoiles de fond modifiait celle des petites étincelles des illustrations.

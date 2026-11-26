@@ -2804,15 +2804,24 @@
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 
+  let lastPage = null;
   async function route() {
     renderNav();
     const [name, qs] = location.hash.replace(/^#\/?/, '').split('?');
     const view = views[name] || views[''];
+    // même page redessinée (après un bouton ou la mise à jour automatique) : on garde la hauteur
+    // et la position, sinon la page se vide un instant, remonte en haut et « saute »
+    const same = name === lastPage;
+    const y = window.scrollY;
+    if (same) $app.style.minHeight = `${$app.offsetHeight}px`;
     try { await view(new URLSearchParams(qs || '')); } catch (e) { $app.innerHTML = `<p class="card err">${esc(e.message)}</p>`; }
     verifyBanner(name);
     $app.focus({ preventScroll: true });
+    if (same) { window.scrollTo(0, y); requestAnimationFrame(() => { $app.style.minHeight = ''; window.scrollTo(0, y); }); }
+    lastPage = name;
   }
   window.addEventListener('hashchange', route);
+  setTimeout(() => document.documentElement.classList.add('anim-done'), 4500); // étapes animées au premier affichage seulement
   // Re-fetch server state on return from Stripe, focus, and while a dashboard is visible.
   // A refresh must not require logging out and back in.
   let refreshInProgress = false;

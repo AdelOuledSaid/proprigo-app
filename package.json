@@ -1,6 +1,6 @@
 {
   "name": "proprigo",
-  "version": "1.9.10",
+  "version": "1.9.11",
   "private": true,
   "description": "Proprigo, ménage à la demande : première version (phase 1).",
   "engines": {
