@@ -88,6 +88,7 @@
     ['Nettoyage de bureaux', 'Limpeza de escritórios', 'Limpieza de oficinas', 'تنظيف المكاتب', "Office cleaning"],
     ['Ménage Airbnb', 'Limpeza Airbnb', 'Limpieza Airbnb', 'تنظيف Airbnb', "Airbnb cleaning"],
     // semaine, disponibilités, congés
+    ['Aucune mission ce jour-là.', 'Nenhuma missão neste dia.', 'Ninguna misión ese día.', 'لا توجد مهمة في هذا اليوم.', "No mission that day."],
     ['Ma semaine', 'A minha semana', 'Mi semana', 'أسبوعي', "My week"],
     ['h de missions', 'h de missões', 'h de misiones', 'ساعات من المهام', "h of missions"],
     ['Congé', 'Folga', 'Libre', 'عطلة', "Day off"],

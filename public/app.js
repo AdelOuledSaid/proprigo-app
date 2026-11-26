@@ -1133,6 +1133,7 @@
         : '<p class="small" style="margin:10px 0 0">Vous avez atteint le plus haut niveau. Merci pour votre travail !</p>'}
       </div>`;
   }
+  let weekPick = null; // jour touché dans le calendrier du téléphone
   async function paintWeek(start) {
     const box = document.getElementById('week');
     if (!box) return;
@@ -1152,8 +1153,29 @@
           ${d.items.map((x) => `<a class="wk-item ${x.kind} ${x.status || ''}" href="#/intervenante" style="top:${Math.max(0, top(x.time))}px;height:${Math.max(28, x.hours * PX - 3)}px" title="${esc(x.service)} · ${esc(x.time)} · ${esc(x.cp)}"><b>${esc(x.time)}</b> ${esc(x.cp)}<small>${x.kind === 'offre' ? 'À accepter' : x.status === 'terminee' ? 'Terminée' : esc(x.service)}</small></a>`).join('')}</div></div>`).join('')}
       </div></div>
       <p class="small muted wk-note" style="margin:8px 0 0">Zone claire : vos disponibilités. Les missions et propositions apparaissent dans la journée.</p>
-      <ul class="wk-list">${w.days.map((d) => `<li class="${d.today ? 'today' : ''}"><div class="wk-l-head"><b>${dayName(d.date)}</b><span class="small muted">${d.off ? 'Congé' : d.avail ? `Dispo ${esc(d.avail.start)}–${esc(d.avail.end)}` : 'Indisponible'}</span></div>
-        ${d.items.length ? d.items.map((x) => `<a class="wk-l-item ${x.kind}" href="#/intervenante"><b>${esc(x.time)}</b><span>${esc(x.service)} · ${esc(x.cp)} · ${String(x.hours).replace('.', ',')} h</span>${x.kind === 'offre' ? '<em>à accepter</em>' : ''}</a>`).join('') : ''}</li>`).join('')}</ul>`;
+      <div class="wk-cal" id="wkCal"></div>`;
+    // téléphone : la semaine en pastilles, une icône par type de ménage, puis le détail du jour touché
+    const ICON = { menage: '🏠', airbnb: '🧳', grand: '🧽', bureau: '🏢' };
+    const initial = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOC(), { weekday: 'narrow', timeZone: 'UTC' });
+    const pick = () => (w.days.find((d) => d.date === weekPick) || w.days.find((d) => d.today) || w.days.find((d) => d.items.length) || w.days[0]);
+    const paintCal = () => {
+      const sel = pick();
+      const used = [...new Set(w.days.flatMap((d) => d.items.map((x) => x.key)))].filter((k) => ICON[k]);
+      document.getElementById('wkCal').innerHTML = `
+        <div class="cal-row" role="group" aria-label="Jours de la semaine">${w.days.map((d) => {
+          const it = d.items; const first = it[0];
+          const cls = ['cal-dot', first ? `has ${first.key}` : '', first && first.kind === 'offre' ? 'offre' : '', d.off ? 'off' : !d.avail ? 'na' : '', d.today ? 'today' : '', d.date === sel.date ? 'sel' : ''].filter(Boolean).join(' ');
+          const label = `${dayName(d.date)} : ${it.length ? `${it.length} mission${it.length > 1 ? 's' : ''}` : d.off ? 'Congé' : d.avail ? 'libre' : 'Indisponible'}`;
+          return `<button type="button" class="cal-day" data-day="${d.date}" aria-pressed="${d.date === sel.date}" aria-label="${esc(label)}"><small>${esc(initial(d.date))}</small>
+            <span class="${cls}">${first ? (ICON[first.key] || '🧽') : d.off ? '🌴' : Number(d.date.slice(8))}${it.length > 1 ? `<em>${it.length}</em>` : ''}</span></button>`;
+        }).join('')}</div>
+        ${used.length ? `<p class="cal-legend">${used.map((k) => `<span>${ICON[k]} ${esc(SERVICE[k] || k)}</span>`).join('')}</p>` : ''}
+        <div class="cal-detail"><div class="wk-l-head"><b>${dayName(sel.date)}</b><span class="small muted">${sel.off ? 'Congé' : sel.avail ? `Dispo ${esc(sel.avail.start)}–${esc(sel.avail.end)}` : 'Indisponible'}</span></div>
+          ${sel.items.length ? sel.items.map((x) => `<a class="cal-item ${x.key} ${x.kind}" href="#/intervenante"><span class="cal-ico" aria-hidden="true">${ICON[x.key] || '🧽'}</span><span><b>${esc(x.time)} · ${esc(x.service)}</b><small>${esc(x.cp)} · ${String(x.hours).replace('.', ',')} h</small></span>${x.kind === 'offre' ? '<em>à accepter</em>' : ''}</a>`).join('') : '<p class="small muted" style="margin:6px 0 0">Aucune mission ce jour-là.</p>'}
+        </div>`;
+      box.querySelectorAll('[data-day]').forEach((b) => b.onclick = () => { weekPick = b.dataset.day; paintCal(); });
+    };
+    paintCal();
     box.querySelectorAll('[data-wk]').forEach((b) => b.onclick = () => { weekStart = b.dataset.wk || null; paintWeek(b.dataset.wk || undefined); });
   }
   // ---- appli Android / iPhone (Capacitor) : notifications natives ----

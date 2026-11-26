@@ -1602,8 +1602,8 @@ ${items.map((o, i) => `<CdtTrfTxInf><PmtId><EndToEndId>${msgId.slice(-12)}-${i +
       const date = d.toISOString().slice(0, 10);
       const a = avail.get(user.id, d.getUTCDay());
       days.push({ date, today: date === today, off: Boolean(off.get(user.id, date, date)), avail: a || null,
-        items: [...missions.all(user.id, date).map((m) => ({ ...m, kind: 'mission', service: SERVICE_NAME[m.service] || m.service })),
-          ...offers.all(user.id, date).map((o) => ({ ...o, kind: 'offre', service: SERVICE_NAME[o.service] || o.service }))].sort((x, y) => x.time.localeCompare(y.time)) });
+        items: [...missions.all(user.id, date).map((m) => ({ ...m, kind: 'mission', key: m.service, service: SERVICE_NAME[m.service] || m.service })),
+          ...offers.all(user.id, date).map((o) => ({ ...o, kind: 'offre', key: o.service, service: SERVICE_NAME[o.service] || o.service }))].sort((x, y) => x.time.localeCompare(y.time)) });
     }
     const shift = (n) => { const d = new Date(d0); d.setUTCDate(d0.getUTCDate() + n); return d.toISOString().slice(0, 10); };
     return { start: shift(0), prev: shift(-7), next: shift(7), days, hours: days.reduce((t, d) => t + d.items.filter((x) => x.kind === 'mission').reduce((u, x) => u + x.hours, 0), 0) };

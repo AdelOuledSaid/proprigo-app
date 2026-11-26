@@ -70,3 +70,8 @@
 - Menu : « Particuliers » ajouté, avant Entreprises, Syndics et Agences immobilières.
 - « Devenir intervenante » devient « Travailler avec nous » (menu, bas de page, connexion, inscription) ; la page de recrutement précise que femmes et hommes sont les bienvenus.
 - Sur ordinateur, le menu tient sur une ligne (icônes seulement sur téléphone).
+
+## v1.9.9
+
+- Espace intervenante, « Ma semaine » sur téléphone : calendrier en pastilles, une icône par type de ménage (🏠 ménage, 🧳 Airbnb, 🧽 grand nettoyage, 🏢 bureaux), nombre de missions du jour, 🌴 pour les congés. On touche un jour pour voir ses missions.
+- Les zips ne contiennent plus de dossier .git.
