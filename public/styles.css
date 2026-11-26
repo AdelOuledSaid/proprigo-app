@@ -1014,3 +1014,14 @@ article.card > .row:first-child { flex-wrap: nowrap; align-items: flex-start; ga
 .tip-circles button:active { transform: scale(.93); }
 .pay-all { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; margin: 0 0 14px; padding: 14px 16px; border-radius: 18px; background: #eef2ff; border: 1.5px solid #c9d5ff; }
 .pay-all span { display: grid; gap: 2px; }
+/* pourboire replié, petits cercles */
+details.tip-round { padding: 10px 14px; }
+details.tip-round summary { cursor: pointer; font-weight: 700; }
+.tip-circles button { width: 48px; height: 48px; font-size: 15px; font-weight: 700; }
+/* historique replié */
+details.history { margin-top: 18px; }
+details.history > summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 18px; border-radius: 18px; background: #fff; box-shadow: 0 2px 8px rgb(15 20 48 / .06); cursor: pointer; font-weight: 800; font-size: 18px; list-style: none; }
+details.history > summary::-webkit-details-marker { display: none; }
+details.history > summary .muted::after { content: ' ▾'; }
+details.history[open] > summary .muted::after { content: ' ▴'; }
+details.history[open] > summary { margin-bottom: 12px; }

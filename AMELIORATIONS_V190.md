@@ -114,3 +114,8 @@
 - Un espace client est créé pour l'entreprise s'il n'existe pas (lien « Créer mon mot de passe », valable 7 jours).
 - Le client reçoit les dates par e-mail et paie par carte dans son espace : passage par passage, ou « 💳 Tout payer en une fois ». Une facture par passage, l'intervenante est choisie après le paiement.
 - Le devis passe à « 📅 N passages planifiés ».
+
+## v1.11.1
+
+- « Mes réservations » : l'historique est replié (« 📜 Historique · N ménages · Afficher ») ; seul le dernier ménage terminé à noter (ou encore sous garantie 48 h) reste visible.
+- Pourboire replié : « 💝 Laisser un pourboire à … », petits cercles 2 €, 5 €, 10 €, Autre à l'ouverture.

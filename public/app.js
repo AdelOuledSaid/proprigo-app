@@ -953,9 +953,10 @@
           ${b.status === 'terminee' && !b.rating ? `<div class="rate-box"><p><b>Comment s'est passé le ménage ?</b><span class="small muted">Touchez une étoile pour changer la note.</span></p><div class="stars round">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div></div>` : ''}
           ${b.rating ? `<p class="rated">Votre note <span>${'★'.repeat(b.rating)}<i>${'★'.repeat(5 - b.rating)}</i></span></p>` : ''}
           ${b.status === 'terminee' && b.worker_id ? (b.tip ? `<p class="tip-done">💝 Merci ! Pourboire de ${eur(b.tip)} envoyé à ${esc((b.worker_name || '').split(' ')[0])}.</p>`
-            : b.date >= addDaysFront(todayParis(), -30) ? `<div class="tip-round"><p><b>💝 Un pourboire pour ${esc((b.worker_name || '').split(' ')[0])} ?</b><span class="small muted">Il lui est reversé en entier.</span></p>
-              <div class="tip-circles">${[2, 5, 10].map((n) => `<button type="button" data-tip="${b.id}" data-amount="${n}"><b>${n}</b><small>€</small></button>`).join('')}
-              <button type="button" data-tip="${b.id}" data-amount="other"><small>Autre</small></button></div></div>` : '') : ''}
+            : b.date >= addDaysFront(todayParis(), -30) ? `<details class="tip-round"><summary>💝 Laisser un pourboire à ${esc((b.worker_name || '').split(' ')[0])}</summary>
+              <p class="small muted" style="margin:8px 0">Il lui est reversé en entier.</p>
+              <div class="tip-circles">${[2, 5, 10].map((n) => `<button type="button" data-tip="${b.id}" data-amount="${n}">${n} €</button>`).join('')}
+              <button type="button" data-tip="${b.id}" data-amount="other">Autre</button></div></details>` : '') : ''}
           ${b.guarantee_open ? `<div class="guarantee"><span><b>Pas satisfait ?</b> Dites-le-nous dans les 48 h : on revient gratuitement.</span><button class="btn ghost" data-guarantee="${b.id}">On revient</button></div><div id="guar-${b.id}"></div>` : ''}
           ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">💳 Payer cette intervention</button>` : ''}
         </article>`;
@@ -967,8 +968,14 @@
       ${visibleBookings.some((b) => !isHistory(b)) ? '<h2>Réservations en cours</h2>' : ''}
       ${(() => { const due = visibleBookings.filter((b) => b.payment_status === 'en_attente_paiement' && b.status !== 'annulee' && hoursLeft(b) >= 1); return due.length > 1 ? `<div class="pay-all"><span><b>${due.length} passages à régler</b>${eur(Math.round(due.reduce((t, b) => t + Number(b.total), 0) * 100) / 100)} au total · une facture par passage</span><button class="btn primary" id="payAll">💳 Tout payer en une fois</button></div>` : ''; })()}
       ${visibleBookings.filter((b) => !isHistory(b)).map((b) => renderBooking(b)).join('')}
-      ${visibleBookings.some(isHistory) ? '<h2>Historique</h2>' : ''}
-      ${visibleBookings.filter(isHistory).map((b) => renderBooking(b)).join('')}`;
+      ${(() => {
+        // ménages terminés à noter (ou encore sous garantie) : visibles ; le reste de l'historique est replié
+        const hist = visibleBookings.filter(isHistory);
+        const toRate = hist.filter((b) => b.status === 'terminee' && (!b.rating || b.guarantee_open)).slice(0, 2);
+        const rest = hist.filter((b) => !toRate.includes(b));
+        return `${toRate.length ? `<h2>Ménage${toRate.length > 1 ? 's' : ''} terminé${toRate.length > 1 ? 's' : ''}</h2>${toRate.map((b) => renderBooking(b)).join('')}` : ''}
+          ${rest.length ? `<details class="history"><summary><span>📜 Historique</span><span class="small muted">${rest.length} ménage${rest.length > 1 ? 's' : ''} · Afficher</span></summary>${rest.map((b) => renderBooking(b)).join('')}</details>` : ''}`;
+      })()}`;
 
     const act = (sel, fn) => $app.querySelectorAll(sel).forEach((btn) => btn.onclick = () => fn(btn));
     act('[data-prefslots]', async (btn) => {
