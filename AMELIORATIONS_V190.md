@@ -93,10 +93,3 @@
 ## v1.9.12
 
 - Mise à jour automatique silencieuse : toutes les 15 s, l'appli vérifie en arrière-plan si quelque chose a changé ; si rien n'a changé, l'écran ne bouge pas du tout (avant, la page était redessinée à chaque fois).
-
-## v1.10.0 — devis professionnels
-
-- Admin, « Devis professionnels » (toujours visible dans « À traiter ») : pour chaque demande, « 📝 Faire le devis » (prestation, heures par passage, prix de l'heure, fréquence, date de début, message), total calculé en direct, « 📨 Envoyer le devis par e-mail ».
-- Numéro de devis D2026-0001…, valable 30 jours, avec vos mentions (raison sociale, SIRET, TVA ou franchise).
-- Le client reçoit un e-mail avec un lien : il voit le devis, peut l'imprimer ou l'enregistrer en PDF, et l'accepte en ligne (« Bon pour accord » avec son nom) ou répond par un message.
-- Vous êtes prévenu par e-mail ; la demande passe à « ✅ Accepté par … le … » ou « Refusé », avec la réponse du client. Devis modifiable et renvoyable tant qu'il n'est pas accepté. « Classer sans suite » remplace « Traitée ».

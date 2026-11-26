@@ -1548,7 +1548,7 @@
       ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
-      `<li class="${r.quoteRequests ? 'urgent' : ''}"><span><b>Devis professionnels</b> · ${r.quoteRequests ? `${r.quoteRequests} à traiter` : 'demandes, devis envoyés et acceptés'}</span><button class="btn ghost" id="openDevis">Voir</button></li>`,
+      ...(r.quoteRequests ? [`<li class="urgent"><span><b>Demandes de devis</b> · ${r.quoteRequests} nouvelle${r.quoteRequests > 1 ? 's' : ''}</span><button class="btn ghost" id="openDevis">Voir</button></li>`] : []),
       ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'garantie' ? 'Garantie : retour gratuit à planifier' : x.source === 'litige' ? 'Contestation bancaire' : x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
       ...(k.aRembourser.n ? [`<li><span><b>Remboursements</b> · ${k.aRembourser.n} réservation(s), ${eur(k.aRembourser.montant)}</span><button class="btn ghost" data-goto="table">Voir</button></li>`] : []),
@@ -1776,7 +1776,16 @@
       try { const r2 = await api('POST', `/api/admin/workers/${id}/avatar`, { ok: Boolean(b.dataset.avok) }); toast(r2.message); route(); } catch (e) { toast(e.message); }
     });
     const od = document.getElementById('openDevis');
-    if (od) od.onclick = () => openQuotes();
+    if (od) od.onclick = async () => {
+      let dlg = document.getElementById('fileDlg');
+      if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'fileDlg'; dlg.className = 'file-dlg'; document.body.appendChild(dlg); }
+      const list = await api('GET', '/api/admin/quote-requests');
+      dlg.innerHTML = `<div class="dlg-head"><h2>Demandes de devis</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
+        <ul class="plain">${list.map((q) => `<li><span><b>${esc(q.company)}</b> · ${esc(q.kindLabel)} · ${esc(q.cp)}${q.surface ? ` · ${q.surface} m²` : ''}${q.frequency ? ` · ${esc(q.frequency)}` : ''}<br><span class="small">${esc(q.name)} · <a href="mailto:${esc(q.email)}">${esc(q.email)}</a>${q.phone ? ` · <a href="tel:${esc(q.phone)}">${esc(q.phone)}</a>` : ''}</span>${q.message ? `<br><span class="small muted">${esc(q.message)}</span>` : ''}</span>${q.status === 'nouveau' ? `<button class="btn ghost small-btn" data-qdone="${q.id}">Traitée</button>` : '<span class="pill ok">Traitée</span>'}</li>`).join('') || '<li class="muted">Aucune demande.</li>'}</ul>`;
+      if (!dlg.open) dlg.showModal();
+      dlg.querySelector('[data-close]').onclick = () => { dlg.close(); route(); };
+      dlg.querySelectorAll('[data-qdone]').forEach((b) => b.onclick = async () => { await api('POST', `/api/admin/quote-requests/${b.dataset.qdone}/done`, {}); b.replaceWith(Object.assign(document.createElement('span'), { className: 'pill ok', textContent: 'Traitée' })); });
+    };
     const pb = document.getElementById('payoutsBox');
     const paintPayouts = async () => {
       const d = await api('GET', '/api/admin/payouts').catch(() => null);
@@ -2771,119 +2780,6 @@
     <h2>10. Photos et données personnelles</h2><p>Voir la <a href="#/confidentialite">politique de confidentialité</a>.</p>
     <h2>11. Médiation et droit applicable</h2><p>En cas de litige, le consommateur peut recourir gratuitement au médiateur : [NOM, ADRESSE, SITE]. Droit français.</p>`);
 
-  // ---- devis professionnels : préparation (admin) et page envoyée au client ----
-  const QFREQ = [['once', 'Une seule fois'], ['weekly', 'Chaque semaine'], ['twice', '2 fois par semaine'], ['biweekly', 'Toutes les 2 semaines'], ['monthly', 'Chaque mois']];
-  const QFREQ_N = { once: 0, weekly: 52 / 12, twice: 104 / 12, biweekly: 26 / 12, monthly: 1 };
-  const QLABEL = { bureaux: 'Nettoyage de bureaux', agence: 'Grand nettoyage de fin de bail', syndic: 'Nettoyage des parties communes', conciergerie: 'Ménage de logements Airbnb', autre: 'Nettoyage' };
-  const money2 = (n) => `${Number(n).toFixed(2).replace('.', ',')} €`;
-  const guessFreq = (t) => { const f = String(t || '').toLowerCase(); return /2|deux/.test(f) && /semaine/.test(f) ? 'twice' : /quinz|2 semaines|deux semaines/.test(f) ? 'biweekly' : /semaine|hebdo/.test(f) ? 'weekly' : /mois|mensu/.test(f) ? 'monthly' : 'once'; };
-  const QSTATUS = (q) => ({
-    nouveau: '<span class="pill warn">Nouvelle demande</span>',
-    envoye: `<span class="pill">📨 Devis ${esc(q.offer_number)} envoyé le ${new Date(q.offer_sent_at).toLocaleDateString('fr-FR')}</span>`,
-    accepte: `<span class="pill ok">✅ Accepté par ${esc(q.answer_name || '')} le ${q.answered_at ? new Date(q.answered_at).toLocaleDateString('fr-FR') : ''}</span>`,
-    refuse: '<span class="pill gray">✖ Refusé par le client</span>',
-    traite: '<span class="pill gray">Classée</span>',
-  }[q.status] || '');
-  async function openQuotes() {
-    let dlg = document.getElementById('fileDlg');
-    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'fileDlg'; dlg.className = 'file-dlg'; document.body.appendChild(dlg); }
-    const list = await api('GET', '/api/admin/quote-requests');
-    const P = PRICES();
-    const defRate = (q) => (q.offer ? q.offer.rate : q.kind === 'agence' ? (CONFIG.franchiseTVA ? P.grand : Math.round(P.grand / 1.2 * 100) / 100) : (CONFIG.franchiseTVA ? P.bureau : P.bureauHT));
-    dlg.innerHTML = `<div class="dlg-head"><h2>Devis professionnels</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
-      ${list.length ? '' : '<p class="muted">Aucune demande pour le moment. Elles arrivent depuis les pages Entreprises, Syndics et Agences.</p>'}
-      <ul class="plain quotes">${list.map((q) => `<li data-q="${q.id}">
-        <div class="q-head"><b>${esc(q.company)}</b>${QSTATUS(q)}</div>
-        <p class="small" style="margin:4px 0 0">${esc(q.kindLabel)} · ${esc(q.cp)}${q.surface ? ` · ${q.surface} m²` : ''}${q.frequency ? ` · ${esc(q.frequency)}` : ''}<br>${esc(q.name)} · <a href="mailto:${esc(q.email)}">${esc(q.email)}</a>${q.phone ? ` · <a href="tel:${esc(q.phone)}">📞 ${esc(q.phone)}</a>` : ''}</p>
-        ${q.message ? `<p class="small muted" style="margin:4px 0 0">« ${esc(q.message)} »</p>` : ''}
-        ${q.offer ? `<p class="small" style="margin:6px 0 0">Proposé : ${esc(q.offer.label)} · ${String(q.offer.hours).replace('.', ',')} h × ${money2(q.offer.rate)} HT = <b>${money2(q.offer.perVisitHT)} HT</b> par passage · ${esc(q.offer.frequencyLabel)}${q.offer.perMonthHT ? ` · ≈ ${money2(q.offer.perMonthHT)} HT / mois` : ''}</p>` : ''}
-        ${q.answer_message ? `<p class="small" style="margin:4px 0 0">Réponse du client : « ${esc(q.answer_message)} »</p>` : ''}
-        ${q.status === 'accepte' ? '<p class="small" style="margin:6px 0 0"><b>Prochaine étape :</b> appelez le client pour fixer les dates, puis créez les ménages.</p>' : ''}
-        <div class="q-actions">
-          ${q.status !== 'accepte' ? `<button class="btn ${q.offer ? 'ghost' : 'primary'}" data-qmake="${q.id}">${q.offer ? '✏️ Modifier et renvoyer' : '📝 Faire le devis'}</button>` : ''}
-          ${q.link ? `<a class="btn ghost" href="${esc(q.link)}" target="_blank" rel="noopener">👁️ Voir le devis</a>` : ''}
-          ${['nouveau', 'envoye', 'refuse'].includes(q.status) ? `<button class="btn ghost" data-qdone="${q.id}">Classer sans suite</button>` : ''}
-        </div>
-        <form class="q-form stack" data-qform="${q.id}" hidden>
-          <label>Prestation<input name="label" required maxlength="120" value="${esc(q.offer ? q.offer.label : QLABEL[q.kind] || 'Nettoyage')}"></label>
-          <div class="grid2">
-            <label>Heures par passage<input name="hours" type="number" min="0.5" max="100" step="0.5" required value="${q.offer ? q.offer.hours : 2}"></label>
-            <label>Prix de l'heure ${CONFIG.franchiseTVA ? '' : 'HT '}(€)<input name="rate" type="number" min="15" max="200" step="0.1" required value="${defRate(q)}"></label>
-            <label>Fréquence<select name="frequency">${QFREQ.map(([k, l]) => `<option value="${k}"${(q.offer ? q.offer.frequency : guessFreq(q.frequency)) === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-            <label>Début souhaité (facultatif)<input name="start" type="date" value="${q.offer && q.offer.start ? q.offer.start : ''}"></label>
-          </div>
-          <label>Message pour le client (facultatif)<textarea name="message" rows="3" maxlength="1000" placeholder="Ex. : produits et matériel fournis, passage le matin avant l'ouverture.">${q.offer && q.offer.message ? esc(q.offer.message) : ''}</textarea></label>
-          <p class="q-total" data-qtotal></p>
-          <button class="btn primary">📨 Envoyer le devis par e-mail</button>
-          <p class="msg" data-qmsg></p>
-        </form>
-      </li>`).join('')}</ul>`;
-    if (!dlg.open) dlg.showModal();
-    dlg.querySelector('[data-close]').onclick = () => { dlg.close(); route(); };
-    const total = (f) => {
-      const h = Number(f.hours.value) || 0; const r = Number(f.rate.value) || 0; const per = h * r; const n = QFREQ_N[f.frequency.value];
-      const vat = CONFIG.franchiseTVA ? 0 : 0.2;
-      f.querySelector('[data-qtotal]').innerHTML = `<b>${money2(per)} ${CONFIG.franchiseTVA ? '' : 'HT '}par passage</b>${vat ? ` (${money2(per * (1 + vat))} TTC)` : ' · TVA non applicable'}${n ? ` · environ <b>${money2(per * n)}${vat ? ' HT' : ''} par mois</b>` : ''}`;
-    };
-    dlg.querySelectorAll('[data-qmake]').forEach((b) => b.onclick = () => {
-      const f = dlg.querySelector(`[data-qform="${b.dataset.qmake}"]`);
-      f.hidden = !f.hidden; total(f); if (!f.hidden) f.label.focus();
-    });
-    dlg.querySelectorAll('[data-qform]').forEach((f) => {
-      f.oninput = () => total(f);
-      f.onsubmit = async (e) => {
-        e.preventDefault();
-        const m = f.querySelector('[data-qmsg]');
-        try { const r = await api('POST', `/api/admin/quote-requests/${f.dataset.qform}/offer`, formData(f)); toast(r.message); openQuotes(); }
-        catch (err) { m.className = 'msg err'; m.textContent = err.message; }
-      };
-    });
-    dlg.querySelectorAll('[data-qdone]').forEach((b) => b.onclick = async () => { await api('POST', `/api/admin/quote-requests/${b.dataset.qdone}/done`, {}); openQuotes(); });
-  }
-  views['devis'] = async (qs) => {
-    let d;
-    try { d = await api('GET', `/api/devis?t=${encodeURIComponent(qs.get('t') || '')}`); }
-    catch (e) { page('Devis', `<p class="err">${esc(e.message)}</p><p>Le lien est peut-être incomplet. Écrivez-nous à contact@proprigo.fr.</p>`); return; }
-    const o = d.offer; const L = d.legal || {};
-    const ht = d.franchiseTVA ? '' : ' HT';
-    const fmt = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-    $app.innerHTML = `<article class="card devis-doc">
-      <header class="devis-top">
-        <div><img src="/logo.svg" alt="" width="40" height="40"><p><b>${esc(L.raisonSociale || L.nomCommercial || 'Proprigo')}</b>${L.formeJuridique ? `, ${esc(L.formeJuridique)}${L.capital ? ` au capital de ${esc(L.capital)}` : ''}` : ''}<br>${esc(L.adresse || '')}${L.siret ? `<br>SIRET ${esc(L.siret)}` : ''}${L.rcs ? ` · RCS ${esc(L.rcs)}` : ''}${!d.franchiseTVA && L.tvaIntracom ? `<br>TVA ${esc(L.tvaIntracom)}` : ''}<br>${esc(L.emailContact || 'contact@proprigo.fr')}</p></div>
-        <div class="devis-no"><h1>Devis ${esc(d.number)}</h1><p>Du ${fmt(d.sentAt)}<br>Valable jusqu'au ${fmt(o.validUntil + 'T12:00:00Z')}</p></div>
-      </header>
-      <section class="devis-client"><small>Pour</small><p><b>${esc(d.client.company)}</b><br>${esc(d.client.name)}<br>${esc(d.client.email)}<br>Lieu : ${esc(d.client.cp)}</p></section>
-      <table class="devis-table"><thead><tr><th>Prestation</th><th>Heures par passage</th><th>Prix de l'heure${ht}</th><th>Par passage${ht}</th></tr></thead>
-        <tbody><tr><td>${esc(o.label)}<br><span class="small muted">${esc(o.frequencyLabel)}${o.start ? ` · à partir du ${fmt(o.start + 'T12:00:00Z')}` : ''}</span></td><td data-l="Heures par passage">${String(o.hours).replace('.', ',')} h</td><td data-l="Prix de l'heure${ht}">${money2(o.rate)}</td><td data-l="Par passage${ht}"><b>${money2(o.perVisitHT)}</b></td></tr></tbody></table>
-      <div class="devis-sum">
-        ${d.franchiseTVA ? `<p><span>Total par passage</span><b>${money2(o.perVisitHT)}</b></p><p class="small muted">TVA non applicable, art. 293 B du CGI.</p>`
-          : `<p><span>Total HT par passage</span><b>${money2(o.perVisitHT)}</b></p><p><span>TVA ${Math.round(o.vatRate * 100)} %</span><span>${money2(o.perVisitVAT)}</span></p><p class="big"><span>Total TTC par passage</span><b>${money2(o.perVisitTTC)}</b></p>`}
-        ${o.perMonthHT ? `<p class="small"><span>Estimation par mois (${esc(o.frequencyLabel.toLowerCase())})</span><span>${money2(d.franchiseTVA ? o.perMonthHT : o.perMonthTTC)}${d.franchiseTVA ? '' : ' TTC'}</span></p>` : ''}
-      </div>
-      ${o.message ? `<p class="devis-msg">${esc(o.message)}</p>` : ''}
-      <p class="small muted">Produits et matériel selon ce qui est indiqué ci-dessus. Facture après chaque passage ou en fin de mois. Paiement à réception de facture. Annulation d'un passage sans frais jusqu'à 24 h avant.</p>
-      <div class="devis-answer no-print" id="devisAnswer">
-        ${d.status === 'accepte' ? `<p class="msg ok">✅ Devis accepté par ${esc(d.answerName)} le ${fmt(d.answeredAt)}. Merci ! Nous vous appelons pour fixer les dates.</p>`
-          : d.status === 'refuse' ? '<p class="msg">Vous avez refusé ce devis. Nous revenons vers vous avec une nouvelle proposition.</p>'
-          : d.status !== 'envoye' ? '<p class="msg">Ce devis n\'est plus ouvert. Écrivez-nous à contact@proprigo.fr.</p>'
-          : `<form id="devisYes" class="stack"><h2>Bon pour accord</h2><label>Votre prénom et nom<input name="name" required minlength="3" maxlength="80" autocomplete="name"></label>
-              <label class="check"><input type="checkbox" required> J'accepte ce devis et les conditions ci-dessus.</label>
-              <button class="btn primary">✅ J'accepte le devis</button><p class="msg" id="devisMsg"></p></form>
-             <details class="faq"><summary>Une question ou un changement ?</summary><form id="devisNo" class="stack"><label>Votre message<textarea name="message" rows="3" maxlength="1000" required placeholder="Ex. : nous préférons un passage le samedi."></textarea></label><button class="btn ghost">Envoyer ma réponse</button></form></details>`}
-        <button class="btn ghost" type="button" id="devisPrint">🖨️ Imprimer ou enregistrer en PDF</button>
-      </div>
-    </article>`;
-    document.getElementById('devisPrint').onclick = () => window.print();
-    const t = qs.get('t');
-    const send = async (payload, msgEl) => {
-      try { const r = await api('POST', '/api/devis/answer', { t, ...payload }); toast(r.message); route(); }
-      catch (err) { msgEl.className = 'msg err'; msgEl.textContent = err.message; }
-    };
-    const yes = document.getElementById('devisYes');
-    if (yes) yes.onsubmit = (e) => { e.preventDefault(); send({ accept: true, name: yes.name.value }, document.getElementById('devisMsg')); };
-    const no = document.getElementById('devisNo');
-    if (no) no.onsubmit = (e) => { e.preventDefault(); send({ accept: false, message: no.message.value }, document.getElementById('devisMsg') || no); };
-  };
   views['mentions-legales'] = () => {
     const L = CONFIG.legal || {};
     const v = (k, ph) => (L[k] ? esc(L[k]) : `[${ph}]`);
