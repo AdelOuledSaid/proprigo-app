@@ -43,7 +43,22 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Une erreur est survenue.');
+    if (method === 'GET' && seen) seen.set(path, JSON.stringify(data)); // ce que la page affiche, pour la mise à jour silencieuse
+    else if (method !== 'GET') seen = null; // une action : la page sera redessinée
     return data;
+  }
+  // mise à jour automatique : on ne redessine la page que si une donnée a vraiment changé
+  let seen = null;
+  async function pageChanged() {
+    if (!seen || !seen.size) return true;
+    try {
+      for (const [path, before] of seen) {
+        const res = await fetch(path, { credentials: 'same-origin' });
+        if (!res.ok) return true;
+        if (JSON.stringify(await res.json()) !== before) return true;
+      }
+      return false;
+    } catch { return true; }
   }
   let toastTimer;
   function toast(text) {
@@ -2813,6 +2828,7 @@
     // et la position, sinon la page se vide un instant, remonte en haut et « saute »
     const same = name === lastPage;
     const y = window.scrollY;
+    seen = new Map();
     if (same) $app.style.minHeight = `${$app.offsetHeight}px`;
     try { await view(new URLSearchParams(qs || '')); } catch (e) { $app.innerHTML = `<p class="card err">${esc(e.message)}</p>`; }
     verifyBanner(name);
@@ -2835,7 +2851,7 @@
     if (document.querySelector('dialog[open]') || $app.querySelector('details[open]')) return;
     if (page === 'admin' && ['tarifs', 'paiements', 'chiffres'].includes(sessionStorage.getItem('adminTab'))) return;
     refreshInProgress = true;
-    try { await route(); } finally { refreshInProgress = false; }
+    try { if (await pageChanged()) await route(); } finally { refreshInProgress = false; }
   }
   window.addEventListener('focus', refreshDashboard);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshDashboard(); });

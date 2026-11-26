@@ -89,3 +89,7 @@
 - Après un bouton ou la mise à jour automatique (toutes les 15 s), la page garde sa position : elle ne remonte plus en haut et ne « saute » plus.
 - Les étapes animées (Réservé → Terminé) ne se rejouent plus à chaque mise à jour.
 - Correction : l'animation des étoiles de fond modifiait celle des petites étincelles des illustrations.
+
+## v1.9.12
+
+- Mise à jour automatique silencieuse : toutes les 15 s, l'appli vérifie en arrière-plan si quelque chose a changé ; si rien n'a changé, l'écran ne bouge pas du tout (avant, la page était redessinée à chaque fois).
