@@ -45,12 +45,12 @@ test('parrainage : code, 10 € pour le filleul au premier ménage, 10 € pour 
     assert.equal((await paul('POST', '/api/signup', { name: 'Paul Test', email: 'paul@test.fr', password: 'motdepasse-123', ref: ref.code })).status, 201);
     const q = (await paul('POST', '/api/quote', { service: 'menage', hours: 3, cp: '75011', date: '2026-11-25' })).data;
     assert.equal(q.discount, 10);
-    assert.equal(q.total, 101);
+    assert.equal(q.total, 98);
     const r = await paul('POST', '/api/bookings', { service: 'menage', hours: 3, cp: '75011', address: '3 rue Test', date: '2026-11-25', time: '10:00', checklist: [] });
     assert.ok([200, 201].includes(r.status), JSON.stringify(r.data));
     const pid = uid(db, 'paul@test.fr');
     const b = db.prepare('SELECT * FROM bookings WHERE client_id = ? ORDER BY id LIMIT 1').get(pid);
-    assert.equal(b.total, 101);
+    assert.equal(b.total, 98);
     assert.equal(b.discount, 10);
     assert.equal((await paul('POST', '/api/quote', { service: 'menage', hours: 3, cp: '75011', date: '2026-11-26' })).data.discount, undefined, 'crédit déjà utilisé');
     // ménage terminé → le parrain reçoit 10 €, une seule fois
@@ -159,10 +159,10 @@ test('nettoyage de bureaux : prix HT, TVA 20 %, jamais à perte, pas dans l\'att
   const at = new Date('2026-11-23T08:00:00Z');
   const idf = pricing.quote({ service: 'bureau', hours: 3, cp: '75008', date: '2026-12-01' }, at);
   assert.ok(idf.ok);
-  assert.equal(idf.total, 126, '3 h × 42 € TTC');
+  assert.equal(idf.total, 130, '3 h × 43,20 € TTC (36 € HT)');
   assert.equal(idf.pro, true);
   const fr = pricing.quote({ service: 'bureau', hours: 3, cp: '69001', date: '2026-12-01' }, at);
-  assert.equal(fr.total, 117);
+  assert.equal(fr.total, 122);
   for (const q of [idf, fr]) {
     const m = pricing.estimateMargin({ service: 'bureau', total: q.total, hours: 3, kit: 0 }, null);
     assert.ok(m.marge / m.ht >= 0.25, `marge ${Math.round((m.marge / m.ht) * 100)} %`);

@@ -46,7 +46,7 @@ test('pages Google : une par prestation et par lieu, plan du site, robots', asyn
     assert.match(html, /<link rel="canonical" href="https:\/\/proprigo.example\/menage-a-domicile\/paris-11">/);
     assert.match(html, /#\/\?cp=75011/);
     assert.match(p.headers.get('content-security-policy'), /script-src 'none'/);
-    assert.match(await (await fetch(base + '/nettoyage-bureaux/boulogne-billancourt')).text(), /35 € HT de l/);
+    assert.match(await (await fetch(base + '/nettoyage-bureaux/boulogne-billancourt')).text(), /36 € HT de l/);
     assert.equal((await fetch(base + '/menage-a-domicile/lyon')).status, 404);
     const sm = await (await fetch(base + '/sitemap.xml')).text();
     assert.equal((sm.match(/<loc>/g) || []).length, 1 + 3 * 35);
@@ -61,7 +61,7 @@ test('avis Google : le lien n\'est donné que s\'il est configuré et sûr', asy
   }
 });
 
-test('versements aux indépendantes : par semaine, bonus qualité, jamais deux fois', async () => {
+test('versements aux indépendantes : par semaine, bonus de niveau, jamais deux fois', async () => {
   const { server, db, logged } = await startServer();
   try {
     const claire = uid(db, 'claire@proprigo.test');
@@ -79,9 +79,13 @@ test('versements aux indépendantes : par semaine, bonus qualité, jamais deux f
     assert.equal((await a('POST', '/api/admin/payouts', { worker_id: ines, week_start: '2026-11-09' })).status, 409, 'jamais deux fois');
     p = (await a('GET', '/api/admin/payouts')).data;
     assert.equal(p.owed.length, 1);
-    // bonus : 5 avis, moyenne ≥ 4,8
+    // bonus de niveau : 5 avis à 5/5, mais pas encore assez de ménages pour le Platine → pas de bonus
     for (const id of ids) db.prepare('UPDATE bookings SET rating = 5 WHERE id = ?').run(id);
     for (let i = 0; i < 2; i++) db.prepare('UPDATE bookings SET rating = 5 WHERE id = ?').run(addBooking(db, { client: claire, worker: ines, date: '2026-11-17', paid: true, status: 'terminee' }));
+    p = (await a('GET', '/api/admin/payouts')).data;
+    assert.equal(p.owed[0].bonus_rate, 0, 'Bleu : pas de bonus');
+    // le responsable abaisse le seuil du Platine à 5 ménages : +1 € de l'heure
+    assert.equal((await a('POST', '/api/admin/tiers', { or: { missions: 3, rating: 4.6, bonus: 0 }, platine: { missions: 5, rating: 4.8, bonus: 1 } })).status, 200);
     p = (await a('GET', '/api/admin/payouts')).data;
     assert.equal(p.owed[0].bonus_rate, 1);
     assert.equal(p.owed[0].amount, 3 * 3 * 25, '3 ménages de 3 h à 24 + 1 €');
