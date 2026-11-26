@@ -39,5 +39,15 @@ test('devis : envoi, page publique, acceptation, admin prévenu', async () => {
     assert.equal(after.status, 'accepte');
     assert.equal(after.answer_name, 'Paul Martin');
     assert.equal((await j(`/api/admin/quote-requests/${q.id}/offer`, 'POST', { label: 'X', hours: 2, rate: 40, frequency: 'once' }, admin)).status, 409, 'devis accepté : plus modifiable');
+    // planification : compte client créé, passages à payer, e-mail envoyé
+    assert.equal((await j(`/api/admin/quote-requests/${q.id}/plan`, 'POST', { address: '1', time: '09:00', start: '2030-01-07', count: 4 }, admin)).status, 400);
+    const plan = await j(`/api/admin/quote-requests/${q.id}/plan`, 'POST', { address: '12 rue de Paradis', time: '09:00', start: '2030-01-07', count: 4 }, admin);
+    assert.equal(plan.status, 200, JSON.stringify(plan.data));
+    assert.equal(plan.data.ids.length, 4);
+    const rows = app.db.prepare(`SELECT b.date, b.total, b.service, u.email FROM bookings b JOIN users u ON u.id = b.client_id WHERE b.id IN (${plan.data.ids.join(',')}) ORDER BY b.date`).all();
+    assert.deepEqual(rows.map((r) => r.date), ['2030-01-07', '2030-01-10', '2030-01-14', '2030-01-17'], '2 fois par semaine');
+    assert.ok(rows.every((r) => r.total === 72 && r.service === 'bureau' && r.email === 'paul@exemple.fr'));
+    assert.equal(app.db.prepare("SELECT COUNT(*) AS n FROM resets r JOIN users u ON u.id = r.user_id WHERE u.email = 'paul@exemple.fr'").get().n, 1, 'lien pour créer le mot de passe');
+    assert.equal((await j(`/api/admin/quote-requests/${q.id}/plan`, 'POST', { address: '12 rue de Paradis', time: '09:00', start: '2030-01-07', count: 4 }, admin)).status, 409, 'pas deux fois');
   } finally { app.server.close(); }
 });

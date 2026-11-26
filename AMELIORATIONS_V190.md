@@ -93,3 +93,24 @@
 ## v1.9.12
 
 - Mise à jour automatique silencieuse : toutes les 15 s, l'appli vérifie en arrière-plan si quelque chose a changé ; si rien n'a changé, l'écran ne bouge pas du tout (avant, la page était redessinée à chaque fois).
+
+## v1.10.0 — devis professionnels
+
+- Admin, « Devis professionnels » (toujours visible dans « À traiter ») : pour chaque demande, « 📝 Faire le devis » (prestation, heures par passage, prix de l'heure, fréquence, date de début, message), total calculé en direct, « 📨 Envoyer le devis par e-mail ».
+- Numéro de devis D2026-0001…, valable 30 jours, avec vos mentions (raison sociale, SIRET, TVA ou franchise).
+- Le client reçoit un e-mail avec un lien : il voit le devis, peut l'imprimer ou l'enregistrer en PDF, et l'accepte en ligne (« Bon pour accord » avec son nom) ou répond par un message.
+- Vous êtes prévenu par e-mail ; la demande passe à « ✅ Accepté par … le … » ou « Refusé », avec la réponse du client. Devis modifiable et renvoyable tant qu'il n'est pas accepté. « Classer sans suite » remplace « Traitée ».
+
+## v1.10.1
+
+- Ménage terminé côté client : « ✅ Ce qui a été fait » au lieu de « Ce qui était prévu ».
+- Note en pastilles rondes, 5 étoiles proposées d'office ; le client change s'il veut et valide avec « ⭐ Envoyer ma note » (rien n'est envoyé sans son clic).
+- Pourboire juste après la note, en cercles 2 €, 5 €, 10 €, Autre ; « Pas satisfait ? On revient » ensuite.
+- Accueil : le suivi du jour du ménage ne redessine plus l'écran si rien n'a changé.
+
+## v1.11.0 — après le devis accepté : planifier et faire payer
+
+- Devis accepté : bouton « 📅 Planifier les passages » (adresse, premier passage, heure, nombre de passages ; les dates suivantes se calculent selon la fréquence, 2 fois par semaine = lundi/jeudi…).
+- Un espace client est créé pour l'entreprise s'il n'existe pas (lien « Créer mon mot de passe », valable 7 jours).
+- Le client reçoit les dates par e-mail et paie par carte dans son espace : passage par passage, ou « 💳 Tout payer en une fois ». Une facture par passage, l'intervenante est choisie après le paiement.
+- Le devis passe à « 📅 N passages planifiés ».

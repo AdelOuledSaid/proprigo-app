@@ -558,17 +558,18 @@
     $app.querySelectorAll('[data-cancel]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Ménage annulé.'); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { sessionStorage.setItem('openEdit', b.dataset.edit); go('#/mes-reservations'); });
     $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
+    $app.querySelectorAll('.stars').forEach((box) => { const five = box.querySelector('[data-stars="5"]'); if (five && !box.querySelector('.on')) pickStars(five, true); }); // 5 étoiles proposées, rien n'est envoyé sans le bouton
     bindThreads([]);
     if (next && next.worker_id) workerCard(next.worker_id).then((h) => { const el = document.getElementById('wcardHost'); if (el) el.innerHTML = h; });
     // le jour du ménage, l'écran se met à jour tout seul toutes les 45 secondes
     clearTimeout(window.__liveTimer);
     if (next && next.date === todayParis() && ['attribuee', 'en_cours'].includes(next.status)) {
-      window.__liveTimer = setTimeout(() => { if ((location.hash || '#/') === '#/' && !document.querySelector('.thread textarea:focus')) route(); }, 45000);
+      window.__liveTimer = setTimeout(async () => { if ((location.hash || '#/') === '#/' && !document.querySelector('.thread textarea:focus') && await pageChanged()) route(); }, 45000);
     }
   }
 
   // Avis : on choisit les étoiles, puis on peut ajouter un mot avant d'envoyer
-  function pickStars(btn) {
+  function pickStars(btn, quiet = false) {
     const box = btn.closest('.stars');
     const id = btn.dataset.rate;
     const n = Number(btn.dataset.stars);
@@ -577,7 +578,7 @@
     if (!f) {
       f = document.createElement('form');
       f.className = 'review-form stack';
-      f.innerHTML = '<label><span class="rv-label"></span><textarea name="review" rows="2" maxlength="500"></textarea></label><label class="check small"><input type="checkbox" name="publish"> J\'accepte que mon avis soit publié sur proprigo.fr, avec mon prénom et l\'initiale de mon nom.</label><button class="btn blue">Envoyer mon avis</button>';
+      f.innerHTML = '<label><span class="rv-label"></span><textarea name="review" rows="2" maxlength="500"></textarea></label><label class="check small"><input type="checkbox" name="publish"> J\'accepte que mon avis soit publié sur proprigo.fr, avec mon prénom et l\'initiale de mon nom.</label><button class="btn blue">⭐ Envoyer ma note</button>';
       box.after(f);
     }
     f.querySelector('.rv-label').textContent = n >= 4 ? 'Un mot sur ce que vous avez aimé (facultatif)' : "Qu'est-ce qui n'allait pas ? L'équipe vous recontacte.";
@@ -593,7 +594,7 @@
         toast(r.message || 'Merci pour votre avis.'); route();
       } catch (err) { toast(err.message); }
     };
-    f.review.focus({ preventScroll: true });
+    if (!quiet) f.review.focus({ preventScroll: true });
   }
 
   // Jauge « ça brille » : avance avec la checklist du ménage
@@ -929,13 +930,10 @@
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
           <p class="small muted" style="margin:6px 0 0">${esc(paymentLabel(b))}</p>
           ${b.status === 'terminee' && b.worker_id && mw.favorite !== b.worker_id ? `<p style="margin:8px 0 0"><button class="btn ghost" data-fav="${b.worker_id}">★ Garder ${esc(b.worker_name.split(' ')[0])} pour mes prochains ménages</button></p>` : ''}
-          ${b.checklist.length && (b.status === 'en_cours' || (b.status === 'terminee' && b.checklist.some((t) => t.done))) ? shine(b) : ''}${b.checklist.length ? `<details><summary>${b.status === 'terminee' && !b.checklist.some((t) => t.done) ? `Ce qui était prévu (${b.checklist.length} tâches)` : `Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)`}</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>` : ''}
+          ${b.checklist.length && (b.status === 'en_cours' || (b.status === 'terminee' && b.checklist.some((t) => t.done))) ? shine(b) : ''}${b.checklist.length ? (b.status === 'terminee'
+            ? `<details><summary>✅ Ce qui a été fait (${b.checklist.length} tâche${b.checklist.length > 1 ? 's' : ''})</summary><ul class="tasks">${b.checklist.map((t) => `<li class="done">✓ ${esc(t.task)}</li>`).join('')}</ul></details>`
+            : `<details><summary>Ce qui doit être fait (${b.checklist.filter((t) => t.done).length}/${b.checklist.length} fait)</summary><ul class="tasks">${b.checklist.map((t) => `<li class="${t.done ? 'done' : ''}">${t.done ? '✓' : '○'} ${esc(t.task)}</li>`).join('')}</ul></details>`) : ''}
           ${b.photos.length ? `<div class="photos">${b.photos.map((p) => `<figure><img src="/api/photos/${p.id}" alt="Photo ${p.kind === 'avant' ? 'avant' : 'après'} le ménage" loading="lazy"><figcaption>${p.kind === 'avant' ? 'Avant' : 'Après'}</figcaption></figure>`).join('')}</div>` : ''}
-          ${b.status === 'terminee' && b.worker_id ? (b.tip ? `<p class="tip-done">💝 Merci ! Pourboire de ${eur(b.tip)} envoyé à ${esc((b.worker_name || '').split(' ')[0])}.</p>`
-            : b.date >= addDaysFront(todayParis(), -30) ? `<details class="tip-box"><summary>💝 Laisser un pourboire à ${esc((b.worker_name || '').split(' ')[0])}</summary>
-              <p class="small muted" style="margin:6px 0 8px">Il lui est reversé en entier.</p>
-              <div class="chips">${[2, 5, 10].map((n) => `<button type="button" data-tip="${b.id}" data-amount="${n}">${n} €</button>`).join('')}
-              <button type="button" data-tip="${b.id}" data-amount="other">Autre</button></div></details>` : '') : ''}
           <div class="bk-main">
             ${b.status !== 'annulee' ? `<button class="btn ghost" data-thread="${b.id}">💬 Messages${b.messages ? ` (${b.messages})` : ''}</button>` : ''}
             ${b.paid || b.status === 'terminee' ? `<a class="btn ghost" href="/api/bookings/${b.id}/receipt" target="_blank" rel="noopener">🧾 Facture</a>` : ''}
@@ -952,9 +950,13 @@
           <div id="edit-${b.id}"></div><div id="report-${b.id}"></div><div id="thread-${b.id}"></div>
           ${b.guarantee_status === 'demandee' ? '<div class="notice"><b>Retour gratuit demandé.</b> L\'équipe vous contacte pour fixer le créneau.</div>' : ''}
           ${b.guarantee_status === 'planifiee' ? `<div class="notice"><b>Retour gratuit planifié</b> (réservation n° ${b.guarantee_visit_id}, ci-dessus).</div>` : ''}
+          ${b.status === 'terminee' && !b.rating ? `<div class="rate-box"><p><b>Comment s'est passé le ménage ?</b><span class="small muted">Touchez une étoile pour changer la note.</span></p><div class="stars round">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div></div>` : ''}
+          ${b.rating ? `<p class="rated">Votre note <span>${'★'.repeat(b.rating)}<i>${'★'.repeat(5 - b.rating)}</i></span></p>` : ''}
+          ${b.status === 'terminee' && b.worker_id ? (b.tip ? `<p class="tip-done">💝 Merci ! Pourboire de ${eur(b.tip)} envoyé à ${esc((b.worker_name || '').split(' ')[0])}.</p>`
+            : b.date >= addDaysFront(todayParis(), -30) ? `<div class="tip-round"><p><b>💝 Un pourboire pour ${esc((b.worker_name || '').split(' ')[0])} ?</b><span class="small muted">Il lui est reversé en entier.</span></p>
+              <div class="tip-circles">${[2, 5, 10].map((n) => `<button type="button" data-tip="${b.id}" data-amount="${n}"><b>${n}</b><small>€</small></button>`).join('')}
+              <button type="button" data-tip="${b.id}" data-amount="other"><small>Autre</small></button></div></div>` : '') : ''}
           ${b.guarantee_open ? `<div class="guarantee"><span><b>Pas satisfait ?</b> Dites-le-nous dans les 48 h : on revient gratuitement.</span><button class="btn ghost" data-guarantee="${b.id}">On revient</button></div><div id="guar-${b.id}"></div>` : ''}
-          ${b.status === 'terminee' && !b.rating ? `<p style="margin:10px 0 0"><b>Comment s'est passé le ménage ?</b></p><div class="stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-rate="${b.id}" data-stars="${n}" aria-label="${n} sur 5">★</button>`).join('')}</div>` : ''}
-          ${b.rating ? `<p class="small muted" style="margin:8px 0 0">Votre note : ${'★'.repeat(b.rating)}</p>` : ''}
           ${active && b.payment_status === 'en_attente_paiement' ? `<button class="btn primary" data-pay-booking="${b.id}">💳 Payer cette intervention</button>` : ''}
         </article>`;
     };
@@ -963,6 +965,7 @@
       <p class="small muted">${FREE_CANCEL}</p>
       ${list.length ? '' : '<p class="card muted">Aucune réservation pour le moment.</p>'}
       ${visibleBookings.some((b) => !isHistory(b)) ? '<h2>Réservations en cours</h2>' : ''}
+      ${(() => { const due = visibleBookings.filter((b) => b.payment_status === 'en_attente_paiement' && b.status !== 'annulee' && hoursLeft(b) >= 1); return due.length > 1 ? `<div class="pay-all"><span><b>${due.length} passages à régler</b>${eur(Math.round(due.reduce((t, b) => t + Number(b.total), 0) * 100) / 100)} au total · une facture par passage</span><button class="btn primary" id="payAll">💳 Tout payer en une fois</button></div>` : ''; })()}
       ${visibleBookings.filter((b) => !isHistory(b)).map((b) => renderBooking(b)).join('')}
       ${visibleBookings.some(isHistory) ? '<h2>Historique</h2>' : ''}
       ${visibleBookings.filter(isHistory).map((b) => renderBooking(b)).join('')}`;
@@ -1003,6 +1006,8 @@
     });
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
+    const pa = document.getElementById('payAll');
+    if (pa) pa.onclick = async () => { pa.disabled = true; try { const r = await api('POST', '/api/bookings/pay-many', {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); pa.disabled = false; } };
     act('[data-pay-booking]', async (btn) => { try { const r = await api('POST', `/api/bookings/${btn.dataset.payBooking}/pay`, {}); window.location.assign(r.checkout_url); } catch (e) { toast(e.message); } });
     act('[data-cancel]', async (btn) => {
       const b = list.find((x) => String(x.id) === btn.dataset.cancel);
@@ -1012,6 +1017,7 @@
       try { const r = await api('POST', `/api/bookings/${btn.dataset.cancel}/cancel`, {}); toast(r.message || 'Réservation annulée.'); route(); } catch (e) { toast(e.message); } });
     act('[data-stop]', async (btn) => { try { const r = await api('POST', `/api/series/${btn.dataset.stop}/stop`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-rate]').forEach((btn) => btn.onclick = () => pickStars(btn));
+    $app.querySelectorAll('.stars').forEach((box) => { const five = box.querySelector('[data-stars="5"]'); if (five && !box.querySelector('.on')) pickStars(five, true); }); // 5 étoiles proposées, rien n'est envoyé sans le bouton
     act('[data-edit]', (btn) => {
       const b = list.find((x) => String(x.id) === btn.dataset.edit);
       const box = document.getElementById(`edit-${b.id}`);
@@ -1548,7 +1554,7 @@
       ...r.bookings.filter((b) => ['en_attente', 'proposee'].includes(b.status) && b.paid && b.date <= in3).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
         .map((b) => `<li class="${b.status === 'en_attente' ? 'urgent' : ''}"><span><b>${b.status === 'en_attente' ? (b.paid ? 'Payée — intervenante à attribuer' : 'Paiement en attente') : 'En attente d\'acceptation'}</b> · réservation n° ${b.id}, ${dateFr(b.date)} ${esc(b.time)}, ${esc(b.cp)}</span><button class="btn ghost" data-goto-bk="${b.id}">Choisir l'intervenante</button><div id="todo-pick-${b.id}" style="flex-basis:100%"></div></li>`),
       ...(r.icalFlagged || []).map((x) => `<li class="urgent"><span><b>Séjour disparu du calendrier</b> · ménage n° ${x.id}${x.home_name ? ` (${esc(x.home_name)})` : ''}, ${dateFr(x.date)} ${esc(x.time)}. Vérifiez avec le client.</span><span class="row" style="gap:6px;flex-wrap:wrap"><button class="btn ghost" data-ikeep="${x.id}">Garder</button><button class="btn ghost" data-icancel="${x.id}">Annuler et rembourser</button></span></li>`),
-      ...(r.quoteRequests ? [`<li class="urgent"><span><b>Demandes de devis</b> · ${r.quoteRequests} nouvelle${r.quoteRequests > 1 ? 's' : ''}</span><button class="btn ghost" id="openDevis">Voir</button></li>`] : []),
+      `<li class="${r.quoteRequests ? 'urgent' : ''}"><span><b>Devis professionnels</b> · ${r.quoteRequests ? `${r.quoteRequests} à traiter` : 'demandes, devis envoyés et acceptés'}</span><button class="btn ghost" id="openDevis">Voir</button></li>`,
       ...r.incidents.map((x) => `<li class="urgent"><span><b>${x.source === 'garantie' ? 'Garantie : retour gratuit à planifier' : x.source === 'litige' ? 'Contestation bancaire' : x.source === 'intervenante' ? 'Problème sur place' : x.source === 'note' ? 'Note basse' : 'Réclamation'}</b> · réservation n° ${x.booking_id} : ${esc(x.text.slice(0, 80))}${x.text.length > 80 ? '…' : ''}</span><button class="btn ghost" data-goto="incidents">Voir</button></li>`),
       ...r.workers.filter((w) => w.absent).map((w) => `<li><span><b>Absente</b> · ${esc(w.name)}</span><button class="btn ghost" data-absent="${w.user_id}">Marquer présente</button></li>`),
       ...(k.aRembourser.n ? [`<li><span><b>Remboursements</b> · ${k.aRembourser.n} réservation(s), ${eur(k.aRembourser.montant)}</span><button class="btn ghost" data-goto="table">Voir</button></li>`] : []),
@@ -1776,16 +1782,7 @@
       try { const r2 = await api('POST', `/api/admin/workers/${id}/avatar`, { ok: Boolean(b.dataset.avok) }); toast(r2.message); route(); } catch (e) { toast(e.message); }
     });
     const od = document.getElementById('openDevis');
-    if (od) od.onclick = async () => {
-      let dlg = document.getElementById('fileDlg');
-      if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'fileDlg'; dlg.className = 'file-dlg'; document.body.appendChild(dlg); }
-      const list = await api('GET', '/api/admin/quote-requests');
-      dlg.innerHTML = `<div class="dlg-head"><h2>Demandes de devis</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
-        <ul class="plain">${list.map((q) => `<li><span><b>${esc(q.company)}</b> · ${esc(q.kindLabel)} · ${esc(q.cp)}${q.surface ? ` · ${q.surface} m²` : ''}${q.frequency ? ` · ${esc(q.frequency)}` : ''}<br><span class="small">${esc(q.name)} · <a href="mailto:${esc(q.email)}">${esc(q.email)}</a>${q.phone ? ` · <a href="tel:${esc(q.phone)}">${esc(q.phone)}</a>` : ''}</span>${q.message ? `<br><span class="small muted">${esc(q.message)}</span>` : ''}</span>${q.status === 'nouveau' ? `<button class="btn ghost small-btn" data-qdone="${q.id}">Traitée</button>` : '<span class="pill ok">Traitée</span>'}</li>`).join('') || '<li class="muted">Aucune demande.</li>'}</ul>`;
-      if (!dlg.open) dlg.showModal();
-      dlg.querySelector('[data-close]').onclick = () => { dlg.close(); route(); };
-      dlg.querySelectorAll('[data-qdone]').forEach((b) => b.onclick = async () => { await api('POST', `/api/admin/quote-requests/${b.dataset.qdone}/done`, {}); b.replaceWith(Object.assign(document.createElement('span'), { className: 'pill ok', textContent: 'Traitée' })); });
-    };
+    if (od) od.onclick = () => openQuotes();
     const pb = document.getElementById('payoutsBox');
     const paintPayouts = async () => {
       const d = await api('GET', '/api/admin/payouts').catch(() => null);
@@ -2780,6 +2777,139 @@
     <h2>10. Photos et données personnelles</h2><p>Voir la <a href="#/confidentialite">politique de confidentialité</a>.</p>
     <h2>11. Médiation et droit applicable</h2><p>En cas de litige, le consommateur peut recourir gratuitement au médiateur : [NOM, ADRESSE, SITE]. Droit français.</p>`);
 
+  // ---- devis professionnels : préparation (admin) et page envoyée au client ----
+  const QFREQ = [['once', 'Une seule fois'], ['weekly', 'Chaque semaine'], ['twice', '2 fois par semaine'], ['biweekly', 'Toutes les 2 semaines'], ['monthly', 'Chaque mois']];
+  const QFREQ_N = { once: 0, weekly: 52 / 12, twice: 104 / 12, biweekly: 26 / 12, monthly: 1 };
+  const QLABEL = { bureaux: 'Nettoyage de bureaux', agence: 'Grand nettoyage de fin de bail', syndic: 'Nettoyage des parties communes', conciergerie: 'Ménage de logements Airbnb', autre: 'Nettoyage' };
+  const money2 = (n) => `${Number(n).toFixed(2).replace('.', ',')} €`;
+  const guessFreq = (t) => { const f = String(t || '').toLowerCase(); return /2|deux/.test(f) && /semaine/.test(f) ? 'twice' : /quinz|2 semaines|deux semaines/.test(f) ? 'biweekly' : /semaine|hebdo/.test(f) ? 'weekly' : /mois|mensu/.test(f) ? 'monthly' : 'once'; };
+  const QSTATUS = (q) => ({
+    nouveau: '<span class="pill warn">Nouvelle demande</span>',
+    envoye: `<span class="pill">📨 Devis ${esc(q.offer_number)} envoyé le ${new Date(q.offer_sent_at).toLocaleDateString('fr-FR')}</span>`,
+    accepte: `<span class="pill ok">✅ Accepté par ${esc(q.answer_name || '')} le ${q.answered_at ? new Date(q.answered_at).toLocaleDateString('fr-FR') : ''}</span>`,
+    refuse: '<span class="pill gray">✖ Refusé par le client</span>',
+    traite: '<span class="pill gray">Classée</span>',
+    planifie: `<span class="pill ok">📅 ${(JSON.parse(q.planned_ids || '[]')).length} passage(s) planifié(s)</span>`,
+  }[q.status] || '');
+  async function openQuotes() {
+    let dlg = document.getElementById('fileDlg');
+    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'fileDlg'; dlg.className = 'file-dlg'; document.body.appendChild(dlg); }
+    const list = await api('GET', '/api/admin/quote-requests');
+    const P = PRICES();
+    const defRate = (q) => (q.offer ? q.offer.rate : q.kind === 'agence' ? (CONFIG.franchiseTVA ? P.grand : Math.round(P.grand / 1.2 * 100) / 100) : (CONFIG.franchiseTVA ? P.bureau : P.bureauHT));
+    dlg.innerHTML = `<div class="dlg-head"><h2>Devis professionnels</h2><button class="btn ghost" data-close aria-label="Fermer">✕</button></div>
+      ${list.length ? '' : '<p class="muted">Aucune demande pour le moment. Elles arrivent depuis les pages Entreprises, Syndics et Agences.</p>'}
+      <ul class="plain quotes">${list.map((q) => `<li data-q="${q.id}">
+        <div class="q-head"><b>${esc(q.company)}</b>${QSTATUS(q)}</div>
+        <p class="small" style="margin:4px 0 0">${esc(q.kindLabel)} · ${esc(q.cp)}${q.surface ? ` · ${q.surface} m²` : ''}${q.frequency ? ` · ${esc(q.frequency)}` : ''}<br>${esc(q.name)} · <a href="mailto:${esc(q.email)}">${esc(q.email)}</a>${q.phone ? ` · <a href="tel:${esc(q.phone)}">📞 ${esc(q.phone)}</a>` : ''}</p>
+        ${q.message ? `<p class="small muted" style="margin:4px 0 0">« ${esc(q.message)} »</p>` : ''}
+        ${q.offer ? `<p class="small" style="margin:6px 0 0">Proposé : ${esc(q.offer.label)} · ${String(q.offer.hours).replace('.', ',')} h × ${money2(q.offer.rate)} HT = <b>${money2(q.offer.perVisitHT)} HT</b> par passage · ${esc(q.offer.frequencyLabel)}${q.offer.perMonthHT ? ` · ≈ ${money2(q.offer.perMonthHT)} HT / mois` : ''}</p>` : ''}
+        ${q.answer_message ? `<p class="small" style="margin:4px 0 0">Réponse du client : « ${esc(q.answer_message)} »</p>` : ''}
+        ${q.status === 'accepte' ? '<p class="small" style="margin:6px 0 0"><b>Prochaine étape :</b> appelez le client pour fixer l\'adresse, l\'heure et le premier passage, puis planifiez. Il reçoit les dates par e-mail et paie dans son espace.</p>' : ''}
+        ${q.status === 'planifie' ? '<p class="small" style="margin:6px 0 0">Passages visibles dans « Réservations ». Le client les paie par carte dans son espace ; l\'intervenante est choisie après le paiement.</p>' : ''}
+        <div class="q-actions">
+          ${!['accepte', 'planifie'].includes(q.status) ? `<button class="btn ${q.offer ? 'ghost' : 'primary'}" data-qmake="${q.id}">${q.offer ? '✏️ Modifier et renvoyer' : '📝 Faire le devis'}</button>` : ''}
+          ${q.status === 'accepte' ? `<button class="btn primary" data-qplan="${q.id}">📅 Planifier les passages</button>` : ''}
+          ${q.link ? `<a class="btn ghost" href="${esc(q.link)}" target="_blank" rel="noopener">👁️ Voir le devis</a>` : ''}
+          ${['nouveau', 'envoye', 'refuse'].includes(q.status) ? `<button class="btn ghost" data-qdone="${q.id}">Classer sans suite</button>` : ''}
+        </div>
+        ${q.status === 'accepte' && q.offer ? `<form class="q-form stack" data-qplanform="${q.id}" hidden>
+          <label>Adresse des passages<input name="address" required maxlength="200" placeholder="Ex. 12 rue de Paradis, 2e étage, code 1234B"></label>
+          <div class="grid2">
+            <label>Premier passage<input name="start" type="date" required value="${q.offer.start || addDaysFront(todayParis(), 1)}" min="${todayParis()}"></label>
+            <label>Heure<input name="time" type="time" required value="09:00"></label>
+            ${q.offer.frequency === 'once' ? '' : `<label>Nombre de passages<input name="count" type="number" min="1" max="26" required value="${{ weekly: 4, twice: 8, biweekly: 2, monthly: 3 }[q.offer.frequency] || 4}"></label>`}
+          </div>
+          <p class="small muted" style="margin:0">${esc(q.offer.frequencyLabel)} · ${money2(q.offer.perVisitTTC)} par passage. Les passages suivants se calculent à partir du premier.</p>
+          <button class="btn primary">📅 Créer les passages et prévenir le client</button><p class="msg" data-qmsg></p>
+        </form>` : ''}
+        <form class="q-form stack" data-qform="${q.id}" hidden>
+          <label>Prestation<input name="label" required maxlength="120" value="${esc(q.offer ? q.offer.label : QLABEL[q.kind] || 'Nettoyage')}"></label>
+          <div class="grid2">
+            <label>Heures par passage<input name="hours" type="number" min="0.5" max="100" step="0.5" required value="${q.offer ? q.offer.hours : 2}"></label>
+            <label>Prix de l'heure ${CONFIG.franchiseTVA ? '' : 'HT '}(€)<input name="rate" type="number" min="15" max="200" step="0.1" required value="${defRate(q)}"></label>
+            <label>Fréquence<select name="frequency">${QFREQ.map(([k, l]) => `<option value="${k}"${(q.offer ? q.offer.frequency : guessFreq(q.frequency)) === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+            <label>Début souhaité (facultatif)<input name="start" type="date" value="${q.offer && q.offer.start ? q.offer.start : ''}"></label>
+          </div>
+          <label>Message pour le client (facultatif)<textarea name="message" rows="3" maxlength="1000" placeholder="Ex. : produits et matériel fournis, passage le matin avant l'ouverture.">${q.offer && q.offer.message ? esc(q.offer.message) : ''}</textarea></label>
+          <p class="q-total" data-qtotal></p>
+          <button class="btn primary">📨 Envoyer le devis par e-mail</button>
+          <p class="msg" data-qmsg></p>
+        </form>
+      </li>`).join('')}</ul>`;
+    if (!dlg.open) dlg.showModal();
+    dlg.querySelector('[data-close]').onclick = () => { dlg.close(); route(); };
+    const total = (f) => {
+      const h = Number(f.hours.value) || 0; const r = Number(f.rate.value) || 0; const per = h * r; const n = QFREQ_N[f.frequency.value];
+      const vat = CONFIG.franchiseTVA ? 0 : 0.2;
+      f.querySelector('[data-qtotal]').innerHTML = `<b>${money2(per)} ${CONFIG.franchiseTVA ? '' : 'HT '}par passage</b>${vat ? ` (${money2(per * (1 + vat))} TTC)` : ' · TVA non applicable'}${n ? ` · environ <b>${money2(per * n)}${vat ? ' HT' : ''} par mois</b>` : ''}`;
+    };
+    dlg.querySelectorAll('[data-qmake]').forEach((b) => b.onclick = () => {
+      const f = dlg.querySelector(`[data-qform="${b.dataset.qmake}"]`);
+      f.hidden = !f.hidden; total(f); if (!f.hidden) f.label.focus();
+    });
+    dlg.querySelectorAll('[data-qform]').forEach((f) => {
+      f.oninput = () => total(f);
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        const m = f.querySelector('[data-qmsg]');
+        try { const r = await api('POST', `/api/admin/quote-requests/${f.dataset.qform}/offer`, formData(f)); toast(r.message); openQuotes(); }
+        catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+      };
+    });
+    dlg.querySelectorAll('[data-qdone]').forEach((b) => b.onclick = async () => { await api('POST', `/api/admin/quote-requests/${b.dataset.qdone}/done`, {}); openQuotes(); });
+    dlg.querySelectorAll('[data-qplan]').forEach((b) => b.onclick = () => { const f = dlg.querySelector(`[data-qplanform="${b.dataset.qplan}"]`); f.hidden = !f.hidden; if (!f.hidden) f.address.focus(); });
+    dlg.querySelectorAll('[data-qplanform]').forEach((f) => f.onsubmit = async (e) => {
+      e.preventDefault();
+      const m = f.querySelector('[data-qmsg]');
+      try { const r = await api('POST', `/api/admin/quote-requests/${f.dataset.qplanform}/plan`, formData(f)); toast(r.message); openQuotes(); }
+      catch (err) { m.className = 'msg err'; m.textContent = err.message; }
+    });
+  }
+  views['devis'] = async (qs) => {
+    let d;
+    try { d = await api('GET', `/api/devis?t=${encodeURIComponent(qs.get('t') || '')}`); }
+    catch (e) { page('Devis', `<p class="err">${esc(e.message)}</p><p>Le lien est peut-être incomplet. Écrivez-nous à contact@proprigo.fr.</p>`); return; }
+    const o = d.offer; const L = d.legal || {};
+    const ht = d.franchiseTVA ? '' : ' HT';
+    const fmt = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    $app.innerHTML = `<article class="card devis-doc">
+      <header class="devis-top">
+        <div><img src="/logo.svg" alt="" width="40" height="40"><p><b>${esc(L.raisonSociale || L.nomCommercial || 'Proprigo')}</b>${L.formeJuridique ? `, ${esc(L.formeJuridique)}${L.capital ? ` au capital de ${esc(L.capital)}` : ''}` : ''}<br>${esc(L.adresse || '')}${L.siret ? `<br>SIRET ${esc(L.siret)}` : ''}${L.rcs ? ` · RCS ${esc(L.rcs)}` : ''}${!d.franchiseTVA && L.tvaIntracom ? `<br>TVA ${esc(L.tvaIntracom)}` : ''}<br>${esc(L.emailContact || 'contact@proprigo.fr')}</p></div>
+        <div class="devis-no"><h1>Devis ${esc(d.number)}</h1><p>Du ${fmt(d.sentAt)}<br>Valable jusqu'au ${fmt(o.validUntil + 'T12:00:00Z')}</p></div>
+      </header>
+      <section class="devis-client"><small>Pour</small><p><b>${esc(d.client.company)}</b><br>${esc(d.client.name)}<br>${esc(d.client.email)}<br>Lieu : ${esc(d.client.cp)}</p></section>
+      <table class="devis-table"><thead><tr><th>Prestation</th><th>Heures par passage</th><th>Prix de l'heure${ht}</th><th>Par passage${ht}</th></tr></thead>
+        <tbody><tr><td>${esc(o.label)}<br><span class="small muted">${esc(o.frequencyLabel)}${o.start ? ` · à partir du ${fmt(o.start + 'T12:00:00Z')}` : ''}</span></td><td data-l="Heures par passage">${String(o.hours).replace('.', ',')} h</td><td data-l="Prix de l'heure${ht}">${money2(o.rate)}</td><td data-l="Par passage${ht}"><b>${money2(o.perVisitHT)}</b></td></tr></tbody></table>
+      <div class="devis-sum">
+        ${d.franchiseTVA ? `<p><span>Total par passage</span><b>${money2(o.perVisitHT)}</b></p><p class="small muted">TVA non applicable, art. 293 B du CGI.</p>`
+          : `<p><span>Total HT par passage</span><b>${money2(o.perVisitHT)}</b></p><p><span>TVA ${Math.round(o.vatRate * 100)} %</span><span>${money2(o.perVisitVAT)}</span></p><p class="big"><span>Total TTC par passage</span><b>${money2(o.perVisitTTC)}</b></p>`}
+        ${o.perMonthHT ? `<p class="small"><span>Estimation par mois (${esc(o.frequencyLabel.toLowerCase())})</span><span>${money2(d.franchiseTVA ? o.perMonthHT : o.perMonthTTC)}${d.franchiseTVA ? '' : ' TTC'}</span></p>` : ''}
+      </div>
+      ${o.message ? `<p class="devis-msg">${esc(o.message)}</p>` : ''}
+      <p class="small muted">Produits et matériel selon ce qui est indiqué ci-dessus. Facture après chaque passage ou en fin de mois. Paiement à réception de facture. Annulation d'un passage sans frais jusqu'à 24 h avant.</p>
+      <div class="devis-answer no-print" id="devisAnswer">
+        ${d.status === 'accepte' ? `<p class="msg ok">✅ Devis accepté par ${esc(d.answerName)} le ${fmt(d.answeredAt)}. Merci ! Nous vous appelons pour fixer les dates.</p>`
+          : d.status === 'refuse' ? '<p class="msg">Vous avez refusé ce devis. Nous revenons vers vous avec une nouvelle proposition.</p>'
+          : d.status !== 'envoye' ? '<p class="msg">Ce devis n\'est plus ouvert. Écrivez-nous à contact@proprigo.fr.</p>'
+          : `<form id="devisYes" class="stack"><h2>Bon pour accord</h2><label>Votre prénom et nom<input name="name" required minlength="3" maxlength="80" autocomplete="name"></label>
+              <label class="check"><input type="checkbox" required> J'accepte ce devis et les conditions ci-dessus.</label>
+              <button class="btn primary">✅ J'accepte le devis</button><p class="msg" id="devisMsg"></p></form>
+             <details class="faq"><summary>Une question ou un changement ?</summary><form id="devisNo" class="stack"><label>Votre message<textarea name="message" rows="3" maxlength="1000" required placeholder="Ex. : nous préférons un passage le samedi."></textarea></label><button class="btn ghost">Envoyer ma réponse</button></form></details>`}
+        <button class="btn ghost" type="button" id="devisPrint">🖨️ Imprimer ou enregistrer en PDF</button>
+      </div>
+    </article>`;
+    document.getElementById('devisPrint').onclick = () => window.print();
+    const t = qs.get('t');
+    const send = async (payload, msgEl) => {
+      try { const r = await api('POST', '/api/devis/answer', { t, ...payload }); toast(r.message); route(); }
+      catch (err) { msgEl.className = 'msg err'; msgEl.textContent = err.message; }
+    };
+    const yes = document.getElementById('devisYes');
+    if (yes) yes.onsubmit = (e) => { e.preventDefault(); send({ accept: true, name: yes.name.value }, document.getElementById('devisMsg')); };
+    const no = document.getElementById('devisNo');
+    if (no) no.onsubmit = (e) => { e.preventDefault(); send({ accept: false, message: no.message.value }, document.getElementById('devisMsg') || no); };
+  };
   views['mentions-legales'] = () => {
     const L = CONFIG.legal || {};
     const v = (k, ph) => (L[k] ? esc(L[k]) : `[${ph}]`);
