@@ -27,19 +27,19 @@ const IDF = pricing.GRID.IDF;
 const SERVICES = {
   'menage-a-domicile': {
     service: 'menage', h1: (p) => `Ménage à domicile à ${p.name}`, short: 'Ménage à domicile',
-    price: `${IDF.menage} € de l'heure`,
+    get price() { return `${IDF.menage} € de l'heure`; },
     intro: (p) => `Une intervenante vérifiée vient chez vous à ${p.name}${p.around ? ` (${p.around})` : ''}, une fois ou chaque semaine. Vous choisissez la date et l'heure, le prix total s'affiche avant de payer.`,
-    points: ['Cuisine, salle de bain, sols, poussière, poubelles', 'La même intervenante à chaque passage si vous le souhaitez', 'Options : repassage, vitres, four, réfrigérateur, draps', 'Abonnement chaque semaine ou toutes les deux semaines : −5 %', 'Annulation gratuite jusqu\'à 24 h avant'],
+    get points() { return ['Cuisine, salle de bain, sols, poussière, poubelles', 'La même intervenante à chaque passage si vous le souhaitez', 'Options : repassage, vitres, four, réfrigérateur, draps', `Abonnement chaque semaine ou toutes les deux semaines : −${Math.round(pricing.RATES.subscription * 100)} %`, 'Annulation gratuite jusqu\'à 24 h avant']; },
   },
   'menage-airbnb': {
     service: 'airbnb', h1: (p) => `Ménage Airbnb à ${p.name}`, short: 'Ménage Airbnb',
-    price: `dès ${IDF.airbnb.studio} € le logement, linge compris`,
+    get price() { return `dès ${IDF.airbnb.studio} € le logement, linge compris`; },
     intro: (p) => `Entre deux voyageurs, une intervenante fait le ménage et change le linge de votre logement à ${p.name}. Reliez le calendrier de votre annonce : un ménage est proposé après chaque départ.`,
     points: ['Forfait par taille : studio, 2 pièces, 3 pièces, maison', 'Ménage complet, lits faits, réassort', 'Calendrier Airbnb, Abritel ou Booking synchronisé', 'Une intervenante préférée par logement', 'Photos avant / après sur demande'],
   },
   'nettoyage-bureaux': {
     service: 'bureau', h1: (p) => `Nettoyage de bureaux à ${p.name}`, short: 'Nettoyage de bureaux',
-    price: `${Math.round((IDF.bureau / 1.2) * 100) / 100} € HT de l'heure`.replace('.', ','),
+    get price() { return `${pricing.publicPrices().bureauHT} € HT de l'heure`.replace('.', ','); },
     intro: (p) => `Le ménage de vos locaux à ${p.name}, avant l'ouverture ou après la fermeture, de 6 h à 22 h. Une intervenante régulière et une facture au nom de votre société.`,
     points: ['Postes de travail, sols, sanitaires, coin café, salles de réunion', 'Créneaux tôt le matin ou le soir', 'Facture avec TVA au nom de la société', 'Remise de 5 à 10 % selon le volume du mois', 'Devis gratuit pour les grands locaux'],
   },
@@ -68,7 +68,7 @@ function page(kind, slug, base) {
   <section class="hello"><div class="hello-text"><p class="hello-hi">${esc(p.cp)} · ${esc(p.name)}</p><h1>${esc(S.h1(p))}</h1><p class="hello-sub">${esc(S.intro(p))}</p>
     <a class="btn primary" href="${esc(cta)}">${kind === 'nettoyage-bureaux' ? 'Demander un devis' : 'Voir les créneaux'}</a></div></section>
   <section class="card"><h2>${esc(S.price)}</h2><ul class="seo-list">${S.points.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-    <p class="small muted">${kind === 'nettoyage-bureaux' ? 'Prix hors taxes en Île-de-France, TVA de 20 % en plus.' : 'Prix TTC en Île-de-France.'} Dimanche et jours fériés : +20 %.${kind === 'menage-airbnb' ? '' : ' Matériel apporté : +15 €.'}</p></section>
+    <p class="small muted">${kind === 'nettoyage-bureaux' ? 'Prix hors taxes en Île-de-France, TVA de 20 % en plus.' : 'Prix TTC en Île-de-France.'} Dimanche et jours fériés : +${Math.round(pricing.RATES.sunday * 100)} %.${kind === 'menage-airbnb' ? '' : ` Matériel apporté : +${pricing.RATES.kit} €.`}</p></section>
   <section class="card"><h2>Comment ça marche</h2><ol class="flow"><li><b>Vous réservez en 2 minutes</b><span>La date, l'heure et le prix total, avant de payer.</span></li><li><b>Une intervenante vérifiée vient</b><span>Identité vérifiée, entretien, suivi de la qualité. Vous voyez son prénom avant le ménage.</span></li><li><b>Vous suivez tout</b><span>En route, arrivée, checklist, reçu : tout est dans votre espace.</span></li></ol></section>
   <section class="card"><h2>Aussi à ${esc(p.name)}</h2><p>${others}</p><h2 style="margin-top:16px">${esc(S.short)} ailleurs</h2><p class="seo-places">${near}</p></section>
 </main>

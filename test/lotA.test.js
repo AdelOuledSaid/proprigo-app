@@ -32,13 +32,13 @@ const addBooking = (db, f) => Number(db.prepare(`INSERT INTO bookings (client_id
   VALUES (?, 'menage', 3, '75011', '12 rue Test', ?, ?, 0, 0, ?, 'IDF', ?, ?, ?, ?, '[]')`).run(f.client, f.date, f.time || '10:00', f.total || 111, f.paid ? 1 : 0, f.pay || 'paye', f.status || 'attribuee', f.worker || null).lastInsertRowid);
 
 
-test('options et abonnement : temps en plus, tâches ajoutées, −5 % en récurrent', async () => {
+test('options et abonnement : temps en plus, tâches ajoutées, −10 % en récurrent', async () => {
   const pricing = require('../src/pricing');
   const q = pricing.quote({ service: 'menage', hours: 3, cp: '75011', date: '2026-12-01', extras: ['vitres', 'four', 'inconnue'], repeat: '7' }, NOW);
   assert.ok(q.ok);
   assert.equal(q.hours, 4.5);
   assert.deepEqual(q.extras, ['vitres', 'four']);
-  assert.equal(q.total, Math.round(4.5 * 37 * 0.95));
+  assert.equal(q.total, Math.round(4.5 * 36 * 0.9));
   const m = pricing.estimateMargin({ service: 'menage', total: q.total, hours: q.hours, kit: 0 }, null);
   assert.ok(m.marge / m.ht >= 0.25, 'jamais à perte avec l\'abonnement');
   assert.equal(pricing.quote({ service: 'bureau', hours: 3, cp: '75011', date: '2026-12-01', extras: ['vitres'] }, NOW).hours, 3, 'pas d\'options pour les bureaux');
@@ -70,12 +70,12 @@ test('carte cadeau (démo) : code envoyé, utilisée une seule fois, crédit dé
     assert.equal(red.status, 200, JSON.stringify(red.data));
     assert.equal(red.data.credit, 100);
     assert.equal((await c('POST', '/api/gifts/redeem', { code })).status, 409, 'déjà utilisée');
-    // ménage de 74 € : entièrement couvert, il reste 26 €
+    // ménage de 72 € : entièrement couvert, il reste 28 €
     const q = (await b('POST', '/api/quote', { service: 'menage', hours: 2, cp: '75011', date: '2026-11-25' })).data;
     assert.equal(q.total, 0);
     const r = await b('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '2 rue Test', date: '2026-11-25', time: '10:00', checklist: [] });
     assert.ok([200, 201].includes(r.status), JSON.stringify(r.data));
-    assert.equal((await b('GET', '/api/gifts/mine')).data.credit, 26);
+    assert.equal((await b('GET', '/api/gifts/mine')).data.credit, 28);
   } finally { server.close(); }
 });
 
@@ -84,10 +84,10 @@ test('pack d\'heures (démo) : 10 h payées, 11 h créditées', async () => {
   try {
     const c = await logged('claire@proprigo.test');
     const offer = (await c('GET', '/api/gifts/offer')).data;
-    assert.deepEqual(offer.packs[0], { hours: 10, price: 370, credit: 407, free: 1 });
+    assert.deepEqual(offer.packs[0], { hours: 10, price: 360, credit: 396, free: 1 });
     assert.equal((await c('POST', '/api/gifts', { kind: 'pack', hours: 7 })).status, 400);
     assert.equal((await c('POST', '/api/gifts', { kind: 'pack', hours: 10 })).status, 200);
-    assert.equal((await c('GET', '/api/gifts/mine')).data.credit, 407);
+    assert.equal((await c('GET', '/api/gifts/mine')).data.credit, 396);
   } finally { server.close(); }
 });
 

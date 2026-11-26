@@ -12,8 +12,8 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>Proprigo – ménage à la demande</title>
 <link rel="icon" href="/logo.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="preload" href="/fonts/inter-regular.woff" as="font" type="font/woff" crossorigin>
+<link rel="preload" href="/fonts/outfit-bold.woff" as="font" type="font/woff" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -29,12 +29,14 @@
 <footer class="foot">
   <div class="in">
     <span>© Proprigo · ménage à la demande en Île-de-France</span>
-    <nav aria-label="Informations"><a href="#/pro">Entreprises</a><a href="#/cadeau">Carte cadeau</a><a href="#/aide">Aide et réclamations</a><a href="#/intervenantes-verifiees">Nos intervenantes</a><a href="#/cgv">CGV</a><a href="#/mentions-legales">Mentions légales</a><a href="#/confidentialite">Confidentialité</a></nav>
+    <nav aria-label="Informations"><a href="#/pro">Entreprises</a><a href="#/syndics">Syndics</a><a href="#/agences">Agences immobilières</a><a href="#/recrutement">Recrutement</a><a href="#/cadeau">Carte cadeau</a><a href="#/aide">Aide et réclamations</a><a href="#/intervenantes-verifiees">Nos intervenantes</a><a href="#/cgv">CGV</a><a href="#/mentions-legales">Mentions légales</a><a href="#/confidentialite">Confidentialité</a></nav>
+    <small id="appVersion" class="app-version"></small>
   </div>
 </footer>
 <nav id="tabbar" class="tabbar" aria-label="Navigation principale" hidden></nav>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/art.js"></script>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

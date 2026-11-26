@@ -16,8 +16,8 @@ test('une réservation annulée ne propose pas de paiement dans le client ou le 
   assert.match(stripe, /b\.status === 'annulee'/);
 });
 test('annulation : confirmation avec montant retenu et remboursement', () => {
-  assert.match(ui, /Annuler ma réservation/);
-  assert.match(ui, /Montant retenu :/);
-  assert.match(ui, /Remboursement prévu :/);
+  assert.match(ui, /Annuler ce ménage \?/);
+  assert.match(ui, /sont retenus/);
+  assert.match(ui, /vous serez remboursé de|Vous serez remboursé de/);
   assert.match(ui, /if \(!confirm\(`/);
 });
