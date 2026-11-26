@@ -1,0 +1,19 @@
+{
+  "_aide": "Modèle pour une SASU. Recopiez ces lignes dans votre config/entreprise.json et remplacez chaque valeur par celle de votre Kbis. Ces informations sont imprimées sur les factures, les avoirs, les attestations et la page Mentions légales. regimeTVA : gardez « franchise » tant que le chiffre d'affaires reste sous 37 500 € par an (et sans numéro de TVA), mettez « normal » le jour où la SASU facture la TVA. iban et bic : le compte bancaire professionnel de la SASU (jamais affichés sur le site).",
+  "nomCommercial": "Proprigo",
+  "raisonSociale": "PROPRIGO",
+  "formeJuridique": "SASU",
+  "capital": "1 000 €",
+  "adresse": "12 rue Exemple, 75011 Paris",
+  "siret": "123 456 789 00012",
+  "rcs": "Paris 123 456 789",
+  "tvaIntracom": "",
+  "president": "Adel NOM",
+  "emailContact": "contact@proprigo.fr",
+  "telephone": "",
+  "emailFacturation": "contact@proprigo.fr",
+  "hebergeur": "Render Services, Inc., 525 Brannan Street, Suite 300, San Francisco, CA 94107, États-Unis (render.com)",
+  "regimeTVA": "franchise",
+  "iban": "",
+  "bic": ""
+}

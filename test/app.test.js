@@ -17,30 +17,30 @@ test('zones par code postal', () => {
 });
 
 test('prix de la grille', () => {
-  assert.equal(at({ service: 'menage', hours: 3, cp: '75011', date: '2026-11-23' }).total, 111);
+  assert.equal(at({ service: 'menage', hours: 3, cp: '75011', date: '2026-11-23' }).total, 108);
   assert.equal(at({ service: 'menage', hours: 2, cp: '69003', date: '2026-11-23' }).total, 68);
-  assert.equal(at({ service: 'grand', hours: 3, cp: '75011', date: '2026-11-23' }).total, 126);
-  assert.equal(at({ service: 'airbnb', size: 'T2', cp: '75011', date: '2026-11-23' }).total, 119);
-  assert.equal(at({ service: 'airbnb', size: 'T2', cp: '33000', date: '2026-11-23' }).total, 115);
+  assert.equal(at({ service: 'grand', hours: 3, cp: '75011', date: '2026-11-23' }).total, 132);
+  assert.equal(at({ service: 'airbnb', size: 'T2', cp: '75011', date: '2026-11-23' }).total, 125);
+  assert.equal(at({ service: 'airbnb', size: 'T2', cp: '33000', date: '2026-11-23' }).total, 121);
 });
 
 test('suppléments', () => {
   // dimanche 22 novembre 2026 : +20 %
-  assert.equal(at({ service: 'airbnb', size: 'T2', cp: '75011', date: '2026-11-22' }).total, Math.round(119 * 1.2));
+  assert.equal(at({ service: 'airbnb', size: 'T2', cp: '75011', date: '2026-11-22' }).total, Math.round(125 * 1.2));
   // jour férié : 25 décembre
-  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-12-25' }).total, Math.round(74 * 1.2));
+  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-12-25' }).total, Math.round(72 * 1.2));
   // urgence le jour même : +25 %
-  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-21', time: '11:30', urgent: true }).total, Math.round(74 * 1.25));
+  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-21', time: '11:30', urgent: true }).total, Math.round(72 * 1.25));
   // urgence : arrivée obligatoirement dans les 3 heures (il est 10 h à Paris)
   assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-21', time: '15:00', urgent: true }).ok, false);
   assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-21', urgent: true }).ok, false);
   // jours fériés calculés pour toutes les années : lundi de Pâques 2028 = 17 avril
-  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2028-04-17' }).total, Math.round(74 * 1.2));
-  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2028-04-18' }).total, 74);
+  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2028-04-17' }).total, Math.round(72 * 1.2));
+  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2028-04-18' }).total, 72);
   // urgence refusée un autre jour
   assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-23', urgent: true }).ok, false);
   // option matériel : +15 €, pas pour Airbnb
-  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-23', kit: true }).total, 89);
+  assert.equal(at({ service: 'menage', hours: 2, cp: '75011', date: '2026-11-23', kit: true }).total, 87);
   assert.equal(at({ service: 'airbnb', size: 'studio', cp: '75011', date: '2026-11-23', kit: true }).ok, false);
 });
 
@@ -103,7 +103,7 @@ test('parcours : réservation, attribution, mission, note, administration', asyn
     // le prix envoyé par le navigateur est ignoré
     r = await client('POST', '/api/bookings', { service: 'menage', hours: 3, cp: '75012', address: '10 rue de Charenton', date: '2026-11-23', time: '10:00', total: 1 });
     assert.equal(r.status, 201);
-    assert.equal(r.data.total, 111);
+    assert.equal(r.data.total, 108);
     assert.equal(r.data.status, 'attribuee');
     assert.equal(r.data.worker_name, 'Fatima K.'); // salariée la plus proche (75011)
     const bid = r.data.id;
@@ -139,7 +139,7 @@ test('parcours : réservation, attribution, mission, note, administration', asyn
     assert.equal((await admin('POST', '/api/login', { email: 'admin@proprigo.test', password: 'admin-test-123' })).status, 200);
     r = await admin('GET', '/api/admin/overview');
     assert.equal(r.data.kpis.terminees, 1);
-    assert.equal(r.data.kpis.caHT, Math.round(111 / 1.1));
+    assert.equal(r.data.kpis.caHT, Math.round(108 / 1.1));
     assert.ok(r.data.kpis.marge > 0);
   } finally {
     server.close();
@@ -160,7 +160,7 @@ test('parcours : absence, remplacement par une indépendante, refus sans pénali
     await client('POST', '/api/login', { email: 'claire@proprigo.test', password: 'demo-proprigo' });
     r = await client('POST', '/api/bookings', { service: 'airbnb', size: 'T2', cp: '75020', address: '5 rue des Pyrénées', date: '2026-11-22', time: '11:00' });
     assert.equal(r.data.status, 'proposee');
-    assert.equal(r.data.total, Math.round(119 * 1.2)); // dimanche
+    assert.equal(r.data.total, Math.round(125 * 1.2)); // dimanche
     const bid = r.data.id;
 
     const ines = agent();
@@ -260,7 +260,7 @@ test('paiement simulé, annulation à rembourser, production sans paiement bloqu
     const admin = agent();
     await admin('POST', '/api/login', { email: 'admin@proprigo.test', password: 'admin-test-123' });
     let o = await admin('GET', '/api/admin/overview');
-    assert.equal(o.data.kpis.aRembourser.montant, 74);
+    assert.equal(o.data.kpis.aRembourser.montant, 72);
     assert.equal((await admin('POST', `/api/admin/bookings/${r.data.id}/refunded`)).status, 200);
     o = await admin('GET', '/api/admin/overview');
     assert.equal(o.data.kpis.aRembourser.n, 0);
@@ -329,8 +329,8 @@ test('modification : nouveau prix, vérification des disponibilités, délai de 
     const id = r.data.id;
     r = await client('POST', `/api/bookings/${id}/update`, { date: '2026-11-29', hours: 3 }); // un dimanche, 3 h
     assert.equal(r.status, 200);
-    assert.equal(r.data.total, Math.round(111 * 1.2));
-    assert.equal(r.data.diff, Math.round(111 * 1.2) - 74);
+    assert.equal(r.data.total, Math.round(108 * 1.2));
+    assert.equal(r.data.diff, Math.round(108 * 1.2) - 72);
     r = await client('POST', `/api/bookings/${id}/update`, { date: '2026-11-21', time: '18:00' }); // moins de 24 h
     assert.equal(r.status, 409);
     r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-22', time: '09:00' });
@@ -421,7 +421,7 @@ test('espace propriétaires : logements, consignes, calendrier Airbnb', async ()
     let b = (await client('GET', '/api/bookings/mine')).data.find((x) => x.home_id === hid);
     assert.equal(b.date, '2026-11-28');
     assert.equal(b.time, '11:00');
-    assert.equal(b.total, 95);
+    assert.equal(b.total, 99);
     assert.equal(b.source, 'ical');
     assert.deepEqual(b.checklist.map((t) => t.task), ['Changer les draps et les serviettes', 'Réassort café']);
     // l'intervenante voit les consignes du logement
@@ -499,17 +499,18 @@ test('e-mails, règle d\'annulation, rappel la veille et reçu', async () => {
     assert.ok(mails().some((m) => /claire@proprigo.test.*Réservation confirmée/.test(m)));
     assert.ok(mails().some((m) => /fatima@proprigo.test.*Nouvelle mission/.test(m)));
     r = await client('POST', `/api/bookings/${r.data.id}/cancel`);
-    assert.equal(r.data.refund, 74);
+    assert.equal(r.data.refund, 72);
     // annulation tardive : 50 % remboursés
     r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-22', time: '09:00' });
     const late = r.data.id;
     // rappel la veille (nous sommes le 21) : une seule fois
-    assert.equal(runReminders(), 1);
-    assert.equal(runReminders(), 0);
+    assert.equal(runReminders(), 0, 'à 10 h, pas de rappel : il part à partir de 17 h');
+    assert.equal(runReminders({ force: true }), 1);
+    assert.equal(runReminders({ force: true }), 0);
     await wait();
     assert.ok(mails().some((m) => /Rappel : votre ménage demain/.test(m)));
     r = await client('POST', `/api/bookings/${late}/cancel`);
-    assert.equal(r.data.refund, Math.round(Math.round(74 * 1.2) * 0.5 * 100) / 100);
+    assert.equal(r.data.refund, Math.round(Math.round(72 * 1.2) * 0.5 * 100) / 100);
     // reçu : seulement une fois terminé, seulement pour le client
     r = await client('POST', '/api/bookings', { service: 'menage', hours: 2, cp: '75011', address: '1 rue Oberkampf', date: '2026-11-26', time: '10:00' });
     const id = r.data.id;
@@ -520,9 +521,9 @@ test('e-mails, règle d\'annulation, rappel la veille et reçu', async () => {
     await fatima('POST', `/api/worker/missions/${id}/finish`);
     const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'claire@proprigo.test', password: 'demo-proprigo' }) });
     const html = await (await fetch(`${base}/api/bookings/${id}/receipt`, { headers: { Cookie: login.headers.get('set-cookie').split(';')[0] } })).text();
-    assert.match(html, /Reçu PG-2026-0+\d+/);
+    assert.match(html, /Facture TEST-\d+/); // démo : document de test, sans numéro comptable
     assert.match(html, /DOCUMENT DE TEST/);
-    assert.match(html, /74,00/);
+    assert.match(html, /72,00/);
     await wait();
     assert.ok(mails().some((m) => /Votre ménage est terminé/.test(m)));
     // l'équipe voit les e-mails envoyés
