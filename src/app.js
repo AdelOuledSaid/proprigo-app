@@ -1049,6 +1049,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const b = db.prepare('SELECT * FROM bookings WHERE id = ? AND client_id = ?').get(id, user.id);
     if (!b) throw new HttpError(404, 'Réservation introuvable.');
     if (!['en_attente', 'proposee', 'attribuee'].includes(b.status)) throw new HttpError(409, 'Cette réservation ne peut plus être annulée.');
+    if (b.arrived_at) throw new HttpError(409, "L'intervenante est déjà chez vous : le ménage ne peut plus être annulé. Écrivez-nous dans les messages en cas de souci.");
     const refund = refundFor(b);
     db.prepare("UPDATE bookings SET status = 'annulee', refund_amount = ?, payment_status = CASE WHEN payment_status = 'paye' OR payment_status = 'simule' THEN 'a_rembourser' ELSE payment_status END WHERE id = ?").run(refund, id);
     db.prepare('DELETE FROM offers WHERE booking_id = ?').run(id);

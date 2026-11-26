@@ -30,6 +30,8 @@
     return PAY[b.payment_status] || '';
   };
   const pill = (s) => `<span class="pill ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
+  // étiquette suivie en direct : en route et arrivée remplacent « Confirmée »
+  const livePill = (b) => (b.status === 'attribuee' && b.arrived_at ? '<span class="pill pill-live">📍 Arrivée</span>' : b.status === 'attribuee' && b.on_way_at ? '<span class="pill pill-live">🚶 En route</span>' : b.status === 'en_cours' ? '<span class="pill pill-live">🧽 En cours</span>' : pill(b.status));
   const label = (b) => b.service === 'airbnb' ? `Airbnb ${SIZE[b.size]}` : `${SERVICE[b.service]} ${String(b.hours).replace('.', ',')} h`;
 
   async function api(method, path, body) {
@@ -580,13 +582,13 @@
   }
 
   // Jauge « ça brille » : avance avec la checklist du ménage
-  const SHINE_WORDS = (pct) => (pct >= 100 ? 'Ça brille !' : pct >= 60 ? 'Presque fini' : pct > 0 ? "C'est parti" : 'Prêt à commencer');
+  const SHINE_WORDS = (pct, status) => (pct >= 100 ? 'Ça brille !' : pct >= 60 ? 'Presque fini' : pct > 0 ? "C'est parti" : status === 'en_cours' ? 'Ménage commencé' : 'Prêt à commencer');
   function shine(b) {
     const n = b.checklist.length;
     const d = b.checklist.filter((t) => t.done).length;
     const pct = n ? Math.round((d / n) * 100) : 0;
     return `<div class="shine ${pct >= 100 ? 'full' : ''}" data-shine="${b.id}" role="progressbar" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${d}" aria-label="Tâches faites">
-      <div class="shine-top"><b>${SHINE_WORDS(pct)}</b><span>${d} sur ${n}</span></div>
+      <div class="shine-top"><b>${SHINE_WORDS(pct, b.status)}</b><span>${d} sur ${n}</span></div>
       <div class="shine-bar"><i style="width:${pct}%"></i></div></div>`;
   }
   function updateShine(id) {
@@ -595,7 +597,7 @@
     if (!el) return;
     const d = boxes.filter((c) => c.checked).length;
     const pct = boxes.length ? Math.round((d / boxes.length) * 100) : 0;
-    el.querySelector('b').textContent = SHINE_WORDS(pct);
+    el.querySelector('b').textContent = SHINE_WORDS(pct, 'en_cours');
     el.querySelector('span').textContent = `${d} sur ${boxes.length}`;
     el.querySelector('i').style.width = `${pct}%`;
     el.setAttribute('aria-valuenow', d);
@@ -898,16 +900,16 @@
     const visibleBookings = [...list].sort((a, b) => Number(b.id) - Number(a.id));
     const hoursLeft = (b) => (Date.parse(`${b.date}T${b.time}:00`) - Date.now()) / 36e5;
     const renderBooking = (b) => {
-        const active = ['en_attente', 'proposee', 'attribuee'].includes(b.status);
+        const active = ['en_attente', 'proposee', 'attribuee'].includes(b.status) && !b.on_way_at && !b.arrived_at; // plus d'annulation ni de changement une fois l'intervenante partie
         const showStop = b.series_id && active && !series[b.series_id];
         if (b.series_id) series[b.series_id] = true;
         return `
         <article class="card">
-          <div class="row"><h3>${esc(label(b))}${b.series_id ? ' <span class="pill">Récurrent</span>' : ''}</h3>${pill(b.status)}</div>
+          <div class="row"><h3>${esc(label(b))}${b.series_id ? ' <span class="pill">Récurrent</span>' : ''}</h3>${livePill(b)}</div>
           <p class="muted" style="margin:6px 0 0">${dateFr(b.date)} à ${esc(b.time)} · ${esc(b.address)} · ${esc(b.cp)} · <b>${b.payment_status === 'garantie' ? 'Gratuit (garantie)' : eur(b.total)}</b>${b.kit ? ' · matériel fourni' : ''}</p>
           ${b.payment_status === 'garantie' ? '<p class="small" style="margin:6px 0 0"><span class="pill ok">Retour gratuit</span> Nous revenons reprendre les points que vous avez signalés.</p>' : ''}
-          ${b.status === 'attribuee' && b.on_way_at && !b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est en route${b.eta_at ? `, arrivée estimée vers ${hhmm(b.eta_at)}` : ''}.</p>` : ''}
-          ${b.worker_name ? `<p class="who-line">${avatar(b.worker_id, b.worker_photo, b.worker_name, 'sm')}<span>Intervenante vérifiée : <b>${esc(b.worker_name)}</b></span>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
+          ${b.status === 'attribuee' && b.on_way_at && !b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est en route${b.eta_at ? `, arrivée estimée vers ${hhmm(b.eta_at)}` : ''}.</p>` : ''}${b.status === 'attribuee' && b.arrived_at ? `<p class="live-line"><span class="live-dot"></span>${esc((b.worker_name || '').split(' ')[0])} est arrivée chez vous, le ménage va commencer.</p>` : ''}
+          ${b.worker_name ? `<p class="who-line">${avatar(b.worker_id, b.worker_photo, b.worker_name, 'sm')}<span>Intervenante vérifiée : <b>${esc(b.worker_name)}</b></span>${mw.favorite === b.worker_id ? ' <span class="pill ok">★ Votre préférée</span>' : ''}</p>` : ''}
           ${b.source === 'ical' ? '<p class="small muted" style="margin:6px 0 0">Créé automatiquement depuis le calendrier de votre annonce.</p>' : ''}
           ${b.ical_flagged && ['en_attente', 'proposee', 'attribuee'].includes(b.status) ? `<div class="notice"><b>Ce séjour n'apparaît plus dans le calendrier de votre annonce.</b> Le ménage reste prévu. Si le séjour est bien annulé, annulez le ménage ; sinon, gardez-le.<div class="actions"><button class="btn ghost" data-keep="${b.id}">Garder le ménage</button><button class="btn ghost" data-cancel="${b.id}">Annuler le ménage</button></div></div>` : ''}
           <p class="small muted" style="margin:6px 0 0">${esc(paymentLabel(b))}</p>

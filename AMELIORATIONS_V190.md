@@ -75,3 +75,11 @@
 
 - Espace intervenante, « Ma semaine » sur téléphone : calendrier en pastilles, une icône par type de ménage (🏠 ménage, 🧳 Airbnb, 🧽 grand nettoyage, 🏢 bureaux), nombre de missions du jour, 🌴 pour les congés. On touche un jour pour voir ses missions.
 - Les zips ne contiennent plus de dossier .git.
+
+## v1.9.10
+
+- Réservation côté client : l'étiquette suit le ménage en direct (« 🚶 En route », « 📍 Arrivée », « 🧽 En cours ») au lieu de rester sur « Confirmée ».
+- Quand le ménage a commencé sans tâche cochée : « Ménage commencé » au lieu de « Prêt à commencer ».
+- Message « … est arrivée chez vous, le ménage va commencer. »
+- Une fois l'intervenante partie, plus de lien « Annuler » ni « Modifier » ; le serveur refuse l'annulation après l'arrivée (test ajouté).
+- Correction : rond vide affiché au-dessus du message de suivi.
