@@ -19,7 +19,7 @@
     en_attente: ['Recherche en cours', 'warn'], proposee: ['Recherche en cours', 'warn'], attribuee: ['Confirmée', ''],
     en_cours: ['En cours', ''], terminee: ['Terminée', 'ok'], annulee: ['Annulée', 'gray'],
   };
-  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé', virement: 'Paiement par virement en fin de mois', virement_facture: 'Facturé, virement à recevoir', paye_virement: 'Payé par virement' };
+  const PAY = { en_attente_paiement: 'À payer avant intervention', paiement_echoue: 'Paiement non abouti', simule: 'Paiement simulé (version de test)', paye: 'Payé', a_rembourser: 'Remboursement en cours', rembourse: 'Remboursé', virement: 'Paiement par virement en fin de mois', virement_facture: 'Facturé, paiement à recevoir', paye_virement: 'Payé par virement', prelevement: 'Prélèvement SEPA en fin de mois', paye_prelevement: 'Payé par prélèvement' };
   const paymentLabel = (b) => {
     if (b.status === 'annulee' && !b.paid) return 'Annulée — non payée';
     if (['rembourse', 'rembourse'].includes(b.payment_status)) {
@@ -1026,9 +1026,12 @@
     act('[data-fav]', async (btn) => { try { const r = await api('POST', '/api/favorite', { worker_id: Number(btn.dataset.fav) }); toast(r.message); route(); } catch (e) { toast(e.message); } });
     $app.querySelectorAll('[data-keep]').forEach((btn) => btn.onclick = async () => { try { const r = await api('POST', `/api/bookings/${btn.dataset.keep}/ical-keep`, {}); toast(r.message); route(); } catch (e) { toast(e.message); } });
     const bb = document.getElementById('billsBox');
-    if (bb && me.billing === 'virement') api('GET', '/api/transfer-bills').then((bills) => {
+    if (bb && ['virement', 'prelevement'].includes(me.billing)) api('GET', '/api/transfer-bills').then((bills) => {
       const open = bills.filter((x) => !x.paid_at);
-      bb.innerHTML = open.length ? open.map((x) => `<div class="pay-all"><span><b>🧾 Relevé ${esc(new Date(x.month + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' }))} : ${eur(x.total)}</b>à régler par virement avant le ${new Date(x.due_date + 'T12:00:00Z').toLocaleDateString(LOC(), { day: 'numeric', month: 'long', timeZone: 'UTC' })} · référence ${esc(x.ref)}</span><a class="btn primary" href="#/releve?id=${x.id}">Voir le relevé</a></div>`).join('')
+      const debit = me.billing === 'prelevement';
+      bb.innerHTML = open.length ? open.map((x) => `<div class="pay-all"><span><b>🧾 Relevé ${esc(new Date(x.month + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' }))} : ${eur(x.total)}</b>${x.debit_status === 'echoue' ? '⚠️ prélèvement rejeté : vérifiez votre compte ou mettez à jour votre IBAN' : x.debit_status === 'en_cours' ? `prélèvement en cours · référence ${esc(x.ref)}` : `à régler par virement avant le ${new Date(x.due_date + 'T12:00:00Z').toLocaleDateString(LOC(), { day: 'numeric', month: 'long', timeZone: 'UTC' })} · référence ${esc(x.ref)}`}</span><a class="btn primary" href="#/releve?id=${x.id}">Voir le relevé</a></div>`).join('')
+        : debit && me.sepa_ready ? `<p class="small muted">🏦 Prélèvement SEPA actif (IBAN …${esc(me.sepa_last4 || '')}) : un relevé arrive en fin de mois, puis il est prélevé. <a href="#/prelevement">Changer de compte</a></p>`
+        : debit ? '<div class="pay-all"><span><b>🏦 Autorisez le prélèvement</b>Vos passages seront confirmés dès que votre IBAN est enregistré.</span><a class="btn primary" href="#/prelevement">Autoriser</a></div>'
         : '<p class="small muted">💶 Vous payez par virement : un relevé avec les factures arrive en fin de mois.</p>';
     }).catch(() => {});
     const pa = document.getElementById('payAll');
@@ -1815,20 +1818,24 @@
       const mois = (m) => new Date(m + '-15T12:00:00Z').toLocaleDateString(LOC(), { month: 'long', year: 'numeric', timeZone: 'UTC' });
       const thisMonth = todayParis().slice(0, 7);
       tb.innerHTML = `<h2>Entreprises payées par virement</h2>
-        <p class="small muted">Ces clients n'ont pas de carte à donner : leurs passages sont confirmés tout de suite. Au début de chaque mois, envoyez le relevé du mois passé (une facture par passage, à régler sous 30 jours), puis cochez « Payé » quand le virement arrive sur votre compte.</p>
+        <p class="small muted">Ces entreprises paient en fin de mois. Au début de chaque mois, envoyez le relevé du mois passé (une facture par passage). <b>Prélèvement</b> : le montant est prélevé automatiquement par Stripe et passe à « Payé » tout seul. <b>Virement</b> : cochez « Payé » quand l'argent arrive sur votre compte.</p>
         ${t.ibanReady ? '' : '<p class="msg warn">Ajoutez votre IBAN et votre BIC dans config/entreprise.json : ils sont imprimés sur les relevés et les factures.</p>'}
         <form id="billingForm" class="row" style="gap:8px;flex-wrap:wrap;align-items:end"><label style="flex:1 1 220px">E-mail du client<input name="email" type="email" required placeholder="contact@entreprise.fr"></label>
-          <label>Paiement<select name="billing"><option value="virement">Virement en fin de mois</option><option value="carte">Carte (normal)</option></select></label><button class="btn ghost">Enregistrer</button></form>
-        ${t.clients.length ? `<ul class="plain quotes">${t.clients.map((c) => `<li><div class="q-head"><b>${esc(c.name)}</b><span class="small muted">${esc(c.email)}</span></div>
+          <label>Paiement<select name="billing"><option value="prelevement">Prélèvement SEPA (invitation par e-mail)</option><option value="virement">Virement en fin de mois</option><option value="carte">Carte (normal)</option></select></label><button class="btn ghost">Enregistrer</button></form>
+        ${t.clients.length ? `<ul class="plain quotes">${t.clients.map((c) => `<li><div class="q-head"><b>${esc(c.name)}</b><span class="small muted">${esc(c.email)} · ${c.billing === 'prelevement' ? (c.sepa_ready ? `🏦 prélèvement, IBAN …${esc(c.sepa_last4 || '')}` : '🏦 prélèvement : mandat pas encore signé') : '💶 virement'}</span></div>
           <div class="q-actions">${c.toBill.length ? c.toBill.map((m) => `<button class="btn ${m.month < thisMonth ? 'primary' : 'ghost'}" data-bill="${c.id}" data-month="${m.month}"${m.month < thisMonth ? '' : ' disabled title="Le mois n\'est pas terminé"'}>🧾 Facturer ${esc(mois(m.month))} · ${m.n} passage${m.n > 1 ? 's' : ''} · ${money2(m.total)}</button>`).join('') : '<span class="small muted">Rien à facturer pour le moment.</span>'}</div></li>`).join('')}</ul>` : ''}
         ${t.bills.length ? `<h3>Relevés envoyés</h3><ul class="plain quotes">${t.bills.map((x) => `<li><div class="q-head"><span><b>${esc(x.ref)}</b> · ${esc(x.client.name || '')} · ${esc(mois(x.month))} · <b>${money2(x.total)}</b></span>
-          ${x.paid_at ? `<span class="pill ok">✅ Payé le ${new Date(x.paid_at).toLocaleDateString(LOC())}</span>` : `<span class="pill ${x.due_date < todayParis() ? 'warn' : ''}">${x.due_date < todayParis() ? '⏰ En retard' : 'À recevoir'} · avant le ${new Date(x.due_date + 'T12:00:00Z').toLocaleDateString(LOC())}</span>`}</div>
-          <div class="q-actions"><a class="btn ghost" href="#/releve?id=${x.id}">Voir</a>${x.paid_at ? '' : `<button class="btn primary" data-billpaid="${x.id}">💶 Virement reçu : marquer payé</button>`}</div></li>`).join('')}</ul>` : ''}`;
+          ${x.paid_at ? `<span class="pill ok">✅ Payé le ${new Date(x.paid_at).toLocaleDateString(LOC())}</span>` : x.debit_status === 'en_cours' ? '<span class="pill">🏦 Prélèvement en cours</span>' : x.debit_status === 'echoue' ? '<span class="pill warn">⚠️ Prélèvement rejeté</span>' : `<span class="pill ${x.due_date < todayParis() ? 'warn' : ''}">${x.due_date < todayParis() ? '⏰ En retard' : 'À recevoir'} · avant le ${new Date(x.due_date + 'T12:00:00Z').toLocaleDateString(LOC())}</span>`}</div>
+          <div class="q-actions"><a class="btn ghost" href="#/releve?id=${x.id}">Voir</a>${x.paid_at || x.debit_status === 'en_cours' ? '' : `${x.debit_status === 'echoue' ? `<button class="btn primary" data-billdebit="${x.id}">🔁 Relancer le prélèvement</button>` : ''}<button class="btn ${x.debit_status === 'echoue' ? 'ghost' : 'primary'}" data-billpaid="${x.id}">💶 Virement reçu : marquer payé</button>`}</div></li>`).join('')}</ul>` : ''}`;
       const f = document.getElementById('billingForm');
       f.onsubmit = async (e) => { e.preventDefault(); try { const r = await api('POST', '/api/admin/clients/billing', formData(f)); toast(r.message); paintTransfers(); } catch (err) { toast(err.message); } };
       tb.querySelectorAll('[data-bill]').forEach((b) => b.onclick = async () => {
         if (!confirm(`Envoyer le relevé de ${mois(b.dataset.month)} au client ? Les factures seront créées.`)) return;
         try { const r = await api('POST', '/api/admin/transfer-bills', { client_id: Number(b.dataset.bill), month: b.dataset.month }); toast(r.message); paintTransfers(); } catch (err) { toast(err.message); }
+      });
+      tb.querySelectorAll('[data-billdebit]').forEach((b) => b.onclick = async () => {
+        if (!confirm('Relancer le prélèvement sur le compte du client ?')) return;
+        try { const r = await api('POST', `/api/admin/transfer-bills/${b.dataset.billdebit}/debit`, {}); toast(r.message); paintTransfers(); } catch (err) { toast(err.message); }
       });
       tb.querySelectorAll('[data-billpaid]').forEach((b) => b.onclick = async () => {
         if (!confirm('Le virement est bien arrivé sur votre compte ?')) return;
@@ -2919,7 +2926,7 @@
             <label>Fréquence<select name="frequency">${QFREQ.map(([k, l]) => `<option value="${k}"${(q.offer ? q.offer.frequency : guessFreq(q.frequency)) === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
             <label>Début souhaité (facultatif)<input name="start" type="date" value="${q.offer && q.offer.start ? q.offer.start : ''}"></label>
           </div>
-          <label class="check"><input type="checkbox" name="allowTransfer"${q.offer && q.offer.allowTransfer ? ' checked' : ''}> Proposer aussi le paiement par virement en fin de mois (entreprises connues)</label>
+          <label class="check"><input type="checkbox" name="allowTransfer"${q.offer && q.offer.allowTransfer ? ' checked' : ''}> Proposer aussi le prélèvement SEPA en fin de mois (le client donne son IBAN et signe le mandat sur Stripe)</label>
           <label>Message pour le client (facultatif)<textarea name="message" rows="3" maxlength="1000" placeholder="Ex. : produits et matériel fournis, passage le matin avant l'ouverture.">${q.offer && q.offer.message ? esc(q.offer.message) : ''}</textarea></label>
           <p class="q-total" data-qtotal></p>
           <button class="btn primary">📨 Envoyer le devis par e-mail</button>
@@ -2982,7 +2989,7 @@
           : d.status === 'refuse' ? '<p class="msg">Vous avez refusé ce devis. Nous revenons vers vous avec une nouvelle proposition.</p>'
           : d.status !== 'envoye' ? '<p class="msg">Ce devis n\'est plus ouvert. Écrivez-nous à contact@proprigo.fr.</p>'
           : `<form id="devisYes" class="stack"><h2>J'accepte ce devis</h2>
-              <ol class="devis-steps"><li>Vous choisissez l'adresse et le premier passage</li><li>${d.hasAccount ? 'Vos passages s\'ajoutent à votre espace Proprigo' : 'Votre espace entreprise est créé avec un mot de passe'}</li><li>${o.allowTransfer ? 'Vous payez par carte maintenant, ou par virement en fin de mois' : 'Vous payez par carte, en toute sécurité (Stripe)'}</li></ol>
+              <ol class="devis-steps"><li>Vous choisissez l'adresse et le premier passage</li><li>${d.hasAccount ? 'Vos passages s\'ajoutent à votre espace Proprigo' : 'Votre espace entreprise est créé avec un mot de passe'}</li><li>${o.allowTransfer ? 'Vous payez par carte maintenant, ou par prélèvement en fin de mois' : 'Vous payez par carte, en toute sécurité (Stripe)'}</li></ol>
               <label>Adresse des passages<input name="address" required minlength="5" maxlength="200" placeholder="Numéro, rue, étage, code d'accès" autocomplete="street-address"></label>
               <div class="grid2">
                 <label>Premier passage<input name="start" type="date" required min="${todayParis()}" value="${o.start && o.start >= todayParis() ? o.start : addDaysFront(todayParis(), 2)}"></label>
@@ -2992,7 +2999,7 @@
               ${o.frequency === 'once' ? '' : `<p class="small muted" style="margin:0">${esc(o.frequencyLabel)} : les dates suivantes se calculent à partir du premier passage. Vous pourrez en ajouter d'autres ensuite.</p>`}
               ${o.allowTransfer ? `<fieldset class="stack"><legend>Paiement</legend>
                 <label class="check"><input type="radio" name="pay" value="carte" checked> Par carte maintenant${o.frequency === 'once' ? '' : ' (les passages du mois à venir)'}</label>
-                <label class="check"><input type="radio" name="pay" value="virement"> Par virement : relevé en fin de mois, à régler sous 30 jours</label></fieldset>` : ''}
+                <label class="check"><input type="radio" name="pay" value="prelevement"> Par prélèvement SEPA en fin de mois : vous autorisez le prélèvement avec votre IBAN sur la page sécurisée Stripe</label></fieldset>` : ''}
               ${d.hasAccount ? '<p class="small muted" style="margin:0">Un espace existe déjà avec cette adresse e-mail : vos passages y seront ajoutés.</p>'
                 : `<label>Mot de passe de votre espace (10 caractères minimum)<input name="password" type="password" required minlength="10" autocomplete="new-password"></label>`}
               <label>Votre prénom et nom (signature)<input name="name" required minlength="3" maxlength="80" autocomplete="name"></label>
@@ -3039,12 +3046,28 @@
       </tbody></table>
       <div class="devis-sum"><p class="big"><span>Total à régler</span><b>${money2(v.total)}</b></p>${v.franchiseTVA ? '<p class="small muted">TVA non applicable, art. 293 B du CGI.</p>' : ''}</div>
       ${v.paid_at ? `<p class="msg ok">✅ Payé par virement le ${day(v.paid_at)}. Merci !</p>`
+        : v.client.billing === 'prelevement' && v.debit_status !== 'echoue' ? `<div class="devis-msg"><p style="margin:0"><b>🏦 Prélèvement SEPA</b> : ce montant est prélevé automatiquement sur votre compte (IBAN …${esc(v.client.sepa_last4 || '')}), référence ${esc(v.ref)}. Vous n'avez rien à faire.</p></div>`
         : `<div class="devis-msg"><p style="margin:0 0 6px"><b>Virement à faire avant le ${day(v.due_date)}</b></p>
           ${v.iban ? `<p style="margin:0">IBAN : <b>${esc(v.iban)}</b>${v.bic ? `<br>BIC : <b>${esc(v.bic)}</b>` : ''}<br>Bénéficiaire : ${esc(L.raisonSociale || 'Proprigo')}<br>Référence à indiquer : <b>${esc(v.ref)}</b></p>` : '<p style="margin:0">Nos coordonnées bancaires vous sont envoyées par e-mail.</p>'}</div>`}
       <p class="small muted">En cas de retard de paiement : pénalités au taux de 3 fois le taux d'intérêt légal et indemnité forfaitaire de 40 € pour frais de recouvrement (art. L441-10 du Code de commerce).</p>
       <div class="devis-answer no-print"><button class="btn ghost" type="button" id="relPrint">🖨️ Imprimer ou enregistrer en PDF</button></div>
     </article>`;
     document.getElementById('relPrint').onclick = () => window.print();
+  };
+  views['prelevement'] = () => {
+    if (!me) { location.hash = '#/connexion'; return; }
+    const back = new URLSearchParams(location.search).get('stripe');
+    page('Prélèvement SEPA', `
+      ${back === 'sepa' ? '<p class="msg ok">✅ Merci ! Votre autorisation est en cours d\'enregistrement. Vous recevez un e-mail de confirmation dans quelques instants.</p>' : ''}
+      ${me.sepa_ready ? `<p class="msg ok">Prélèvement actif sur le compte se terminant par …${esc(me.sepa_last4 || '')}.</p>` : ''}
+      <p>Avec le prélèvement, vous n'avez rien à faire chaque mois : vous recevez le relevé avec une facture par passage, puis le montant est prélevé quelques jours plus tard.</p>
+      <ol class="devis-steps"><li>Vous saisissez votre IBAN sur la page sécurisée de Stripe, notre prestataire de paiement.</li><li>Vous acceptez le mandat de prélèvement SEPA. Stripe le garde et vous en envoie une copie.</li><li>Vos passages sont confirmés. Vous pouvez annuler le mandat à tout moment en nous écrivant.</li></ol>
+      <button class="btn primary" id="sepaGo" style="margin-top:14px">🏦 ${me.sepa_ready ? 'Changer de compte bancaire' : 'Autoriser le prélèvement'}</button><p class="msg" id="sepaMsg"></p>`);
+    document.getElementById('sepaGo').onclick = async (e) => {
+      e.target.disabled = true;
+      try { const r = await api('POST', '/api/me/sepa-setup', {}); window.location.assign(r.checkout_url); }
+      catch (err) { const m = document.getElementById('sepaMsg'); m.className = 'msg err'; m.textContent = err.message; e.target.disabled = false; }
+    };
   };
   views['mentions-legales'] = () => {
     const L = CONFIG.legal || {};

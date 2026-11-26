@@ -134,3 +134,10 @@
 - S'il a déjà un espace avec cette adresse e-mail, les passages y sont ajoutés.
 - Les formulaires de demande de devis expliquent les 3 étapes ; pas besoin de créer un compte avant.
 - Vous êtes prévenu par e-mail ; le devis passe directement à « 📅 N passages planifiés ».
+
+## v1.12.2 — prélèvement SEPA par Stripe pour les entreprises
+
+- Devis : la case « Proposer aussi le prélèvement SEPA en fin de mois » permet au client de choisir « Par prélèvement » en acceptant. Il est envoyé sur la page Stripe : il saisit son IBAN et accepte le mandat SEPA (Stripe garde le mandat et lui en envoie une copie). Ses passages sont confirmés dès que Stripe confirme le mandat.
+- Admin → Paiements : « Prélèvement SEPA (invitation par e-mail) » pour un client existant ; il reçoit un lien vers la page « Prélèvement » de son espace.
+- Début de mois : « 🧾 Facturer » crée les factures, envoie le relevé et lance le prélèvement automatiquement. Le relevé passe à « Payé » tout seul quand Stripe confirme (quelques jours). Prélèvement rejeté : vous et le client êtes prévenus, bouton « 🔁 Relancer le prélèvement ».
+- Stripe (une fois) : activer « Prélèvement SEPA » dans Paramètres → Moyens de paiement, et ajouter l'événement payment_intent.payment_failed au webhook.

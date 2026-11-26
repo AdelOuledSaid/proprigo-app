@@ -342,4 +342,55 @@ async function checkoutTip({ db, tip, label, email, appUrl }) {
   db.prepare('UPDATE tips SET session_id = ? WHERE id = ?').run(out.id, tip.id);
   return { url: out.url };
 }
-module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, getIntent, captureIntent, cancelIntent, sessionForIntent, checkoutGift, checkoutTip };
+
+// ----- prélèvement SEPA (entreprises) : mandat signé sur la page Stripe, prélèvement en fin de mois -----
+async function sepaSetup({ db, user, appUrl, back = '/#/mes-reservations' }) {
+  if (!configured()) throw new Error('Stripe not configured');
+  if (!validBaseUrl(appUrl)) throw new Error('Invalid public URL');
+  let customer = db.prepare('SELECT stripe_customer FROM users WHERE id = ?').get(user.id).stripe_customer;
+  if (!customer) {
+    const c = await stripeCall('POST', '/v1/customers', new URLSearchParams({ email: user.email, name: user.name || user.email, 'metadata[proprigo_user]': String(user.id) }), `proprigo-customer-${user.id}`);
+    if (!c.ok || !c.body.id) throw new Error(`Stripe customer failed: ${c.body.error?.message || c.status}`);
+    customer = c.body.id;
+    db.prepare('UPDATE users SET stripe_customer = ? WHERE id = ?').run(customer, user.id);
+  }
+  const base = appUrl.replace(/\/$/, '');
+  const params = new URLSearchParams();
+  params.set('mode', 'setup');
+  params.set('currency', 'eur');
+  params.set('customer', customer);
+  params.set('payment_method_types[0]', 'sepa_debit');
+  params.set('metadata[sepa_user]', String(user.id));
+  params.set('success_url', `${base}/?stripe=sepa${back.startsWith('/#') ? back.slice(1) : back}`);
+  params.set('cancel_url', `${base}/?stripe=cancel${back.startsWith('/#') ? back.slice(1) : back}`);
+  const r = await stripeCall('POST', '/v1/checkout/sessions', params);
+  if (!r.ok || !r.body.url) throw new Error(`Stripe SEPA setup failed: ${r.body.error?.message || r.status}`);
+  return { url: r.body.url };
+}
+async function sepaSetupResult(setupIntentId) {
+  if (typeof setupIntentId !== 'string' || !/^seti_[A-Za-z0-9_]+$/.test(setupIntentId)) throw new Error('Invalid setup intent');
+  const si = await stripeCall('GET', `/v1/setup_intents/${setupIntentId}`);
+  if (!si.ok) throw new Error('Stripe setup intent unavailable');
+  const pm = typeof si.body.payment_method === 'string' ? si.body.payment_method : si.body.payment_method?.id;
+  let last4 = null;
+  if (pm) { const m = await stripeCall('GET', `/v1/payment_methods/${pm}`); if (m.ok) last4 = m.body.sepa_debit?.last4 || null; }
+  return { status: si.body.status, paymentMethod: pm || null, mandate: typeof si.body.mandate === 'string' ? si.body.mandate : si.body.mandate?.id || null, last4 };
+}
+async function sepaCharge({ billId, amountCents, customer, paymentMethod, mandate, description }) {
+  if (!Number.isSafeInteger(amountCents) || amountCents < 100) throw new Error('Invalid amount');
+  const params = new URLSearchParams();
+  params.set('amount', String(amountCents));
+  params.set('currency', 'eur');
+  params.set('customer', customer);
+  params.set('payment_method', paymentMethod);
+  params.set('payment_method_types[0]', 'sepa_debit');
+  if (mandate) params.set('mandate', mandate);
+  params.set('confirm', 'true');
+  params.set('off_session', 'true');
+  params.set('description', description);
+  params.set('metadata[bill_id]', String(billId));
+  const r = await stripeCall('POST', '/v1/payment_intents', params, `proprigo-bill-${billId}-${Date.now() >> 20}`);
+  if (!r.ok || !r.body.id) throw new Error(`Stripe SEPA charge failed: ${r.body.error?.message || r.status}`);
+  return { id: r.body.id, status: r.body.status };
+}
+module.exports = { configured, validBaseUrl, verifyEvent, checkout, expireOtherSessions, refund, refundDuplicate, getIntent, captureIntent, cancelIntent, sessionForIntent, checkoutGift, checkoutTip, sepaSetup, sepaSetupResult, sepaCharge };

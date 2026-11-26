@@ -178,7 +178,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (!t) return null;
     const s = db.prepare('SELECT * FROM sessions WHERE token = ?').get(t);
     if (!s || s.expires < Date.now()) return null;
-    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance, lang, billing FROM users WHERE id = ?').get(s.user_id) || null;
+    return db.prepare('SELECT id, role, email, name, phone, staff_level, email_verified_at IS NOT NULL AS email_verified, wants_avance, lang, billing, sepa_pm IS NOT NULL AS sepa_ready, sepa_last4 FROM users WHERE id = ?').get(s.user_id) || null;
   };
   const need = (user, role) => {
     if (!user) throw new HttpError(401, 'Connectez-vous pour continuer.');
@@ -632,15 +632,20 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db.prepare('INSERT INTO resets (token_hash, user_id, expires) VALUES (?, ?, ?)').run(sha(welcome), cid, Date.now() + 7 * 864e5);
       client = { id: cid };
     }
-    const transfer = body.billing === 'virement' && (!opts.fromClient || o.allowTransfer);
-    if (transfer) db.prepare("UPDATE users SET billing = 'virement' WHERE id = ?").run(client.id);
+    const wantsDebit = body.billing === 'prelevement' && (!opts.fromClient || o.allowTransfer);
+    const sepa = wantsDebit ? db.prepare('SELECT sepa_pm FROM users WHERE id = ?').get(client.id).sepa_pm : null;
+    const debitReady = Boolean(wantsDebit && sepa);
+    const transfer = (body.billing === 'virement' && !opts.fromClient) || debitReady; // passages confirmés sans paiement immédiat
+    const laterMode = debitReady ? 'prelevement' : 'virement';
+    if (body.billing === 'virement' && !opts.fromClient) db.prepare("UPDATE users SET billing = 'virement' WHERE id = ?").run(client.id);
+    if (wantsDebit) db.prepare("UPDATE users SET billing = 'prelevement' WHERE id = ?").run(client.id);
     const service = QUOTE_SERVICE[q.kind] || 'menage';
     const tasks = JSON.stringify(checklist.clean([], service));
     const dates = planDates(start, count, o.frequency);
     const ids = [];
     for (const date of dates) {
       const r = db.prepare(`INSERT INTO bookings (client_id, service, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, checklist, photo_consent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, ?, 0)`).run(client.id, service, o.hours, q.cp, address, date, time, o.perVisitTTC, zone, transfer ? 'virement' : stripeReady ? 'en_attente_paiement' : 'simule', tasks);
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, ?, 0)`).run(client.id, service, o.hours, q.cp, address, date, time, o.perVisitTTC, zone, transfer ? laterMode : stripeReady ? 'en_attente_paiement' : 'simule', tasks);
       ids.push(Number(r.lastInsertRowid));
       if (transfer) engine.assign(db, ids[ids.length - 1]);
     }
@@ -653,12 +658,13 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       `Merci pour votre confiance. Voici les passages prévus pour ${q.company}, à ${time}, ${address} :`,
       ...dates.slice(0, 12).map((d) => `• ${fmtD(d)}`), ...(dates.length > 12 ? [`… et ${dates.length - 12} autres passages.`] : []),
       `${o.perVisitTTC.toFixed(2).replace('.', ',')} € par passage, soit ${total.toFixed(2).replace('.', ',')} € pour ces ${ids.length} passage${ids.length > 1 ? 's' : ''}.`,
-      ...(opts.fromClient && !transfer && stripeReady ? ['Si le paiement n\'a pas été fait juste après votre accord, réglez par carte dans votre espace Proprigo (bouton « Payer »).'] : []),
-      opts.fromClient && !transfer && stripeReady ? 'Une facture est créée automatiquement après chaque paiement.' : transfer ? 'Paiement par virement : en fin de mois, vous recevez un relevé avec les factures des passages faits, à régler sous 30 jours. Rien à payer maintenant.'
+      ...(opts.fromClient && !transfer && !wantsDebit && stripeReady ? ['Si le paiement n\'a pas été fait juste après votre accord, réglez par carte dans votre espace Proprigo (bouton « Payer »).'] : []),
+      opts.fromClient && !transfer && !wantsDebit && stripeReady ? 'Une facture est créée automatiquement après chaque paiement.' : wantsDebit ? 'Paiement par prélèvement SEPA : en fin de mois, vous recevez un relevé avec les factures des passages faits, prélevé quelques jours plus tard. Rien à payer maintenant.'
+        : transfer ? 'Paiement par virement : en fin de mois, vous recevez un relevé avec les factures des passages faits, à régler sous 30 jours. Rien à payer maintenant.'
         : stripeReady ? 'Pour confirmer, réglez par carte dans votre espace Proprigo : un passage à la fois, ou tous en une fois. Une facture est créée automatiquement après chaque paiement.' : 'Vous retrouvez ces passages dans votre espace Proprigo.',
       ...(welcome ? ['Nous vous avons créé un espace client avec cette adresse e-mail. Choisissez votre mot de passe avec le bouton ci-dessous (lien valable 7 jours).'] : []),
     ], welcome ? { label: 'Créer mon mot de passe', path: `/#/nouveau-mot-de-passe?t=${welcome}` } : { label: 'Voir et payer mes passages', path: '/#/mes-reservations' });
-    return { ids, clientId: client.id, welcome, transfer, dates, o };
+    return { ids, clientId: client.id, welcome, transfer, dates, o, needsMandate: wantsDebit && !debitReady };
   };
   route('POST', '/api/admin/quote-requests/:id/plan', ({ user, id, body }) => {
     needStaff(user);
@@ -686,14 +692,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   // ----- entreprises payées par virement : relevé de fin de mois -----
   const monthOf = (d) => String(d).slice(0, 7);
   const billView = (bill) => {
-    const c = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(bill.client_id) || {};
+    const c = db.prepare('SELECT id, name, email, billing, sepa_last4 FROM users WHERE id = ?').get(bill.client_id) || {};
     const lines = db.prepare('SELECT b.id, b.date, b.time, b.service, b.hours, b.total, b.discount, b.cp, i.number FROM bookings b LEFT JOIN invoices i ON i.booking_id = b.id AND i.kind = \'facture\' WHERE b.bill_id = ? ORDER BY b.date, b.time').all(bill.id);
     return { ...bill, total: bill.total_cents / 100, client: c, lines, iban: company.iban || null, bic: company.bic || null, legal: legalInfo(), franchiseTVA };
   };
   route('GET', '/api/admin/transfers', ({ user }) => {
     need(user, 'admin');
-    const clients = db.prepare("SELECT id, name, email FROM users WHERE role = 'client' AND billing = 'virement' ORDER BY name").all().map((c) => ({
-      ...c, toBill: db.prepare("SELECT substr(date, 1, 7) AS month, COUNT(*) AS n, ROUND(SUM(total), 2) AS total FROM bookings WHERE client_id = ? AND status = 'terminee' AND payment_status = 'virement' AND bill_id IS NULL GROUP BY month ORDER BY month").all(c.id),
+    const clients = db.prepare("SELECT id, name, email, billing, sepa_last4, sepa_pm IS NOT NULL AS sepa_ready FROM users WHERE role = 'client' AND billing IN ('virement', 'prelevement') ORDER BY name").all().map((c) => ({
+      ...c, toBill: db.prepare("SELECT substr(date, 1, 7) AS month, COUNT(*) AS n, ROUND(SUM(total), 2) AS total FROM bookings WHERE client_id = ? AND status = 'terminee' AND payment_status IN ('virement', 'prelevement') AND bill_id IS NULL GROUP BY month ORDER BY month").all(c.id),
     }));
     const bills = db.prepare('SELECT * FROM transfer_bills ORDER BY paid_at IS NOT NULL, issued_at DESC LIMIT 60').all().map(billView);
     return { clients, bills, ibanReady: Boolean(company.iban) };
@@ -703,6 +709,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const email = str(body.email, 200).toLowerCase();
     const c = db.prepare("SELECT id, name, billing FROM users WHERE email = ? AND role = 'client'").get(email);
     if (!c) throw new HttpError(404, 'Aucun compte client avec cette adresse e-mail.');
+    if (body.billing === 'prelevement') {
+      // le client autorise lui-même le prélèvement (IBAN + mandat) sur la page Stripe
+      mailer.send(email, 'Mettez en place le prélèvement Proprigo', 'Paiement par prélèvement', [`Bonjour ${c.name.split(' ')[0]},`,
+        'Comme convenu, vos ménages peuvent être réglés par prélèvement SEPA en fin de mois, avec un relevé et une facture par passage.',
+        'Il suffit d\'autoriser le prélèvement une fois : vous saisissez votre IBAN sur la page sécurisée de notre prestataire de paiement Stripe.'], { label: 'Autoriser le prélèvement', path: '/#/prelevement' });
+      db_.log(db, `${c.name} (${email}) : invitation au prélèvement SEPA envoyée.`);
+      return { ok: true, message: `Invitation envoyée à ${email}. Le prélèvement sera actif dès qu'il aura saisi son IBAN.` };
+    }
     const billing = body.billing === 'virement' ? 'virement' : null;
     db.prepare('UPDATE users SET billing = ? WHERE id = ?').run(billing, c.id);
     let moved = 0;
@@ -715,14 +729,28 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     db_.log(db, `${c.name} (${email}) : paiement ${billing ? 'par virement en fin de mois' : 'par carte'}.`);
     return { ok: true, message: billing ? `${c.name} paiera par virement en fin de mois.${moved ? ` ${moved} passage(s) à venir confirmé(s).` : ''}` : `${c.name} paiera de nouveau par carte.` };
   });
-  route('POST', '/api/admin/transfer-bills', ({ user, body }) => {
+  const debitBill = async (billId) => {
+    const bill = db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(billId);
+    const c = db.prepare('SELECT id, email, name, billing, stripe_customer, sepa_pm, sepa_mandate FROM users WHERE id = ?').get(bill.client_id);
+    if (!stripeReady || !c || c.billing !== 'prelevement' || !c.sepa_pm || bill.paid_at) return null;
+    try {
+      const pi = await stripePay.sepaCharge({ billId: bill.id, amountCents: bill.total_cents, customer: c.stripe_customer, paymentMethod: c.sepa_pm, mandate: c.sepa_mandate, description: `Proprigo ${bill.ref}` });
+      db.prepare("UPDATE transfer_bills SET stripe_pi = ?, debit_status = 'en_cours' WHERE id = ?").run(pi.id, bill.id);
+      return pi;
+    } catch (e) {
+      db.prepare("UPDATE transfer_bills SET debit_status = 'echoue' WHERE id = ?").run(bill.id);
+      db_.log(db, `PRÉLÈVEMENT IMPOSSIBLE pour ${bill.ref} : ${String(e.message).slice(0, 300)}`);
+      return null;
+    }
+  };
+  route('POST', '/api/admin/transfer-bills', async ({ user, body }) => {
     need(user, 'admin');
     const clientId = Number(body.client_id); const month = str(body.month, 7);
     if (!/^\d{4}-\d{2}$/.test(month)) throw new HttpError(400, 'Mois invalide.');
     if (month >= monthOf(pricing.todayParis(now())) && !body.early) throw new HttpError(400, 'Le mois n\'est pas terminé. Facturez-le à partir du 1er du mois suivant.');
-    const c = db.prepare("SELECT id, name, email FROM users WHERE id = ? AND role = 'client'").get(clientId);
+    const c = db.prepare("SELECT id, name, email, billing, sepa_pm, sepa_last4 FROM users WHERE id = ? AND role = 'client'").get(clientId);
     if (!c) throw new HttpError(404, 'Client introuvable.');
-    const rows = db.prepare("SELECT id, total FROM bookings WHERE client_id = ? AND status = 'terminee' AND payment_status = 'virement' AND bill_id IS NULL AND substr(date, 1, 7) = ?").all(c.id, month);
+    const rows = db.prepare("SELECT id, total FROM bookings WHERE client_id = ? AND status = 'terminee' AND payment_status IN ('virement', 'prelevement') AND bill_id IS NULL AND substr(date, 1, 7) = ?").all(c.id, month);
     if (!rows.length) throw new HttpError(409, 'Aucun passage terminé à facturer pour ce mois.');
     const issued = now().toISOString();
     const due = addDays(pricing.todayParis(now()), 30);
@@ -736,16 +764,29 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); throw e; }
     for (const b of rows) issueInvoice(b.id);
+    const debit = c.billing === 'prelevement' && c.sepa_pm;
+    if (debit) await debitBill(billId);
     const v = billView(db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(billId));
     const mois = new Date(month + '-15T12:00:00Z').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
     mailer.send(c.email, `Votre relevé Proprigo de ${mois}`, `Relevé de ${mois}`, [
       `Bonjour ${c.name.split(' ')[0]},`,
       `Voici le relevé de vos ${rows.length} passage${rows.length > 1 ? 's' : ''} de ${mois} : ${v.total.toFixed(2).replace('.', ',')} € au total, une facture par passage.`,
-      `À régler par virement avant le ${new Date(due + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}, avec la référence ${v.ref}.`,
-      ...(company.iban ? [`IBAN : ${company.iban}${company.bic ? ` · BIC : ${company.bic}` : ''}`] : []),
+      ...(debit ? [`Ce montant sera prélevé sur votre compte (IBAN se terminant par ${c.sepa_last4 || '…'}) dans les prochains jours ouvrés, avec la référence ${v.ref}. Vous n'avez rien à faire.`]
+        : [`À régler par virement avant le ${new Date(due + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}, avec la référence ${v.ref}.`,
+          ...(company.iban ? [`IBAN : ${company.iban}${company.bic ? ` · BIC : ${company.bic}` : ''}`] : [])]),
     ], { label: 'Voir le relevé et les factures', path: `/#/releve?id=${billId}` });
     db_.log(db, `Relevé ${v.ref} (${mois}) envoyé à ${c.name} : ${v.total} €.`);
-    return { ok: true, message: `Relevé ${v.ref} envoyé à ${c.email} : ${v.total.toFixed(2).replace('.', ',')} €.`, bill: v };
+    return { ok: true, message: `Relevé ${v.ref} envoyé à ${c.email} : ${v.total.toFixed(2).replace('.', ',')} €${debit ? (v.debit_status === 'en_cours' ? ', prélèvement lancé.' : ' — le prélèvement n\'a pas pu être lancé, voir le journal.') : '.'}`, bill: v };
+  });
+  route('POST', '/api/admin/transfer-bills/:id/debit', async ({ user, id }) => {
+    need(user, 'admin');
+    const bill = db.prepare('SELECT * FROM transfer_bills WHERE id = ?').get(id);
+    if (!bill) throw new HttpError(404, 'Relevé introuvable.');
+    if (bill.paid_at) throw new HttpError(409, 'Ce relevé est déjà payé.');
+    if (bill.debit_status === 'en_cours') throw new HttpError(409, 'Un prélèvement est déjà en cours.');
+    const pi = await debitBill(bill.id);
+    if (!pi) throw new HttpError(409, 'Prélèvement impossible : le client n\'a pas de mandat SEPA actif.');
+    return { ok: true, message: `Prélèvement relancé pour ${bill.ref}.` };
   });
   route('POST', '/api/admin/transfer-bills/:id/paid', ({ user, id }) => {
     need(user, 'admin');
@@ -754,12 +795,34 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     if (bill.paid_at) throw new HttpError(409, 'Ce relevé est déjà marqué payé.');
     db.prepare('UPDATE transfer_bills SET paid_at = ? WHERE id = ?').run(now().toISOString(), id);
     db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye_virement' WHERE bill_id = ?").run(id);
+    db.prepare("UPDATE transfer_bills SET debit_status = NULL WHERE id = ? AND debit_status = 'echoue'").run(id);
     db_.log(db, `Virement reçu pour le relevé ${bill.ref} (${bill.total_cents / 100} €).`);
     return { ok: true, message: `Relevé ${bill.ref} marqué payé.` };
   });
+  route('POST', '/api/me/sepa-setup', async ({ user }) => {
+    need(user, 'client');
+    if (!stripeReady) throw new HttpError(503, 'Prélèvement indisponible pour le moment.');
+    try { return { checkout_url: (await stripePay.sepaSetup({ db, user, appUrl })).url }; }
+    catch (e) { db_.log(db, `MANDAT SEPA IMPOSSIBLE (${user.email}) : ${String(e.message).slice(0, 300)}`); throw new HttpError(502, 'Prélèvement indisponible. Réessayez dans un instant.'); }
+  });
+  const activateMandate = async (sess) => {
+    const uid = Number(sess.metadata && sess.metadata.sepa_user);
+    const u = uid && db.prepare("SELECT id, email, name, stripe_customer FROM users WHERE id = ? AND role = 'client'").get(uid);
+    if (!u || (sess.customer && u.stripe_customer && sess.customer !== u.stripe_customer)) return;
+    const r = await stripePay.sepaSetupResult(typeof sess.setup_intent === 'string' ? sess.setup_intent : sess.setup_intent?.id);
+    if (r.status !== 'succeeded' || !r.paymentMethod) return;
+    db.prepare("UPDATE users SET billing = 'prelevement', sepa_pm = ?, sepa_mandate = ?, sepa_last4 = ? WHERE id = ?").run(r.paymentMethod, r.mandate, r.last4, u.id);
+    let n = 0;
+    for (const b of db.prepare("SELECT id FROM bookings WHERE client_id = ? AND paid = 0 AND status IN ('en_attente', 'proposee', 'attribuee') AND payment_status IN ('en_attente_paiement', 'paiement_echoue')").all(u.id)) {
+      db.prepare("UPDATE bookings SET payment_status = 'prelevement' WHERE id = ?").run(b.id); engine.assign(db, b.id); n++;
+    }
+    db_.log(db, `Mandat SEPA actif pour ${u.name} (IBAN …${r.last4 || '?'}) : ${n} passage(s) confirmé(s).`);
+    mailer.send(u.email, 'Prélèvement Proprigo activé', 'Prélèvement activé', [`Bonjour ${u.name.split(' ')[0]},`, `Votre autorisation de prélèvement est enregistrée (IBAN se terminant par ${r.last4 || '…'}).`,
+      `${n ? `${n} passage(s) sont confirmés. ` : ''}En fin de mois, vous recevez le relevé avec une facture par passage, puis le montant est prélevé quelques jours plus tard.`], { label: 'Voir mes passages', path: '/#/mes-reservations' });
+  };
   route('GET', '/api/transfer-bills', ({ user }) => {
     need(user, 'client');
-    return db.prepare('SELECT id, month, total_cents, issued_at, due_date, paid_at, ref FROM transfer_bills WHERE client_id = ? ORDER BY issued_at DESC').all(user.id).map((b) => ({ ...b, total: b.total_cents / 100 }));
+    return db.prepare('SELECT id, month, total_cents, issued_at, due_date, paid_at, ref, debit_status FROM transfer_bills WHERE client_id = ? ORDER BY issued_at DESC').all(user.id).map((b) => ({ ...b, total: b.total_cents / 100 }));
   });
   route('GET', '/api/transfer-bills/:id', ({ user, id }) => {
     need(user);
@@ -788,27 +851,32 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const accept = body.accept === true;
     const name = str(body.name, 80); const message = str(body.message, 1000);
     if (accept && name.length < 3) throw new HttpError(400, 'Écrivez votre prénom et votre nom pour accepter le devis.');
-    if (accept && body.pay === 'virement' && !o.allowTransfer) throw new HttpError(400, 'Le paiement par virement n\'est pas proposé pour ce devis.');
+    if (accept && ['virement', 'prelevement'].includes(body.pay) && !o.allowTransfer) throw new HttpError(400, 'Le paiement en fin de mois n\'est pas proposé pour ce devis.');
     if (!accept && !message) throw new HttpError(400, 'Dites-nous ce qui ne convient pas, nous vous faisons une autre proposition.');
     db.prepare('UPDATE quote_requests SET status = ?, answered_at = ?, answer_name = ?, answer_message = ? WHERE id = ?').run(accept ? 'accepte' : 'refuse', now().toISOString(), name || null, message || null, q.id);
     if (accept) {
       // le client choisit lui-même l'adresse et les dates : passages créés, espace ouvert, paiement proposé tout de suite
       let plan;
-      try { plan = planQuote({ ...q, status: 'accepte' }, { ...body, billing: body.pay === 'virement' ? 'virement' : 'carte' }, { fromClient: true, password: body.password || '' }); }
+      try { plan = planQuote({ ...q, status: 'accepte' }, { ...body, billing: body.pay === 'prelevement' ? 'prelevement' : 'carte' }, { fromClient: true, password: body.password || '' }); }
       catch (e) { db.prepare("UPDATE quote_requests SET status = 'envoye', answered_at = NULL, answer_name = NULL, answer_message = NULL WHERE id = ?").run(q.id); throw e; }
       for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").all()) {
         mailer.send(a.email, `Devis ${q.offer_number} accepté : ${q.company}`, 'Devis accepté 🎉', [`${q.company} (${q.name}, ${q.email}${q.phone ? `, ${q.phone}` : ''})`, `Bon pour accord signé en ligne par ${name}.`,
-          `${plan.ids.length} passage(s) créé(s) à partir du ${plan.dates[0]}, ${plan.transfer ? 'paiement par virement en fin de mois' : 'paiement par carte'}.`, ...(message ? [`Message : ${message}`] : [])], { label: 'Voir les réservations', path: '/#/admin' });
+          `${plan.ids.length} passage(s) créé(s) à partir du ${plan.dates[0]}, ${plan.needsMandate || plan.transfer ? 'prélèvement SEPA en fin de mois (mandat signé sur Stripe)' : 'paiement par carte'}.`, ...(message ? [`Message : ${message}`] : [])], { label: 'Voir les réservations', path: '/#/admin' });
       }
       let checkoutUrl = null;
-      if (!plan.transfer && stripeReady) {
+      if (plan.needsMandate && stripeReady) {
+        // prélèvement choisi : le client signe le mandat SEPA sur la page Stripe ; ses passages sont confirmés ensuite
+        try { checkoutUrl = (await stripePay.sepaSetup({ db, user: { id: plan.clientId, email: q.email, name: q.company }, appUrl })).url; }
+        catch (e) { db_.log(db, `MANDAT SEPA IMPOSSIBLE (devis ${q.offer_number}) : ${String(e.message).slice(0, 300)}`); }
+      } else if (!plan.transfer && stripeReady) {
         const soon = addDays(pricing.todayParis(now()), 31);
         const due = db.prepare(`SELECT id FROM bookings WHERE id IN (${plan.ids.join(',')}) AND date <= ? ORDER BY date`).all(soon).map((r) => r.id);
         try { checkoutUrl = (await stripePay.checkout({ db, ids: due.length ? due : [plan.ids[0]], clientId: plan.clientId, email: q.email, appUrl })).url; }
         catch (e) { db_.log(db, `PAIEMENT DU DEVIS ${q.offer_number} IMPOSSIBLE : ${String(e.message).slice(0, 300)}`); }
       }
       return { data: { ok: true, checkout_url: checkoutUrl, next: '/#/mes-reservations',
-        message: plan.transfer ? 'Merci ! Vos passages sont réservés. Vous recevrez un relevé à régler par virement en fin de mois.' : checkoutUrl ? 'Merci ! Dernière étape : le paiement par carte.' : 'Merci ! Vos passages sont réservés. Réglez-les par carte dans votre espace.' },
+        message: plan.needsMandate ? (checkoutUrl ? 'Merci ! Dernière étape : l\'autorisation de prélèvement (IBAN) sur la page sécurisée Stripe.' : 'Merci ! Vos passages sont réservés. Autorisez le prélèvement depuis votre espace.')
+          : plan.transfer ? 'Merci ! Vos passages sont réservés. Le relevé sera prélevé en fin de mois.' : checkoutUrl ? 'Merci ! Dernière étape : le paiement par carte.' : 'Merci ! Vos passages sont réservés. Réglez-les par carte dans votre espace.' },
         headers: { 'Set-Cookie': login(null, plan.clientId) } };
     }
     db_.log(db, `Devis ${q.offer_number} ${accept ? `accepté par ${name}` : 'refusé'} (${q.company}).`);
@@ -965,8 +1033,12 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   // entreprises payées par virement : relevé mensuel des factures
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'billing')) db.exec('ALTER TABLE users ADD COLUMN billing TEXT');
   if (!db.prepare('PRAGMA table_info(bookings)').all().some((c) => c.name === 'bill_id')) db.exec('ALTER TABLE bookings ADD COLUMN bill_id INTEGER');
+  for (const c of ['stripe_customer', 'sepa_pm', 'sepa_mandate', 'sepa_last4']) if (!db.prepare('PRAGMA table_info(users)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} TEXT`);
   db.exec(`CREATE TABLE IF NOT EXISTS transfer_bills (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL, month TEXT NOT NULL, total_cents INTEGER NOT NULL,
     issued_at TEXT NOT NULL, due_date TEXT NOT NULL, paid_at TEXT, ref TEXT NOT NULL UNIQUE)`);
+  for (const c of ['stripe_pi', 'debit_status']) if (!db.prepare('PRAGMA table_info(transfer_bills)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE transfer_bills ADD COLUMN ${c} TEXT`);
+  // paiement en fin de mois : 'virement' (le client vire) ou 'prelevement' (mandat SEPA actif chez Stripe)
+  const laterPay = (u) => (u && u.billing === 'virement' ? 'virement' : u && u.billing === 'prelevement' && (u.sepa_ready || u.sepa_pm) ? 'prelevement' : null);
   db.exec(`CREATE TABLE IF NOT EXISTS invoices (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('facture','avoir')), year INTEGER NOT NULL, seq INTEGER NOT NULL,
     number TEXT NOT NULL UNIQUE, booking_id INTEGER NOT NULL, client_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, tva_rate REAL NOT NULL,
     ref_invoice TEXT, refund_key TEXT UNIQUE, issued_at TEXT NOT NULL, UNIQUE(kind, year, seq))`);
@@ -1257,7 +1329,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       const discount = Math.min(creditOf(user.id), qk0.total);
       const qk = { ...qk0, total: Math.round((qk0.total - discount) * 100) / 100 };
       const r = db.prepare(`INSERT INTO bookings (client_id, service, size, hours, cp, address, date, time, urgent, kit, total, zone, paid, payment_status, series_id, checklist, photo_consent, home_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${user.billing === 'virement' ? 'virement' : stripeReady ? 'en_attente_paiement' : 'simule'}', ?, ?, ?, ?)`).run(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '${laterPay(user) || (stripeReady ? 'en_attente_paiement' : 'simule')}', ?, ?, ?, ?)`).run(
         user.id, q.service, q.size, q.hours, body.cp, address, date, time, k === 0 && body.urgent ? 1 : 0, body.kit ? 1 : 0, qk.total, q.zone, seriesId, tasks, consent, home ? home.id : null);
       const id = Number(r.lastInsertRowid);
       if (pastWorker(user.id, body.want_worker_id)) db.prepare('UPDATE bookings SET want_worker_id = ? WHERE id = ?').run(Number(body.want_worker_id), id);
@@ -1267,13 +1339,13 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       if (stripeReady && qk.total === 0) db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye' WHERE id = ?").run(id);
       ids.push(id);
       db_.log(db, `Réservation n° ${id} créée, paiement ${stripeReady ? 'en attente' : 'simulé'} : ${qk.total} €, ${body.cp}, ${date} ${time}.`);
-      if ((!stripeReady && !production) || user.billing === 'virement') engine.assign(db, id); // démonstration, ou entreprise payée par virement
+      if ((!stripeReady && !production) || laterPay(user)) engine.assign(db, id); // démonstration, ou entreprise payée en fin de mois
     }
-    if (user.billing === 'virement') {
+    if (laterPay(user)) {
       const f = bookingView(db.prepare('SELECT * FROM bookings WHERE id = ?').get(ids[0]));
-      notifyTeamNewBooking(ids, { paidBy: 'virement en fin de mois (entreprise)' });
+      notifyTeamNewBooking(ids, { paidBy: laterPay(user) === 'prelevement' ? 'prélèvement SEPA en fin de mois (entreprise)' : 'virement en fin de mois (entreprise)' });
       mailer.send(user.email, `Réservation confirmée : ${fr(f.date)} à ${f.time}`, 'Votre ménage est réservé', [`${fr(f.date)} à ${f.time}, ${f.address} (${f.cp}).`,
-        `Prix : ${f.total} €${ids.length > 1 ? `, puis ${ids.length - 1} autre(s) passage(s)` : ''}. Paiement par virement : vous recevez une facture récapitulative en fin de mois.`], { label: 'Suivre ma réservation', path: '/#/mes-reservations' });
+        `Prix : ${f.total} €${ids.length > 1 ? `, puis ${ids.length - 1} autre(s) passage(s)` : ''}. ${laterPay(user) === 'prelevement' ? 'Paiement par prélèvement SEPA : relevé et prélèvement en fin de mois.' : 'Paiement par virement : vous recevez une facture récapitulative en fin de mois.'}`], { label: 'Suivre ma réservation', path: '/#/mes-reservations' });
       return { status: 201, data: { ...f, created: ids.length, paidByTransfer: true } };
     }
     if (stripeReady) {
@@ -3497,6 +3569,28 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
             if (!alreadyPaid) afterPaid(ids);
             await stripePay.expireOtherSessions(db, ids, sess.id);
             await reconcileDuplicateIntents(ids);
+          }
+        }
+        // Prélèvement SEPA : mandat signé, puis prélèvement des relevés de fin de mois
+        if (event.type === 'checkout.session.completed' && event.data.object.mode === 'setup' && event.data.object.metadata?.sepa_user) {
+          await activateMandate(event.data.object);
+        }
+        if (['payment_intent.succeeded', 'payment_intent.payment_failed'].includes(event.type) && event.data.object?.metadata?.bill_id) {
+          const pi = event.data.object;
+          const bill = db.prepare('SELECT * FROM transfer_bills WHERE id = ? AND stripe_pi = ?').get(Number(pi.metadata.bill_id), pi.id);
+          if (bill && !bill.paid_at && event.type === 'payment_intent.succeeded' && pi.amount_received === bill.total_cents) {
+            db.prepare("UPDATE transfer_bills SET paid_at = ?, debit_status = 'paye' WHERE id = ?").run(now().toISOString(), bill.id);
+            db.prepare("UPDATE bookings SET paid = 1, payment_status = 'paye_prelevement' WHERE bill_id = ?").run(bill.id);
+            db_.log(db, `Prélèvement reçu pour le relevé ${bill.ref} (${bill.total_cents / 100} €).`);
+          }
+          if (bill && !bill.paid_at && event.type === 'payment_intent.payment_failed') {
+            db.prepare("UPDATE transfer_bills SET debit_status = 'echoue' WHERE id = ?").run(bill.id);
+            const c = db.prepare('SELECT email, name FROM users WHERE id = ?').get(bill.client_id);
+            db_.log(db, `PRÉLÈVEMENT REJETÉ pour le relevé ${bill.ref} (${c ? c.name : '?'}) : ${String(pi.last_payment_error?.message || '').slice(0, 200)}`);
+            for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").all()) {
+              mailer.send(a.email, `Prélèvement rejeté : ${bill.ref}`, 'Prélèvement rejeté', [`${c ? c.name : 'Le client'} : le prélèvement de ${(bill.total_cents / 100).toFixed(2).replace('.', ',')} € a été rejeté par sa banque.`, 'Appelez le client, puis relancez le prélèvement ou demandez un virement depuis Admin → Paiements.'], null);
+            }
+            if (c) mailer.send(c.email, `Prélèvement rejeté : ${bill.ref}`, 'Votre prélèvement a été rejeté', [`Bonjour ${c.name.split(' ')[0]},`, `Le prélèvement du relevé ${bill.ref} (${(bill.total_cents / 100).toFixed(2).replace('.', ',')} €) a été rejeté par votre banque.`, 'Vérifiez votre compte ou mettez à jour votre IBAN, puis nous relancerons le prélèvement.'], { label: 'Mettre à jour mon IBAN', path: '/#/prelevement' });
           }
         }
         // Paiement en deux temps : montant bloqué, pas encore encaissé.
