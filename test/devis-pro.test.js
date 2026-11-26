@@ -32,22 +32,22 @@ test('devis : envoi, page publique, acceptation, admin prévenu', async () => {
     assert.equal(pub.offer.perVisitTTC, 72);
     assert.equal(pub.legal.raisonSociale, 'PROPRIGO');
     assert.equal((await j('/api/devis/answer', 'POST', { t, accept: true, name: '' })).status, 400, 'un nom est demandé');
-    const yes = await j('/api/devis/answer', 'POST', { t, accept: true, name: 'Paul Martin' });
-    assert.equal(yes.status, 200);
-    assert.equal((await j('/api/devis/answer', 'POST', { t, accept: true, name: 'Paul Martin' })).status, 409, 'pas deux fois');
+    const accept = { t, accept: true, name: 'Paul Martin', address: '12 rue de Paradis', start: '2030-01-07', time: '09:00', count: 4 };
+    assert.equal((await j('/api/devis/answer', 'POST', { ...accept, password: 'court' })).status, 400, 'mot de passe de 10 caractères');
+    assert.equal((await j('/api/devis/answer', 'POST', { ...accept, password: 'motdepasse-solide', pay: 'virement' })).status, 400, 'virement non proposé');
+    const yesRes = await fetch(base + '/api/devis/answer', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ ...accept, password: 'motdepasse-solide' }) });
+    assert.equal(yesRes.status, 200, await yesRes.clone().text());
+    const session = yesRes.headers.get('set-cookie').split(';')[0];
+    assert.ok(session.length > 10, 'le client est connecté à son nouvel espace');
+    const mine = await (await fetch(base + '/api/bookings/mine', { headers: { Cookie: session } })).json();
+    assert.deepEqual(mine.map((b) => b.date).sort(), ['2030-01-07', '2030-01-10', '2030-01-14', '2030-01-17'], '2 fois par semaine');
+    assert.ok(mine.every((b) => b.total === 72 && b.service === 'bureau'));
+    const relog = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ email: 'paul@exemple.fr', password: 'motdepasse-solide' }) });
+    assert.equal(relog.status, 200, 'il se reconnecte avec le mot de passe choisi');
+    assert.equal((await j('/api/devis/answer', 'POST', { ...accept, password: 'motdepasse-solide' })).status, 409, 'pas deux fois');
     const after = (await j('/api/admin/quote-requests', 'GET', null, admin)).data.find((x) => x.id === q.id);
-    assert.equal(after.status, 'accepte');
+    assert.equal(after.status, 'planifie');
     assert.equal(after.answer_name, 'Paul Martin');
     assert.equal((await j(`/api/admin/quote-requests/${q.id}/offer`, 'POST', { label: 'X', hours: 2, rate: 40, frequency: 'once' }, admin)).status, 409, 'devis accepté : plus modifiable');
-    // planification : compte client créé, passages à payer, e-mail envoyé
-    assert.equal((await j(`/api/admin/quote-requests/${q.id}/plan`, 'POST', { address: '1', time: '09:00', start: '2030-01-07', count: 4 }, admin)).status, 400);
-    const plan = await j(`/api/admin/quote-requests/${q.id}/plan`, 'POST', { address: '12 rue de Paradis', time: '09:00', start: '2030-01-07', count: 4 }, admin);
-    assert.equal(plan.status, 200, JSON.stringify(plan.data));
-    assert.equal(plan.data.ids.length, 4);
-    const rows = app.db.prepare(`SELECT b.date, b.total, b.service, u.email FROM bookings b JOIN users u ON u.id = b.client_id WHERE b.id IN (${plan.data.ids.join(',')}) ORDER BY b.date`).all();
-    assert.deepEqual(rows.map((r) => r.date), ['2030-01-07', '2030-01-10', '2030-01-14', '2030-01-17'], '2 fois par semaine');
-    assert.ok(rows.every((r) => r.total === 72 && r.service === 'bureau' && r.email === 'paul@exemple.fr'));
-    assert.equal(app.db.prepare("SELECT COUNT(*) AS n FROM resets r JOIN users u ON u.id = r.user_id WHERE u.email = 'paul@exemple.fr'").get().n, 1, 'lien pour créer le mot de passe');
-    assert.equal((await j(`/api/admin/quote-requests/${q.id}/plan`, 'POST', { address: '12 rue de Paradis', time: '09:00', start: '2030-01-07', count: 4 }, admin)).status, 409, 'pas deux fois');
   } finally { app.server.close(); }
 });

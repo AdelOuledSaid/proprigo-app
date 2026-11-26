@@ -2299,6 +2299,7 @@
           <label>${kind === 'syndic' ? 'Surface des parties communes (m², environ)' : 'Nombre de logements par mois (environ)'}<input type="number" name="surface" min="0" max="100000"></label>
           <label style="grid-column:1/-1">Fréquence souhaitée<input name="frequency" maxlength="60" placeholder="${kind === 'syndic' ? 'Ex. 2 passages par semaine' : 'Ex. 4 fins de bail par mois'}"></label>
           <label style="grid-column:1/-1">Précisions (facultatif)<textarea name="message" rows="3" maxlength="1000" placeholder="${kind === 'syndic' ? 'Nombre d\'étages, ascenseur, vitres, local poubelles…' : 'Surfaces habituelles, remise des clés, délais avant état des lieux…'}"></textarea></label>
+          <ol class="devis-steps" style="grid-column:1/-1"><li><b>Vous recevez votre devis par e-mail</b>, sous 24 h ouvrées.</li><li><b>Vous l'acceptez en ligne</b> et choisissez l'adresse et la date du premier passage.</li><li><b>Votre espace entreprise est créé</b> et vous payez par carte (ou par virement si nous l'avons convenu). Pas besoin de créer un compte maintenant.</li></ol>
           <button class="btn primary" style="grid-column:1/-1">Envoyer ma demande</button>
         </form>
         <p class="msg" id="devisDone"></p>
@@ -2447,6 +2448,7 @@
           <label>Surface approximative (m²)<input type="number" name="surface" min="0" max="100000"></label>
           <label>Fréquence souhaitée<input name="frequency" maxlength="60" placeholder="Ex. 3 fois par semaine, 4 fins de bail par mois"></label>
           <label style="grid-column:1/-1">Précisions (facultatif)<textarea name="message" rows="3" maxlength="1000"></textarea></label>
+          <ol class="devis-steps" style="grid-column:1/-1"><li><b>Vous recevez votre devis par e-mail</b>, sous 24 h ouvrées.</li><li><b>Vous l'acceptez en ligne</b> et choisissez l'adresse et la date du premier passage.</li><li><b>Votre espace entreprise est créé</b> et vous payez par carte (ou par virement si nous l'avons convenu). Pas besoin de créer un compte maintenant.</li></ol>
           <button class="btn primary" style="grid-column:1/-1">Envoyer ma demande</button>
         </form>
         <p class="msg" id="devisDone"></p>
@@ -2890,6 +2892,7 @@
         ${q.offer ? `<p class="small" style="margin:6px 0 0">Proposé : ${esc(q.offer.label)} · ${String(q.offer.hours).replace('.', ',')} h × ${money2(q.offer.rate)} HT = <b>${money2(q.offer.perVisitHT)} HT</b> par passage · ${esc(q.offer.frequencyLabel)}${q.offer.perMonthHT ? ` · ≈ ${money2(q.offer.perMonthHT)} HT / mois` : ''}</p>` : ''}
         ${q.answer_message ? `<p class="small" style="margin:4px 0 0">Réponse du client : « ${esc(q.answer_message)} »</p>` : ''}
         ${q.status === 'accepte' ? '<p class="small" style="margin:6px 0 0"><b>Prochaine étape :</b> appelez le client pour fixer l\'adresse, l\'heure et le premier passage, puis planifiez. Il reçoit les dates par e-mail et paie dans son espace.</p>' : ''}
+        ${q.status === 'envoye' ? '<p class="small muted" style="margin:6px 0 0">En acceptant, le client choisit lui-même l\'adresse et les dates, crée son espace et paie. Vous n\'avez rien à faire.</p>' : ''}
         ${q.status === 'planifie' ? '<p class="small" style="margin:6px 0 0">Passages visibles dans « Réservations ». Le client les paie par carte dans son espace ; l\'intervenante est choisie après le paiement.</p>' : ''}
         <div class="q-actions">
           ${!['accepte', 'planifie'].includes(q.status) ? `<button class="btn ${q.offer ? 'ghost' : 'primary'}" data-qmake="${q.id}">${q.offer ? '✏️ Modifier et renvoyer' : '📝 Faire le devis'}</button>` : ''}
@@ -2916,6 +2919,7 @@
             <label>Fréquence<select name="frequency">${QFREQ.map(([k, l]) => `<option value="${k}"${(q.offer ? q.offer.frequency : guessFreq(q.frequency)) === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
             <label>Début souhaité (facultatif)<input name="start" type="date" value="${q.offer && q.offer.start ? q.offer.start : ''}"></label>
           </div>
+          <label class="check"><input type="checkbox" name="allowTransfer"${q.offer && q.offer.allowTransfer ? ' checked' : ''}> Proposer aussi le paiement par virement en fin de mois (entreprises connues)</label>
           <label>Message pour le client (facultatif)<textarea name="message" rows="3" maxlength="1000" placeholder="Ex. : produits et matériel fournis, passage le matin avant l'ouverture.">${q.offer && q.offer.message ? esc(q.offer.message) : ''}</textarea></label>
           <p class="q-total" data-qtotal></p>
           <button class="btn primary">📨 Envoyer le devis par e-mail</button>
@@ -2938,7 +2942,7 @@
       f.onsubmit = async (e) => {
         e.preventDefault();
         const m = f.querySelector('[data-qmsg]');
-        try { const r = await api('POST', `/api/admin/quote-requests/${f.dataset.qform}/offer`, formData(f)); toast(r.message); openQuotes(); }
+        try { const r = await api('POST', `/api/admin/quote-requests/${f.dataset.qform}/offer`, { ...formData(f), allowTransfer: f.allowTransfer.checked }); toast(r.message); openQuotes(); }
         catch (err) { m.className = 'msg err'; m.textContent = err.message; }
       };
     });
@@ -2977,9 +2981,23 @@
         ${d.status === 'accepte' ? `<p class="msg ok">✅ Devis accepté par ${esc(d.answerName)} le ${fmt(d.answeredAt)}. Merci ! Nous vous appelons pour fixer les dates.</p>`
           : d.status === 'refuse' ? '<p class="msg">Vous avez refusé ce devis. Nous revenons vers vous avec une nouvelle proposition.</p>'
           : d.status !== 'envoye' ? '<p class="msg">Ce devis n\'est plus ouvert. Écrivez-nous à contact@proprigo.fr.</p>'
-          : `<form id="devisYes" class="stack"><h2>Bon pour accord</h2><label>Votre prénom et nom<input name="name" required minlength="3" maxlength="80" autocomplete="name"></label>
-              <label class="check"><input type="checkbox" required> J'accepte ce devis et les conditions ci-dessus.</label>
-              <button class="btn primary">✅ J'accepte le devis</button><p class="msg" id="devisMsg"></p></form>
+          : `<form id="devisYes" class="stack"><h2>J'accepte ce devis</h2>
+              <ol class="devis-steps"><li>Vous choisissez l'adresse et le premier passage</li><li>${d.hasAccount ? 'Vos passages s\'ajoutent à votre espace Proprigo' : 'Votre espace entreprise est créé avec un mot de passe'}</li><li>${o.allowTransfer ? 'Vous payez par carte maintenant, ou par virement en fin de mois' : 'Vous payez par carte, en toute sécurité (Stripe)'}</li></ol>
+              <label>Adresse des passages<input name="address" required minlength="5" maxlength="200" placeholder="Numéro, rue, étage, code d'accès" autocomplete="street-address"></label>
+              <div class="grid2">
+                <label>Premier passage<input name="start" type="date" required min="${todayParis()}" value="${o.start && o.start >= todayParis() ? o.start : addDaysFront(todayParis(), 2)}"></label>
+                <label>Heure d'arrivée<input name="time" type="time" required value="09:00"></label>
+                ${o.frequency === 'once' ? '' : `<label>Nombre de passages réservés<input name="count" type="number" min="1" max="26" required value="${{ weekly: 4, twice: 8, biweekly: 2, monthly: 3 }[o.frequency] || 4}"></label>`}
+              </div>
+              ${o.frequency === 'once' ? '' : `<p class="small muted" style="margin:0">${esc(o.frequencyLabel)} : les dates suivantes se calculent à partir du premier passage. Vous pourrez en ajouter d'autres ensuite.</p>`}
+              ${o.allowTransfer ? `<fieldset class="stack"><legend>Paiement</legend>
+                <label class="check"><input type="radio" name="pay" value="carte" checked> Par carte maintenant${o.frequency === 'once' ? '' : ' (les passages du mois à venir)'}</label>
+                <label class="check"><input type="radio" name="pay" value="virement"> Par virement : relevé en fin de mois, à régler sous 30 jours</label></fieldset>` : ''}
+              ${d.hasAccount ? '<p class="small muted" style="margin:0">Un espace existe déjà avec cette adresse e-mail : vos passages y seront ajoutés.</p>'
+                : `<label>Mot de passe de votre espace (10 caractères minimum)<input name="password" type="password" required minlength="10" autocomplete="new-password"></label>`}
+              <label>Votre prénom et nom (signature)<input name="name" required minlength="3" maxlength="80" autocomplete="name"></label>
+              <label class="check"><input type="checkbox" required> J'accepte ce devis et les conditions ci-dessus (bon pour accord).</label>
+              <button class="btn primary">✅ J'accepte ${o.allowTransfer ? 'et je continue' : d.cardPayment ? 'et je paie' : 'le devis'}</button><p class="msg" id="devisMsg"></p></form>
              <details class="faq"><summary>Une question ou un changement ?</summary><form id="devisNo" class="stack"><label>Votre message<textarea name="message" rows="3" maxlength="1000" required placeholder="Ex. : nous préférons un passage le samedi."></textarea></label><button class="btn ghost">Envoyer ma réponse</button></form></details>`}
         <button class="btn ghost" type="button" id="devisPrint">🖨️ Imprimer ou enregistrer en PDF</button>
       </div>
@@ -2991,7 +3009,17 @@
       catch (err) { msgEl.className = 'msg err'; msgEl.textContent = err.message; }
     };
     const yes = document.getElementById('devisYes');
-    if (yes) yes.onsubmit = (e) => { e.preventDefault(); send({ accept: true, name: yes.name.value }, document.getElementById('devisMsg')); };
+    if (yes) yes.onsubmit = async (e) => {
+      e.preventDefault();
+      const m = document.getElementById('devisMsg'); const btn = yes.querySelector('button'); btn.disabled = true;
+      try {
+        const f = formData(yes);
+        const r = await api('POST', '/api/devis/answer', { t, accept: true, ...f });
+        toast(r.message);
+        if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
+        location.hash = r.next || '#/mes-reservations'; location.reload(); // l'espace est ouvert : on recharge en étant connecté
+      } catch (err) { m.className = 'msg err'; m.textContent = err.message; btn.disabled = false; }
+    };
     const no = document.getElementById('devisNo');
     if (no) no.onsubmit = (e) => { e.preventDefault(); send({ accept: false, message: no.message.value }, document.getElementById('devisMsg') || no); };
   };

@@ -126,3 +126,11 @@
 - **Virement pour les entreprises** : un client passe en « virement en fin de mois » (Admin → Paiements, ou au moment de planifier un devis). Ses passages sont confirmés sans carte. Début de mois : « 🧾 Facturer octobre » crée une facture par passage et envoie un relevé (référence PROPRIGO-R0001, IBAN, échéance 30 jours). « 💶 Virement reçu : marquer payé » à réception. Le client voit ses relevés dans « Mes réservations » et peut les imprimer en PDF.
 - **Intervenant au masculin** : choix Femme / Homme à l'inscription, à la création par le responsable et dans la liste « Équipe ». Les textes côté client s'accordent (« Intervenant vérifié », « votre intervenant préféré », « est arrivé »…).
 - **Version anglaise pour les clients** : bouton « 🇬🇧 English » dans le menu pour les visiteurs et les clients (mémorisé). Accueil, pages pros, réservation, mes réservations, logements, compte, aide et dates traduits. L'admin reste en français ; e-mails, CGV et mentions légales restent en français.
+
+## v1.12.1 — devis : le client fait tout seul, de l'accord au paiement
+
+- En acceptant le devis, le client indique l'adresse, le premier passage, l'heure (et le nombre de passages si c'est régulier), choisit le mot de passe de son espace et signe. Les passages sont créés, il est connecté à son espace, puis envoyé directement au paiement par carte (passages du mois à venir).
+- Si vous avez coché « Proposer aussi le paiement par virement » dans le devis, il peut choisir le virement : relevé en fin de mois, rien à payer tout de suite.
+- S'il a déjà un espace avec cette adresse e-mail, les passages y sont ajoutés.
+- Les formulaires de demande de devis expliquent les 3 étapes ; pas besoin de créer un compte avant.
+- Vous êtes prévenu par e-mail ; le devis passe directement à « 📅 N passages planifiés ».

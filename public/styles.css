@@ -1027,3 +1027,5 @@ details.history[open] > summary .muted::after { content: ' ▴'; }
 details.history[open] > summary { margin-bottom: 12px; }
 .gender-pick { display: inline-flex; gap: 8px; align-items: center; margin: 4px 0; } .gender-pick select { width: auto; min-height: 36px; padding: 4px 10px; }
 .lang-toggle { background: none; border: 1.5px solid var(--line); border-radius: 999px; padding: 6px 12px; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.devis-steps { margin: 0; padding-left: 22px; display: grid; gap: 4px; color: var(--muted); }
+.devis-answer .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } @media (max-width: 560px) { .devis-answer .grid2 { grid-template-columns: 1fr; } }

@@ -560,7 +560,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     needStaff(user);
     const q = db.prepare('SELECT * FROM quote_requests WHERE id = ?').get(id);
     if (!q) throw new HttpError(404, 'Demande introuvable.');
-    if (q.status === 'accepte') throw new HttpError(409, 'Ce devis est déjà accepté.');
+    if (['accepte', 'planifie'].includes(q.status)) throw new HttpError(409, 'Ce devis est déjà accepté.');
     const label = str(body.label, 120); const message = str(body.message, 1000); const start = str(body.start, 10);
     const hours = Math.round(Number(body.hours) * 4) / 4; const rate = r2(Number(body.rate));
     const frequency = Object.hasOwn(QUOTE_FREQ, body.frequency) ? body.frequency : null;
@@ -578,7 +578,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const token = q.offer_token || crypto.randomBytes(24).toString('hex');
     const sentAt = now().toISOString();
     db.prepare("UPDATE quote_requests SET offer_json = ?, offer_number = ?, offer_token = ?, offer_sent_at = ?, status = 'envoye', answered_at = NULL, answer_name = NULL, answer_message = NULL WHERE id = ?")
-      .run(JSON.stringify({ label, hours, rate, frequency, start: start || null, message: message || null }), number, token, sentAt, id);
+      .run(JSON.stringify({ label, hours, rate, frequency, start: start || null, message: message || null, allowTransfer: body.allowTransfer === true || body.allowTransfer === 'on' }), number, token, sentAt, id);
     const fresh = db.prepare('SELECT * FROM quote_requests WHERE id = ?').get(id);
     const o = offerOf(fresh);
     const money = (n) => `${n.toFixed(2).replace('.', ',')} €`;
@@ -588,7 +588,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       `${String(hours).replace('.', ',')} h par passage, ${o.frequencyLabel.toLowerCase()} : ${money(o.perVisitHT)} HT par passage${o.vatRate ? ` (${money(o.perVisitTTC)} TTC)` : ''}.`,
       ...(o.perMonthHT ? [`Soit environ ${money(o.perMonthHT)} HT par mois.`] : []),
       ...(message ? [message] : []),
-      `Ce devis est valable ${QUOTE_VALID_DAYS} jours. Vous pouvez le consulter, l'imprimer et l'accepter en ligne avec le bouton ci-dessous.`,
+      `Ce devis est valable ${QUOTE_VALID_DAYS} jours. Avec le bouton ci-dessous : vous le consultez, vous l'acceptez, vous choisissez l'adresse et la date du premier passage, et vous réglez ${o.allowTransfer ? 'par carte ou par virement' : 'par carte'}. Votre espace Proprigo est créé au passage.`,
     ], { label: 'Voir et accepter le devis', path: `/#/devis?t=${token}` });
     db_.log(db, `Devis ${number} envoyé à ${q.company} (${money(o.perVisitHT)} HT par passage).`);
     return { ok: true, message: `Devis ${number} envoyé à ${q.email}.`, quote: quoteView(fresh) };
@@ -606,11 +606,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     }
     return out;
   };
-  route('POST', '/api/admin/quote-requests/:id/plan', ({ user, id, body }) => {
-    needStaff(user);
-    const q = db.prepare('SELECT * FROM quote_requests WHERE id = ?').get(id);
-    if (!q) throw new HttpError(404, 'Demande introuvable.');
-    if (q.status !== 'accepte') throw new HttpError(409, q.status === 'planifie' ? 'Les passages sont déjà planifiés.' : 'Le devis doit d\'abord être accepté par le client.');
+  const planQuote = (q, body, opts = {}) => {
     const o = offerOf(q);
     const address = str(body.address, 200); const time = str(body.time, 5); const start = str(body.start, 10);
     const count = o.frequency === 'once' ? 1 : Math.round(Number(body.count));
@@ -624,14 +620,19 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     let client = db.prepare("SELECT id, role FROM users WHERE email = ?").get(q.email);
     let welcome = null;
     if (client && client.role !== 'client') throw new HttpError(409, 'Cette adresse e-mail appartient à un compte qui n\'est pas un compte client.');
-    if (!client) {
+    if (!client && opts.password !== undefined && String(opts.password || '').length < 10) throw new HttpError(400, 'Choisissez un mot de passe d\'au moins 10 caractères pour votre espace.');
+    if (!client && opts.password) {
+      const cid = db_.createUser(db, { role: 'client', email: q.email, password: String(opts.password), name: q.name, phone: q.phone || '' });
+      db.prepare("UPDATE users SET email_verified_at = datetime('now') WHERE id = ?").run(cid);
+      client = { id: cid, created: true };
+    } else if (!client) {
       const cid = db_.createUser(db, { role: 'client', email: q.email, password: crypto.randomBytes(24).toString('hex'), name: q.name, phone: q.phone || '' });
       db.prepare("UPDATE users SET email_verified_at = datetime('now') WHERE id = ?").run(cid);
       welcome = crypto.randomBytes(32).toString('hex');
       db.prepare('INSERT INTO resets (token_hash, user_id, expires) VALUES (?, ?, ?)').run(sha(welcome), cid, Date.now() + 7 * 864e5);
       client = { id: cid };
     }
-    const transfer = body.billing === 'virement';
+    const transfer = body.billing === 'virement' && (!opts.fromClient || o.allowTransfer);
     if (transfer) db.prepare("UPDATE users SET billing = 'virement' WHERE id = ?").run(client.id);
     const service = QUOTE_SERVICE[q.kind] || 'menage';
     const tasks = JSON.stringify(checklist.clean([], service));
@@ -643,7 +644,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       ids.push(Number(r.lastInsertRowid));
       if (transfer) engine.assign(db, ids[ids.length - 1]);
     }
-    db.prepare("UPDATE quote_requests SET status = 'planifie', planned_ids = ?, planned_at = ? WHERE id = ?").run(JSON.stringify(ids), now().toISOString(), id);
+    db.prepare("UPDATE quote_requests SET status = 'planifie', planned_ids = ?, planned_at = ? WHERE id = ?").run(JSON.stringify(ids), now().toISOString(), q.id);
     db_.log(db, `Devis ${q.offer_number} planifié : ${ids.length} passage(s) pour ${q.company} (réservations n° ${ids.join(', ')}).`);
     const fmtD = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
     const total = r2(o.perVisitTTC * ids.length);
@@ -652,10 +653,19 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       `Merci pour votre confiance. Voici les passages prévus pour ${q.company}, à ${time}, ${address} :`,
       ...dates.slice(0, 12).map((d) => `• ${fmtD(d)}`), ...(dates.length > 12 ? [`… et ${dates.length - 12} autres passages.`] : []),
       `${o.perVisitTTC.toFixed(2).replace('.', ',')} € par passage, soit ${total.toFixed(2).replace('.', ',')} € pour ces ${ids.length} passage${ids.length > 1 ? 's' : ''}.`,
-      transfer ? 'Paiement par virement : en fin de mois, vous recevez un relevé avec les factures des passages faits, à régler sous 30 jours. Rien à payer maintenant.'
+      ...(opts.fromClient && !transfer && stripeReady ? ['Si le paiement n\'a pas été fait juste après votre accord, réglez par carte dans votre espace Proprigo (bouton « Payer »).'] : []),
+      opts.fromClient && !transfer && stripeReady ? 'Une facture est créée automatiquement après chaque paiement.' : transfer ? 'Paiement par virement : en fin de mois, vous recevez un relevé avec les factures des passages faits, à régler sous 30 jours. Rien à payer maintenant.'
         : stripeReady ? 'Pour confirmer, réglez par carte dans votre espace Proprigo : un passage à la fois, ou tous en une fois. Une facture est créée automatiquement après chaque paiement.' : 'Vous retrouvez ces passages dans votre espace Proprigo.',
       ...(welcome ? ['Nous vous avons créé un espace client avec cette adresse e-mail. Choisissez votre mot de passe avec le bouton ci-dessous (lien valable 7 jours).'] : []),
     ], welcome ? { label: 'Créer mon mot de passe', path: `/#/nouveau-mot-de-passe?t=${welcome}` } : { label: 'Voir et payer mes passages', path: '/#/mes-reservations' });
+    return { ids, clientId: client.id, welcome, transfer, dates, o };
+  };
+  route('POST', '/api/admin/quote-requests/:id/plan', ({ user, id, body }) => {
+    needStaff(user);
+    const q = db.prepare('SELECT * FROM quote_requests WHERE id = ?').get(id);
+    if (!q) throw new HttpError(404, 'Demande introuvable.');
+    if (q.status !== 'accepte') throw new HttpError(409, q.status === 'planifie' ? 'Les passages sont déjà planifiés.' : 'Le devis doit d\'abord être accepté par le client.');
+    const { ids, welcome } = planQuote(q, body);
     return { ok: true, message: `${ids.length} passage${ids.length > 1 ? 's' : ''} planifié${ids.length > 1 ? 's' : ''}. ${q.company} a reçu l'e-mail${welcome ? ' avec la création de son espace' : ''}.`, ids };
   });
   // payer plusieurs passages en une fois (entreprises, séries)
@@ -767,9 +777,10 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   route('GET', '/api/devis', ({ query }) => {
     const q = quoteByToken(query.get('t'));
     return { number: q.offer_number, sentAt: q.offer_sent_at, status: q.status, answeredAt: q.answered_at, answerName: q.answer_name,
-      client: { company: q.company, name: q.name, email: q.email, cp: q.cp, kind: QUOTE_KINDS[q.kind] }, offer: offerOf(q), franchiseTVA, legal: legalInfo() };
+      client: { company: q.company, name: q.name, email: q.email, cp: q.cp, kind: QUOTE_KINDS[q.kind] }, offer: offerOf(q), franchiseTVA, legal: legalInfo(),
+      hasAccount: Boolean(db.prepare("SELECT 1 FROM users WHERE email = ? AND role = 'client'").get(q.email)), cardPayment: stripeReady };
   });
-  route('POST', '/api/devis/answer', ({ body }) => {
+  route('POST', '/api/devis/answer', async ({ body }) => {
     const q = quoteByToken(body.t);
     if (q.status !== 'envoye') throw new HttpError(409, q.status === 'accepte' ? 'Ce devis est déjà accepté. Merci !' : 'Ce devis n\'est plus ouvert. Contactez-nous pour une nouvelle proposition.');
     const o = offerOf(q);
@@ -777,8 +788,29 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     const accept = body.accept === true;
     const name = str(body.name, 80); const message = str(body.message, 1000);
     if (accept && name.length < 3) throw new HttpError(400, 'Écrivez votre prénom et votre nom pour accepter le devis.');
+    if (accept && body.pay === 'virement' && !o.allowTransfer) throw new HttpError(400, 'Le paiement par virement n\'est pas proposé pour ce devis.');
     if (!accept && !message) throw new HttpError(400, 'Dites-nous ce qui ne convient pas, nous vous faisons une autre proposition.');
     db.prepare('UPDATE quote_requests SET status = ?, answered_at = ?, answer_name = ?, answer_message = ? WHERE id = ?').run(accept ? 'accepte' : 'refuse', now().toISOString(), name || null, message || null, q.id);
+    if (accept) {
+      // le client choisit lui-même l'adresse et les dates : passages créés, espace ouvert, paiement proposé tout de suite
+      let plan;
+      try { plan = planQuote({ ...q, status: 'accepte' }, { ...body, billing: body.pay === 'virement' ? 'virement' : 'carte' }, { fromClient: true, password: body.password || '' }); }
+      catch (e) { db.prepare("UPDATE quote_requests SET status = 'envoye', answered_at = NULL, answer_name = NULL, answer_message = NULL WHERE id = ?").run(q.id); throw e; }
+      for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").all()) {
+        mailer.send(a.email, `Devis ${q.offer_number} accepté : ${q.company}`, 'Devis accepté 🎉', [`${q.company} (${q.name}, ${q.email}${q.phone ? `, ${q.phone}` : ''})`, `Bon pour accord signé en ligne par ${name}.`,
+          `${plan.ids.length} passage(s) créé(s) à partir du ${plan.dates[0]}, ${plan.transfer ? 'paiement par virement en fin de mois' : 'paiement par carte'}.`, ...(message ? [`Message : ${message}`] : [])], { label: 'Voir les réservations', path: '/#/admin' });
+      }
+      let checkoutUrl = null;
+      if (!plan.transfer && stripeReady) {
+        const soon = addDays(pricing.todayParis(now()), 31);
+        const due = db.prepare(`SELECT id FROM bookings WHERE id IN (${plan.ids.join(',')}) AND date <= ? ORDER BY date`).all(soon).map((r) => r.id);
+        try { checkoutUrl = (await stripePay.checkout({ db, ids: due.length ? due : [plan.ids[0]], clientId: plan.clientId, email: q.email, appUrl })).url; }
+        catch (e) { db_.log(db, `PAIEMENT DU DEVIS ${q.offer_number} IMPOSSIBLE : ${String(e.message).slice(0, 300)}`); }
+      }
+      return { data: { ok: true, checkout_url: checkoutUrl, next: '/#/mes-reservations',
+        message: plan.transfer ? 'Merci ! Vos passages sont réservés. Vous recevrez un relevé à régler par virement en fin de mois.' : checkoutUrl ? 'Merci ! Dernière étape : le paiement par carte.' : 'Merci ! Vos passages sont réservés. Réglez-les par carte dans votre espace.' },
+        headers: { 'Set-Cookie': login(null, plan.clientId) } };
+    }
     db_.log(db, `Devis ${q.offer_number} ${accept ? `accepté par ${name}` : 'refusé'} (${q.company}).`);
     for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").all()) {
       mailer.send(a.email, `Devis ${q.offer_number} ${accept ? 'accepté' : 'refusé'} : ${q.company}`, accept ? 'Devis accepté 🎉' : 'Devis refusé',
