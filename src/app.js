@@ -485,12 +485,101 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   });
   route('GET', '/api/admin/quote-requests', ({ user }) => {
     needStaff(user);
-    return db.prepare("SELECT * FROM quote_requests ORDER BY CASE status WHEN 'nouveau' THEN 0 ELSE 1 END, id DESC LIMIT 50").all().map((q) => ({ ...q, kindLabel: QUOTE_KINDS[q.kind] }));
+    return db.prepare("SELECT * FROM quote_requests ORDER BY CASE status WHEN 'nouveau' THEN 0 WHEN 'accepte' THEN 1 WHEN 'refuse' THEN 2 WHEN 'envoye' THEN 3 ELSE 4 END, id DESC LIMIT 50").all().map(quoteView);
   });
   route('POST', '/api/admin/quote-requests/:id/done', ({ user, id }) => {
     needStaff(user);
     db.prepare("UPDATE quote_requests SET status = 'traite' WHERE id = ?").run(id);
-    return { ok: true, message: 'Demande marquée comme traitée.' };
+    return { ok: true, message: 'Demande classée sans suite.' };
+  });
+
+  // ----- devis envoyé au professionnel, accepté en ligne -----
+  const qCols = db.prepare('PRAGMA table_info(quote_requests)').all().map((c) => c.name);
+  for (const [c, t] of [['offer_json', 'TEXT'], ['offer_number', 'TEXT'], ['offer_token', 'TEXT'], ['offer_sent_at', 'TEXT'], ['answered_at', 'TEXT'], ['answer_name', 'TEXT'], ['answer_message', 'TEXT']]) {
+    if (!qCols.includes(c)) db.exec(`ALTER TABLE quote_requests ADD COLUMN ${c} ${t}`);
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS quote_offer_token ON quote_requests(offer_token) WHERE offer_token IS NOT NULL');
+  const QUOTE_FREQ = { once: ['Une seule fois', 0], weekly: ['Chaque semaine', 52 / 12], twice: ['2 fois par semaine', 104 / 12], biweekly: ['Toutes les 2 semaines', 26 / 12], monthly: ['Chaque mois', 1] };
+  const QUOTE_VALID_DAYS = 30;
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const offerOf = (q) => {
+    if (!q.offer_json) return null;
+    const o = JSON.parse(q.offer_json);
+    const vat = franchiseTVA ? 0 : pricing.COSTS.tvaPro;
+    const perVisitHT = r2(o.hours * o.rate);
+    const perMonth = QUOTE_FREQ[o.frequency][1];
+    return { ...o, frequencyLabel: QUOTE_FREQ[o.frequency][0], perVisitHT, vatRate: vat, perVisitVAT: r2(perVisitHT * vat), perVisitTTC: r2(perVisitHT * (1 + vat)),
+      perMonthHT: perMonth ? r2(perVisitHT * perMonth) : null, perMonthTTC: perMonth ? r2(perVisitHT * perMonth * (1 + vat)) : null,
+      validUntil: q.offer_sent_at ? new Date(Date.parse(q.offer_sent_at) + QUOTE_VALID_DAYS * 864e5).toISOString().slice(0, 10) : null };
+  };
+  const quoteView = (q) => ({ ...q, offer_token: undefined, kindLabel: QUOTE_KINDS[q.kind], offer: offerOf(q), link: q.offer_token ? `/#/devis?t=${q.offer_token}` : null });
+  route('POST', '/api/admin/quote-requests/:id/offer', ({ user, id, body }) => {
+    needStaff(user);
+    const q = db.prepare('SELECT * FROM quote_requests WHERE id = ?').get(id);
+    if (!q) throw new HttpError(404, 'Demande introuvable.');
+    if (q.status === 'accepte') throw new HttpError(409, 'Ce devis est déjà accepté.');
+    const label = str(body.label, 120); const message = str(body.message, 1000); const start = str(body.start, 10);
+    const hours = Math.round(Number(body.hours) * 4) / 4; const rate = r2(Number(body.rate));
+    const frequency = Object.hasOwn(QUOTE_FREQ, body.frequency) ? body.frequency : null;
+    if (!label) throw new HttpError(400, 'Décrivez la prestation.');
+    if (!(hours >= 0.5 && hours <= 100)) throw new HttpError(400, 'Nombre d\'heures par passage entre 0,5 et 100.');
+    if (!(rate >= 15 && rate <= 200)) throw new HttpError(400, 'Prix de l\'heure entre 15 € et 200 €.');
+    if (!frequency) throw new HttpError(400, 'Choisissez la fréquence.');
+    if (start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) throw new HttpError(400, 'Date de début invalide.');
+    const year = now().getFullYear();
+    let number = q.offer_number;
+    if (!number) {
+      const n = db.prepare("SELECT COUNT(*) AS n FROM quote_requests WHERE offer_number LIKE ?").get(`D${year}-%`).n + 1;
+      number = `D${year}-${String(n).padStart(4, '0')}`;
+    }
+    const token = q.offer_token || crypto.randomBytes(24).toString('hex');
+    const sentAt = now().toISOString();
+    db.prepare("UPDATE quote_requests SET offer_json = ?, offer_number = ?, offer_token = ?, offer_sent_at = ?, status = 'envoye', answered_at = NULL, answer_name = NULL, answer_message = NULL WHERE id = ?")
+      .run(JSON.stringify({ label, hours, rate, frequency, start: start || null, message: message || null }), number, token, sentAt, id);
+    const fresh = db.prepare('SELECT * FROM quote_requests WHERE id = ?').get(id);
+    const o = offerOf(fresh);
+    const money = (n) => `${n.toFixed(2).replace('.', ',')} €`;
+    mailer.send(q.email, `Votre devis Proprigo ${number}`, `Votre devis ${number}`, [
+      `Bonjour ${q.name.split(' ')[0]},`,
+      `Voici notre proposition pour ${q.company} : ${label}.`,
+      `${String(hours).replace('.', ',')} h par passage, ${o.frequencyLabel.toLowerCase()} : ${money(o.perVisitHT)} HT par passage${o.vatRate ? ` (${money(o.perVisitTTC)} TTC)` : ''}.`,
+      ...(o.perMonthHT ? [`Soit environ ${money(o.perMonthHT)} HT par mois.`] : []),
+      ...(message ? [message] : []),
+      `Ce devis est valable ${QUOTE_VALID_DAYS} jours. Vous pouvez le consulter, l'imprimer et l'accepter en ligne avec le bouton ci-dessous.`,
+    ], { label: 'Voir et accepter le devis', path: `/#/devis?t=${token}` });
+    db_.log(db, `Devis ${number} envoyé à ${q.company} (${money(o.perVisitHT)} HT par passage).`);
+    return { ok: true, message: `Devis ${number} envoyé à ${q.email}.`, quote: quoteView(fresh) };
+  });
+  const quoteByToken = (t) => {
+    const token = String(t || '');
+    if (!/^[a-f0-9]{48}$/.test(token)) throw new HttpError(404, 'Devis introuvable.');
+    const q = db.prepare('SELECT * FROM quote_requests WHERE offer_token = ?').get(token);
+    if (!q || !q.offer_json) throw new HttpError(404, 'Devis introuvable.');
+    return q;
+  };
+  route('GET', '/api/devis', ({ query }) => {
+    const q = quoteByToken(query.get('t'));
+    return { number: q.offer_number, sentAt: q.offer_sent_at, status: q.status, answeredAt: q.answered_at, answerName: q.answer_name,
+      client: { company: q.company, name: q.name, email: q.email, cp: q.cp, kind: QUOTE_KINDS[q.kind] }, offer: offerOf(q), franchiseTVA, legal: legalInfo() };
+  });
+  route('POST', '/api/devis/answer', ({ body }) => {
+    const q = quoteByToken(body.t);
+    if (q.status !== 'envoye') throw new HttpError(409, q.status === 'accepte' ? 'Ce devis est déjà accepté. Merci !' : 'Ce devis n\'est plus ouvert. Contactez-nous pour une nouvelle proposition.');
+    const o = offerOf(q);
+    if (o.validUntil && o.validUntil < now().toISOString().slice(0, 10)) throw new HttpError(409, 'Ce devis a expiré. Contactez-nous pour une nouvelle proposition.');
+    const accept = body.accept === true;
+    const name = str(body.name, 80); const message = str(body.message, 1000);
+    if (accept && name.length < 3) throw new HttpError(400, 'Écrivez votre prénom et votre nom pour accepter le devis.');
+    if (!accept && !message) throw new HttpError(400, 'Dites-nous ce qui ne convient pas, nous vous faisons une autre proposition.');
+    db.prepare('UPDATE quote_requests SET status = ?, answered_at = ?, answer_name = ?, answer_message = ? WHERE id = ?').run(accept ? 'accepte' : 'refuse', now().toISOString(), name || null, message || null, q.id);
+    db_.log(db, `Devis ${q.offer_number} ${accept ? `accepté par ${name}` : 'refusé'} (${q.company}).`);
+    for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin' AND (staff_level IS NULL OR staff_level <> 'planning')").all()) {
+      mailer.send(a.email, `Devis ${q.offer_number} ${accept ? 'accepté' : 'refusé'} : ${q.company}`, accept ? 'Devis accepté 🎉' : 'Devis refusé',
+        [`${q.company} (${q.name}, ${q.email}${q.phone ? `, ${q.phone}` : ''})`, accept ? `Bon pour accord signé en ligne par ${name}.` : 'Le client a refusé le devis.', ...(message ? [`Message : ${message}`] : []), accept ? 'Prochaine étape : appelez le client pour fixer les dates, puis créez les ménages.' : 'Vous pouvez lui envoyer une nouvelle proposition depuis « Demandes de devis ».'], null);
+    }
+    mailer.send(q.email, accept ? `Devis ${q.offer_number} accepté` : `Devis ${q.offer_number} : votre réponse`, accept ? 'Merci, votre devis est accepté' : 'Merci pour votre réponse',
+      [`Bonjour ${q.name.split(' ')[0]},`, accept ? 'Nous avons bien reçu votre accord. Nous vous appelons très vite pour fixer les dates des premiers passages.' : 'Nous avons bien noté vos remarques et revenons vers vous avec une nouvelle proposition.'], null);
+    return { ok: true, message: accept ? 'Merci ! Votre devis est accepté. Nous vous appelons très vite pour fixer les dates.' : 'Merci, nous revenons vers vous avec une nouvelle proposition.' };
   });
 
   route('POST', '/api/account/password', ({ user, body, req }) => {
@@ -2858,7 +2947,7 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
       couts: pricing.COSTS, paymentsEnabled,
       bookings, icalFlagged, workers, waitlist: wl, events, incidents,
       metrics: metrics(),
-      quoteRequests: db.prepare("SELECT COUNT(*) AS n FROM quote_requests WHERE status = 'nouveau'").get().n,
+      quoteRequests: db.prepare("SELECT COUNT(*) AS n FROM quote_requests WHERE status IN ('nouveau', 'accepte', 'refuse')").get().n,
       staff: isOwner(user) ? 'owner' : 'planning',
     };
   });
