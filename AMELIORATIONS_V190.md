@@ -174,3 +174,10 @@
 - Un appui sur « Activer » affiche la demande officielle du téléphone.
 - Jamais affichée si c'est déjà activé ou bloqué ; redemandée au plus une fois par semaine, 3 fois maximum.
 - Traduite pour les intervenantes (pt, es, ar, en) et les clients (en).
+
+## v1.13.4 — Options de réservation plus claires
+
+- Grand nettoyage : vitres, four et réfrigérateur ne sont plus proposés en option payante (ils sont déjà compris). Un encadré vert le rappelle. Le serveur refuse aussi de les facturer.
+- Les options s'appellent « Options en plus », avec la phrase « Chaque option ajoute du temps au ménage, au même prix de l'heure ».
+- Chaque option affiche « +1 h de ménage, soit +36 € » et la durée totale s'affiche (ex. 4 h = 3 h + 1 h d'options).
+- Case matériel : « on apporte aspirateur et produits » (au lieu de « l'intervenante »).

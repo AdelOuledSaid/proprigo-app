@@ -177,7 +177,7 @@
   DEFAULT_TASKS.airbnb = [...DEFAULT_TASKS.menage, 'Changer les draps et les serviettes', 'Faire les lits', 'Réassort : papier toilette, savon, café', "Vérifier l'état du logement et signaler tout dégât"];
   const WEEKDAYS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
   const HALF_HOURS = Array.from({ length: 33 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
-  const draftHours = (d) => (d.service === 'airbnb' ? AIR_HOURS[d.size] : Number(d.hours) + (['menage', 'grand'].includes(d.service) ? (d.extras || []).reduce((t, k) => t + ({ repassage: 1, vitres: 1, four: 0.5, frigo: 0.5, draps: 0.5 }[k] || 0), 0) : 0));
+  const draftHours = (d) => (d.service === 'airbnb' ? AIR_HOURS[d.size] : Number(d.hours) + (['menage', 'grand'].includes(d.service) ? extrasFor(d.service, d.extras).reduce((t, k) => t + ({ repassage: 1, vitres: 1, four: 0.5, frigo: 0.5, draps: 0.5 }[k] || 0), 0) : 0));
 
   // Messagerie d'une réservation (client, intervenante, équipe)
   async function openThread(box, id, quick = []) {
@@ -247,6 +247,8 @@
   // options (temps en plus) et forfait fin de bail
   const EXTRAS = { repassage: { label: 'Repassage', hours: 1 }, vitres: { label: 'Vitres intérieures', hours: 1 }, four: { label: 'Intérieur du four', hours: 0.5 }, frigo: { label: 'Intérieur du réfrigérateur', hours: 0.5 }, draps: { label: 'Changement des draps', hours: 0.5 } };
   const OPTIONABLE = ['menage', 'grand'];
+  const INCLUDED = { grand: ['vitres', 'four', 'frigo'] }; // déjà compris dans le grand nettoyage
+  const extrasFor = (svc, list) => (list || []).filter((k) => !(INCLUDED[svc] || []).includes(k));
   const LEASE = { studio: { label: 'Studio', hours: 4 }, T2: { label: '2 pièces', hours: 5 }, T3: { label: '3 pièces', hours: 7 }, maison: { label: 'Maison', hours: 8 } };
   const LEASE_TASKS = ['Cuisine : intérieur des placards, four, réfrigérateur, hotte, plaques', 'Salle de bain : calcaire, joints, robinetterie, miroir', 'WC : cuvette, abattant, sol, murs autour', 'Sols de toutes les pièces : aspirateur et serpillière', 'Plinthes, portes, poignées et interrupteurs', 'Intérieur des placards et penderies', 'Vitres intérieures accessibles', 'Traces sur les murs (quand c\'est possible)', 'Radiateurs et grilles de ventilation'];
   const SERVICE_HINT = { menage: 'Ménage courant, à l\'heure', grand: 'Fin de bail, remise en état', airbnb: 'Forfait ménage + linge', bureau: 'Locaux professionnels' };
@@ -665,7 +667,7 @@
       draft.tasksService = draft.service;
       return draft.tasks;
     };
-    const quote = () => api('POST', '/api/quote', { service: draft.service, size: draft.size, hours: draft.hours, cp: draft.cp, date: draft.date, time: draft.time, urgent: !!draft.urgent, kit: !!draft.kit, extras: OPTIONABLE.includes(draft.service) ? draft.extras : [], repeat: draft.repeat });
+    const quote = () => api('POST', '/api/quote', { service: draft.service, size: draft.size, hours: draft.hours, cp: draft.cp, date: draft.date, time: draft.time, urgent: !!draft.urgent, kit: !!draft.kit, extras: OPTIONABLE.includes(draft.service) ? extrasFor(draft.service, draft.extras) : [], repeat: draft.repeat });
     const shell = (inner, n) => { $app.innerHTML = `<section class="card wizard">${stepper(n)}${inner}</section>`; window.scrollTo(0, 0); };
 
     // Étape 1 : la prestation
@@ -679,12 +681,15 @@
           ? `<fieldset class="box"><legend>Taille du logement</legend><div class="chips">${Object.keys(SIZE).map((k) => `<button type="button" data-size="${k}" aria-pressed="${draft.size === k}">${SIZE[k]}</button>`).join('')}</div></fieldset>`
           : `<label>Durée<select id="hours">${[2, 2.5, 3, 3.5, 4, 5, 6, 7, 8].map((h) => `<option value="${h}" ${Number(draft.hours) === h ? 'selected' : ''}>${String(h).replace('.', ',')} h</option>`).join('')}</select></label>
              <p class="small muted" style="margin:0">${draft.service === 'bureau' ? 'Repère : environ 1 h pour 80 m² de bureaux (6 à 8 postes), plus les sanitaires et le coin café.' : 'Repère : 2 h pour un studio, 3 h pour un 2 pièces, 4 h pour un 3 pièces.'}</p>
-             <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : l'intervenante apporte aspirateur et produits (+${String(PRICES().kit).replace('.', ',')} €)</label>
+             <label class="check"><input type="checkbox" id="kit" ${draft.kit ? 'checked' : ''}> Je n'ai pas de matériel : on apporte aspirateur et produits (+${String(PRICES().kit).replace('.', ',')} €)</label>
              ${draft.service === 'grand' ? `<fieldset class="box"><legend>Fin de bail ?</legend>
                <p class="small muted" style="margin:0 0 8px">Choisissez la taille : la durée et la checklist de l'état des lieux sont réglées pour vous.</p>
                <div class="chips">${Object.entries(LEASE).map(([k, v]) => `<button type="button" data-lease="${k}" aria-pressed="${draft.lease === k}">${v.label} · ${String(v.hours).replace('.', ',')} h</button>`).join('')}</div></fieldset>` : ''}
-             ${OPTIONABLE.includes(draft.service) ? `<fieldset class="box"><legend>Options</legend>
-               ${Object.entries(EXTRAS).map(([k, v]) => `<label class="check"><input type="checkbox" data-extra="${k}" ${draft.extras.includes(k) ? 'checked' : ''}> <span>${v.label}<br><span class="muted small">+${String(v.hours).replace('.', ',')} h, soit +${eur(v.hours * (draft.service === 'grand' ? PRICES().grand : PRICES().menage))}</span></span></label>`).join('')}
+             ${OPTIONABLE.includes(draft.service) ? `<fieldset class="box"><legend>Options en plus</legend>
+               ${draft.service === 'grand' ? '<p class="small included-note">✓ Déjà compris dans le grand nettoyage, sans supplément : vitres accessibles, intérieur du four et du réfrigérateur, intérieur des placards.</p>' : ''}
+               <p class="small muted" style="margin:0 0 6px">Facultatif. Chaque option ajoute du temps au ménage, au même prix de l'heure.</p>
+               ${Object.entries(EXTRAS).filter(([k]) => !(INCLUDED[draft.service] || []).includes(k)).map(([k, v]) => `<label class="check"><input type="checkbox" data-extra="${k}" ${draft.extras.includes(k) ? 'checked' : ''}> <span>${v.label}<br><span class="muted small">+${String(v.hours).replace('.', ',')} h de ménage, soit +${eur(v.hours * (draft.service === 'grand' ? PRICES().grand : PRICES().menage))}</span></span></label>`).join('')}
+               <p class="small" id="totalHours" style="margin:8px 0 0"></p>
              </fieldset>` : ''}`}
         <details class="box"><summary>Ce qui doit être fait (${t.length} tâches)</summary>
           <div id="tasks">${t.map((x, i) => `<label class="check"><input type="checkbox" data-task="${i}" checked> ${esc(x)}</label>`).join('')}</div>
@@ -696,7 +701,9 @@
       if (hs) hs.onchange = () => { const h = homes.find((x) => String(x.id) === hs.value); if (h) useHome(h); else draft.home_id = null; step1(); };
       $app.querySelectorAll('[data-svc]').forEach((b) => b.onclick = () => { draft.service = b.dataset.svc; if (draft.service === 'airbnb') draft.kit = false; draft.time = null; step1(); });
       $app.querySelectorAll('[data-size]').forEach((b) => b.onclick = () => { draft.size = b.dataset.size; draft.time = null; step1(); });
-      $app.querySelectorAll('[data-extra]').forEach((c) => c.onchange = () => { draft.extras = c.checked ? [...new Set([...draft.extras, c.dataset.extra])] : draft.extras.filter((x) => x !== c.dataset.extra); draft.time = null; });
+      const paintTotal = () => { const el = document.getElementById('totalHours'); if (!el) return; const ex = extrasFor(draft.service, draft.extras); const h = draftHours(draft); el.innerHTML = ex.length ? `Durée totale : <b>${String(h).replace('.', ',')} h</b> (${String(draft.hours).replace('.', ',')} h + ${String(h - Number(draft.hours)).replace('.', ',')} h d'options)` : ''; };
+      paintTotal();
+      $app.querySelectorAll('[data-extra]').forEach((c) => c.onchange = () => { draft.extras = c.checked ? [...new Set([...draft.extras, c.dataset.extra])] : draft.extras.filter((x) => x !== c.dataset.extra); draft.time = null; paintTotal(); });
       $app.querySelectorAll('[data-lease]').forEach((b) => b.onclick = () => {
         const l = LEASE[b.dataset.lease];
         draft.lease = b.dataset.lease; draft.hours = l.hours; draft.time = null;
@@ -704,7 +711,7 @@
         step1(); toast(`Fin de bail ${l.label} : ${String(l.hours).replace('.', ',')} h et checklist de l'état des lieux.`);
       });
       const hr = document.getElementById('hours');
-      if (hr) hr.onchange = () => { draft.hours = Number(hr.value); draft.time = null; };
+      if (hr) hr.onchange = () => { draft.hours = Number(hr.value); draft.time = null; paintTotal(); };
       const kit = document.getElementById('kit');
       if (kit) kit.onchange = () => { draft.kit = kit.checked; };
       document.getElementById('consent').onchange = (e) => { draft.photoConsent = e.target.checked; };

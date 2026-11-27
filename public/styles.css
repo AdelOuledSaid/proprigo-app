@@ -1067,3 +1067,4 @@ details.history[open] > summary { margin-bottom: 12px; }
 .push-ask .btn { width: 100%; }
 .push-ask .linkish { display: block; margin: 12px auto 0; }
 @media (max-width: 520px) { .push-ask { margin: auto auto 12px; } }
+.included-note { margin: 0 0 10px; padding: 10px 12px; border-radius: 14px; background: #e9f8ef; color: #17603a; }

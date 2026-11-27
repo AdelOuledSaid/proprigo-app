@@ -42,6 +42,9 @@ test('options et abonnement : temps en plus, tâches ajoutées, −10 % en récu
   const m = pricing.estimateMargin({ service: 'menage', total: q.total, hours: q.hours, kit: 0 }, null);
   assert.ok(m.marge / m.ht >= 0.25, 'jamais à perte avec l\'abonnement');
   assert.equal(pricing.quote({ service: 'bureau', hours: 3, cp: '75011', date: '2026-12-01', extras: ['vitres'] }, NOW).hours, 3, 'pas d\'options pour les bureaux');
+  const g = pricing.quote({ service: 'grand', hours: 4, cp: '75011', date: '2026-12-01', extras: ['vitres', 'four', 'frigo', 'repassage'] }, NOW);
+  assert.deepEqual(g.extras, ['repassage'], 'vitres, four et frigo sont déjà compris dans le grand nettoyage : jamais facturés en plus');
+  assert.equal(g.hours, 5);
   const { server, db, logged } = await startServer();
   try {
     const c = await logged('claire@proprigo.test');

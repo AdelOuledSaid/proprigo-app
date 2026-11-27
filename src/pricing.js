@@ -25,6 +25,8 @@ const EXTRAS = {
   frigo: { label: 'Intérieur du réfrigérateur', hours: 0.5, task: 'Intérieur du réfrigérateur (vidé avant le passage)' },
   draps: { label: 'Changement des draps', hours: 0.5, task: 'Changer les draps et faire les lits' },
 };
+// Déjà compris dans le grand nettoyage : jamais facturés en option en plus.
+const INCLUDED = { grand: ['vitres', 'four', 'frigo'] };
 const PRO_SERVICES = ['airbnb', 'bureau']; // facturés à des professionnels : TVA à 20 %, pas de crédit d'impôt
 const MIN_HOURS = 2;
 const MAX_HOURS = 8;
@@ -140,7 +142,7 @@ function quote(input, now = new Date()) {
       label = `${{ grand: 'Grand nettoyage', bureau: 'Nettoyage de bureaux' }[service] || 'Ménage'} ${String(hours).replace('.', ',')} h × ${rate} €`;
       if (service !== 'bureau') {
         for (const k of [...new Set(Array.isArray(input.extras) ? input.extras : [])]) {
-          if (!EXTRAS[k]) continue;
+          if (!EXTRAS[k] || (INCLUDED[service] || []).includes(k)) continue;
           extras.push(k);
           extraLines.push({ label: `Option : ${EXTRAS[k].label} (+${String(EXTRAS[k].hours).replace('.', ',')} h)`, amount: round2(EXTRAS[k].hours * rate) });
           hours += EXTRAS[k].hours;
@@ -274,7 +276,7 @@ function publicPrices() {
     kit: RATES.kit, sunday: RATES.sunday, urgent: RATES.urgent, subscription: RATES.subscription };
 }
 
-module.exports = {
+module.exports = { INCLUDED,
   SERVICES, PRO_SERVICES, EXTRAS, RATES,
   GRID, AIRBNB_HOURS, SIZE_LABEL, IDF_DEPTS, OPEN_ZONES, OPEN_DEPTS, COSTS,
   get KIT_PRICE() { return RATES.kit; }, get SUBSCRIPTION_RATE() { return RATES.subscription; },
