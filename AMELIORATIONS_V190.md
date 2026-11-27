@@ -150,3 +150,27 @@
 - Clients : servis, nouveaux, qui reviennent, comptes créés, abonnés.
 - Graphique des 6 derniers mois et détail par prestation. Choix du mois en haut à droite.
 - Marge calculée avant cotisations, impôts et frais fixes ; tarif réel de chaque indépendante (historique compris), coût horaire des salariées depuis config/couts.js ; en franchise de TVA, chiffre d'affaires = prix payé.
+
+## v1.13.1 — Audit complet
+
+- Sécurité : l'adresse IP du visiteur ne peut plus être falsifiée (anti-abus fiable).
+- Sécurité : 5 inscriptions maximum par heure et par adresse IP.
+- Sécurité : le site ne peut plus être affiché dans une autre page (anti-clickjacking) ; HTTPS forcé (HSTS) en production.
+- Vitesse : index ajoutés à la base de données (réservations, factures, messages, photos).
+- Correction : erreur JavaScript sur la page de connexion après la page d'accueil.
+- Accessibilité : libellé ajouté sur le choix de l'intervenant favori.
+- CGV : nouvel article 4 bis « Clients professionnels » (devis, prélèvement/virement, 30 jours, pénalités, 40 €).
+- Partage : description pour Google et image d'aperçu (WhatsApp, Facebook, SMS…) avec `og.png`.
+
+## v1.13.2 — Notifications début et fin de ménage
+
+- Le client reçoit maintenant une notification sur son téléphone quand le ménage commence et quand il est terminé (avant : e-mail seulement).
+
+## v1.13.3 — Invitation à activer les notifications
+
+- Une petite fenêtre « 🔔 Activer les notifications / Plus tard » s'affiche :
+  - pour le client, juste après sa réservation (écran « C'est réservé ! » ou retour du paiement) ;
+  - pour l'intervenante, à l'ouverture de son espace.
+- Un appui sur « Activer » affiche la demande officielle du téléphone.
+- Jamais affichée si c'est déjà activé ou bloqué ; redemandée au plus une fois par semaine, 3 fois maximum.
+- Traduite pour les intervenantes (pt, es, ar, en) et les clients (en).

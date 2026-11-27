@@ -78,7 +78,7 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
   };
   // Derrière Render, l'adresse du visiteur est la première de X-Forwarded-For.
   const clientIp = (req) => (production && typeof req.headers['x-forwarded-for'] === 'string'
-    ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.socket.remoteAddress || '').slice(0, 64);
+    ? req.headers['x-forwarded-for'].split(',').map((x) => x.trim()).filter(Boolean).pop() || '' : req.socket.remoteAddress || '').slice(0, 64);
   // Tentatives de connexion : gardées dans la base, donc conservées après un redémarrage.
   db.exec(`CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, until INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL)`);
   const LIMITS = [
@@ -388,7 +388,11 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return { ok: true, message: `Lien envoyé à ${u.email}.` };
   });
 
-  route('POST', '/api/signup', ({ body }) => {
+  const signupAsks = new Map();
+  route('POST', '/api/signup', ({ body, ip }) => {
+    const recentSignups = (signupAsks.get(ip) || []).filter((t) => t > Date.now() - 3600e3);
+    if (recentSignups.length >= 5) throw new HttpError(429, 'Trop d\'inscriptions depuis cette connexion. Réessayez dans une heure.');
+    signupAsks.set(ip, [...recentSignups, Date.now()]);
     const role = body.role === 'intervenante' ? 'intervenante' : 'client';
     const email = str(body.email, 120).toLowerCase();
     const name = str(body.name, 80);
@@ -1030,6 +1034,14 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
     return Array.isArray(ids) ? [...new Set(ids.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))] : [];
   };
   // ---- factures et avoirs : numéro unique, qui se suit sans trou, par année (F2026-000001, A2026-000001)
+  // index : les écrans restent rapides quand il y aura des milliers de réservations
+  for (const [name, table, cols] of [['bk_date', 'bookings', 'date'], ['bk_client', 'bookings', 'client_id, date'], ['bk_worker', 'bookings', 'worker_id, date'], ['bk_status', 'bookings', 'status, date'],
+    ['bk_series', 'bookings', 'series_id'], ['inv_booking', 'invoices', 'booking_id'], ['msg_booking', 'messages', 'booking_id'], ['ph_booking', 'photos', 'booking_id'], ['ev_id', 'events', 'created_at']]) {
+    try {
+      const have = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+      if (cols.split(',').every((c) => have.includes(c.trim()))) db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${cols})`);
+    } catch { /* table absente dans une ancienne base */ }
+  }
   // entreprises payées par virement : relevé mensuel des factures
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'billing')) db.exec('ALTER TABLE users ADD COLUMN billing TEXT');
   if (!db.prepare('PRAGMA table_info(bookings)').all().some((c) => c.name === 'bill_id')) db.exec('ALTER TABLE bookings ADD COLUMN bill_id INTEGER');
@@ -1604,6 +1616,9 @@ function createApp({ dbFile = ':memory:', adminPassword = 'proprigo-admin', seed
       if (action === 'start') mailer.send(cl.email, 'Votre ménage a commencé', `${user.name.split(' ')[0]} a commencé votre ménage`, [`Ménage du ${fr(b.date)}, ${b.address}.`], { label: 'Suivre le ménage', path: '/#/' });
       if (action === 'finish') db.prepare("UPDATE bookings SET finished_at = COALESCE(finished_at, datetime('now')) WHERE id = ?").run(id);
       if (action === 'finish') rewardSponsor(b.client_id);
+      const fn = user.name.split(' ')[0];
+      if (action === 'start') pushAll(db, b.client_id, { title: '🧽 Votre ménage a commencé', body: `${fn} a commencé le ménage. Suivez-le en direct.`, url: '/#/mes-reservations', tag: `booking-${id}` }).catch(() => {});
+      if (action === 'finish') pushAll(db, b.client_id, { title: '✨ Votre ménage est terminé', body: `${fn} a terminé. Donnez votre avis en un clic.`, url: '/#/mes-reservations', tag: `booking-${id}` }).catch(() => {});
       if (action === 'finish') mailer.send(cl.email, 'Votre ménage est terminé', 'Votre ménage est terminé', [`${user.name.split(' ')[0]} a terminé le ménage du ${fr(b.date)}.`, 'Donnez votre avis en un clic : il nous aide à garantir la qualité. Un problème ? Signalez-le depuis la réservation.'], { label: 'Donner mon avis', path: '/#/mes-reservations' });
     }
     return { ok: true };
@@ -3776,7 +3791,8 @@ ${docs.map((d) => `<section class="doc">${d}</section>`).join('\n') || '<p>Aucun
       const longCache = ext === '.woff' || ext === '.woff2' || url.pathname.startsWith('/fonts/');
       const headers = {
         'Content-Type': TYPES[ext] || 'application/octet-stream',
-        'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:",
+        'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        ...(production ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}),
         'Cache-Control': longCache ? 'public, max-age=31536000, immutable' : ['.png', '.svg', '.ico'].includes(ext) ? 'public, max-age=604800' : 'no-cache',
         ETag: etag, Vary: 'Accept-Encoding',
       };

@@ -419,9 +419,12 @@
     // avant / après : on glisse pour faire briller
     const range = document.getElementById('baRange');
     const paintBA = () => {
+      const clean = document.getElementById('baClean'); const handle = document.getElementById('baHandle');
+      if (!clean || !handle) return false; // on a quitté l'accueil pendant l'animation
       const v = Number(range.value);
-      document.getElementById('baClean').style.clipPath = `inset(0 0 0 ${v}%)`;
-      document.getElementById('baHandle').style.left = `${v}%`;
+      clean.style.clipPath = `inset(0 0 0 ${v}%)`;
+      handle.style.left = `${v}%`;
+      return true;
     };
     range.oninput = paintBA;
     paintBA();
@@ -433,8 +436,7 @@
         const k = Math.min(1, (t - t0) / 1600);
         const e = k < 0.5 ? 2 * k * k : 1 - (2 - 2 * k) ** 2 / 2;
         range.value = String(Math.round(82 - (82 - 30) * e));
-        paintBA();
-        if (k < 1) requestAnimationFrame(sweep);
+        if (paintBA() && k < 1) requestAnimationFrame(sweep);
       };
       setTimeout(() => requestAnimationFrame(sweep), 450);
     }
@@ -835,6 +837,7 @@
           const r = await api('POST', '/api/bookings', { ...draft, urgent: !!draft.urgent, kit: !!draft.kit, checklist: draft.tasks, home_id: draft.home_id || undefined, want_worker_id: draft.want || undefined });
           if (r.checkout_url) { window.location.assign(r.checkout_url); return; }
           if (r.paidByCredit) toast('Réglé avec votre crédit Proprigo : rien à payer.');
+          setTimeout(() => maybeAskPush('reserver').catch(() => {}), 1800);
           $app.innerHTML = `<section class="card wizard done-card">
             <div class="done-art">${ART.done}</div>
             <h1>C'est réservé !</h1>
@@ -1127,7 +1130,7 @@
           <div id="home-${h.id}"></div>
         </article>`).join('')}
       ${mw.list.length ? `<section class="card"><h2>Intervenante préférée</h2><p class="small muted">Choisie en priorité pour tous vos ménages quand elle est libre. Sinon, une remplaçante vérifiée intervient et vous êtes prévenu.</p>
-        <select id="fav"><option value="">Pas de préférence</option>${mw.list.map((w) => `<option value="${w.id}" ${mw.favorite === w.id ? 'selected' : ''}>${esc(w.name)} · ${w.n} ménage${w.n > 1 ? 's' : ''}${w.note ? ` · ${w.note}/5` : ''}</option>`).join('')}</select></section>` : ''}`;
+        <select id="fav" aria-label="Intervenante préférée"><option value="">Pas de préférence</option>${mw.list.map((w) => `<option value="${w.id}" ${mw.favorite === w.id ? 'selected' : ''}>${esc(w.name)} · ${w.n} ménage${w.n > 1 ? 's' : ''}${w.note ? ` · ${w.note}/5` : ''}</option>`).join('')}</select></section>` : ''}`;
     const submit = (form) => form.onsubmit = async (e) => {
       e.preventDefault();
       const fd = formData(form);
@@ -1311,6 +1314,67 @@
     if (t) t.onclick = async () => { try { const r = await api('POST', '/api/push/test', {}); toast(r.message); } catch (e) { toast(e.message); } };
     const off = document.getElementById('pushOff');
     if (off) off.onclick = async () => { try { await api('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe(); toast('Notifications désactivées sur cet appareil.'); paintPush(box, intro); } catch (e) { toast(e.message); } };
+  }
+  // ---- petite fenêtre « Être prévenu ? » : après une réservation (client) ou à l'ouverture (intervenante) ----
+  // Le téléphone exige l'accord de la personne : on explique d'abord, puis la demande officielle s'affiche.
+  async function pushState() {
+    if (NPush) { try { const r = (await NPush.checkPermissions()).receive; return r === 'granted' ? 'on' : r === 'denied' ? 'denied' : 'ask'; } catch { return 'none'; } }
+    if (NATIVE || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return 'none';
+    if (Notification.permission === 'denied') return 'denied';
+    if (Notification.permission === 'granted') {
+      try { const reg = await navigator.serviceWorker.ready; if (await reg.pushManager.getSubscription()) return 'on'; } catch { return 'none'; }
+    }
+    return 'ask';
+  }
+  async function enablePush() {
+    if (NPush) {
+      if ((await NPush.requestPermissions()).receive !== 'granted') return false;
+      await NPush.register(); return true;
+    }
+    if (await Notification.requestPermission() !== 'granted') return false;
+    const key = await api('GET', '/api/push/key');
+    const reg = await navigator.serviceWorker.ready;
+    const p = '='.repeat((4 - (key.publicKey.length % 4)) % 4);
+    const raw = atob((key.publicKey + p).replace(/-/g, '+').replace(/_/g, '/'));
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+    await api('POST', '/api/push/subscribe', sub.toJSON());
+    return true;
+  }
+  const PUSH_ASK_EVERY = 7 * 864e5; // on redemande au plus une fois par semaine, 3 fois maximum
+  async function maybeAskPush(page) {
+    if (!me || document.querySelector('dialog[open]')) return;
+    const worker = me.role === 'intervenante' && page === 'intervenante';
+    const client = me.role === 'client' && ((page === 'mes-reservations' && $app.querySelector('article.card')) || (page === 'reserver' && $app.querySelector('.done-card')));
+    if (!worker && !client) return;
+    let last = 0; let n = 0;
+    try { last = Number(localStorage.getItem('pushAskAt') || 0); n = Number(localStorage.getItem('pushAskN') || 0); } catch { /* stockage indisponible */ }
+    if (n >= 3 || Date.now() - last < PUSH_ASK_EVERY) return;
+    if (await pushState() !== 'ask') return;
+    if (location.hash.replace(/^#\/?/, '').split('?')[0] !== page || document.querySelector('dialog[open]')) return;
+    try { localStorage.setItem('pushAskAt', String(Date.now())); localStorage.setItem('pushAskN', String(n + 1)); } catch { /* sans effet */ }
+    const dlg = document.createElement('dialog');
+    dlg.className = 'push-ask';
+    dlg.setAttribute('aria-labelledby', 'pushAskTitle');
+    dlg.innerHTML = `<div class="push-ask-bell" aria-hidden="true">🔔</div>
+      <h2 id="pushAskTitle">${worker ? 'Ne ratez aucune mission' : 'Suivez votre ménage en direct'}</h2>
+      <ul class="push-ask-list">${(worker
+        ? ['Nouvelle mission proposée près de chez vous', 'Rappel la veille de chaque mission', 'Pourboire reçu']
+        : ['Votre intervenant est en route ou arrivé', 'Ménage commencé, puis terminé', 'Rappel la veille du ménage']).map((t) => `<li>${t}</li>`).join('')}</ul>
+      <button type="button" class="btn blue" data-push-yes>Activer les notifications</button>
+      <button type="button" class="linkish" data-push-no>Plus tard</button>`;
+    document.body.appendChild(dlg);
+    const close = () => { dlg.close(); dlg.remove(); };
+    dlg.addEventListener('cancel', close);
+    dlg.querySelector('[data-push-no]').onclick = close;
+    dlg.querySelector('[data-push-yes]').onclick = async (e) => {
+      e.target.disabled = true;
+      let ok = false;
+      try { ok = await enablePush(); } catch { ok = false; }
+      close();
+      toast(ok ? 'Notifications activées. Vous serez prévenu sur ce téléphone.' : 'Notifications non activées. Vous pourrez les activer depuis votre espace, rubrique Notifications.');
+      if (ok) { try { localStorage.setItem('pushAskN', '9'); } catch { /* sans effet */ } }
+    };
+    dlg.showModal();
   }
   // Pièces justificatives de l'intervenante : dépôt et suivi de la vérification.
   const DOC_STATUS = { a_verifier: ['En cours de vérification', ''], valide: ['Validé', 'ok'], refuse: ['À renvoyer', 'warn'] };
@@ -2897,10 +2961,11 @@
     <h2>Remplacement garanti</h2><p>En cas d'absence de votre intervenante, nous cherchons automatiquement une remplaçante vérifiée et vous prévenons. Vous pouvez aussi choisir un autre créneau pour la garder.</p>`);
 
   views['cgv'] = () => page('Conditions générales de vente', `${DRAFT_NOTE}
-    <h2>1. Objet</h2><p>Les présentes conditions encadrent les prestations de ménage réservées sur Proprigo par des particuliers et des professionnels (hôtes et conciergeries), exploité par [RAISON SOCIALE], [FORME JURIDIQUE] au capital de [MONTANT], immatriculée sous le numéro [SIREN], siège : [ADRESSE].</p>
+    <h2>1. Objet</h2><p>Les présentes conditions encadrent les prestations de ménage réservées sur Proprigo par des particuliers et des professionnels (entreprises, syndics, agences immobilières, hôtes et conciergeries), exploité par [RAISON SOCIALE], [FORME JURIDIQUE] au capital de [MONTANT], immatriculée sous le numéro [SIREN], siège : [ADRESSE].</p>
     <h2>2. Prestations</h2><p>Ménage à domicile à l'heure, grand nettoyage, ménage de logement de location courte durée au forfait (ménage et linge). Les tâches prévues figurent dans la checklist de la réservation. Les prestations sont réalisées par des intervenantes salariées de Proprigo ou des intervenantes indépendantes sélectionnées.</p>
     <h2>3. Prix</h2><p>Les prix sont indiqués en euros toutes taxes comprises avant la réservation. Suppléments : dimanche et jours fériés +${pct(PRICES().sunday)}, intervention urgente (arrivée dans les 3 heures) +${pct(PRICES().urgent)}, matériel et produits fournis +${String(PRICES().kit).replace('.', ',')} €. [Le crédit d'impôt de 50 % s'applique aux services à la personne selon les conditions légales, une fois la déclaration de l'entreprise effectuée.]</p>
     <h2>4. Réservation et paiement</h2><p>Le client paie via Stripe avant l'intervention. Le créneau demandé reste soumis à l'attribution d'une intervenante par PROPRIGO. Le client est informé après attribution. Si aucune intervenante ne peut être trouvée, PROPRIGO annule la prestation et rembourse intégralement le paiement. Le client s'engage à donner une adresse exacte et l'accès au logement à l'heure prévue.</p>
+    <h2>4 bis. Clients professionnels</h2><p>Pour un professionnel, la prestation fait l'objet d'un devis daté et numéroté, valable 30 jours, accepté en ligne (bon pour accord). Le paiement se fait par carte avant chaque passage, ou, si le devis le prévoit, en fin de mois : un relevé récapitule les factures des passages réalisés (une facture par passage). Il est réglé par prélèvement SEPA, selon le mandat signé par le client sur la page sécurisée de notre prestataire de paiement Stripe, ou par virement à 30 jours. Le client est informé du montant et de la date du prélèvement par le relevé envoyé par e-mail, au moins deux jours avant. Tout retard de paiement entraîne des pénalités au taux égal à trois fois le taux d'intérêt légal et une indemnité forfaitaire de 40 € pour frais de recouvrement (article L441-10 du Code de commerce). Un prélèvement rejeté peut être représenté une fois ; à défaut, Proprigo peut suspendre les passages à venir.</p>
     <h2>5. Modification et annulation</h2><p>La date, l'heure, la durée et l'adresse peuvent être modifiées jusqu'à 24 heures avant le début de la prestation, sous réserve de disponibilité ; le prix est recalculé. L'annulation est gratuite jusqu'à 24 heures avant ; ensuite, 50 % du prix reste dû. Si l'intervenante ne peut pas accéder au logement du fait du client, la prestation est due.</p>
     <h2>6. Droit de rétractation</h2><p>Pour une réservation faite à distance par un consommateur, le droit de rétractation de 14 jours s'applique. Si le client demande que la prestation commence avant la fin de ce délai, il le reconnaît expressément et reste redevable du montant correspondant au service fourni. [Rédaction à valider.]</p>
     <h2>7. Remplacement de l'intervenante</h2><p>En cas d'indisponibilité de l'intervenante prévue, Proprigo peut la remplacer par une autre intervenante vérifiée et en informe le client, qui peut choisir un autre créneau.</p>
@@ -3160,6 +3225,7 @@
     if (same) $app.style.minHeight = `${$app.offsetHeight}px`;
     try { await view(new URLSearchParams(qs || '')); } catch (e) { $app.innerHTML = `<p class="card err">${esc(e.message)}</p>`; }
     verifyBanner(name);
+    if (!same) setTimeout(() => maybeAskPush(name).catch(() => {}), 1500);
     $app.focus({ preventScroll: true });
     if (same) { window.scrollTo(0, y); requestAnimationFrame(() => { $app.style.minHeight = ''; window.scrollTo(0, y); }); }
     lastPage = name;
